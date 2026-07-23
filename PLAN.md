@@ -25,6 +25,10 @@ submodules, conventions in `CLAUDE.md`) — implementation ⬜, next up: M0 (sol
 - Flexible client-side host key trust: explicit fingerprint pinning via options, known_hosts, host certificates, SSHFP DNS lookups (RFC 4255, DNSSEC-gated, pluggable resolver → Hermod DNS)
 - Server-side least-privilege authorization: per-account session permissions with ready-made SFTP profiles — upload-only (device log collection) and download-only (firmware distribution) — **essential**
 - Port forwarding as an admin/debugging feature — gated by fine-grained network ACLs (loopback-only, private-networks-only, specific subnets, port sets) on both roles
+- **ProxyJump / jump hosts** (client): SSH-over-SSH through one or more bastions, per-hop host-key policy and credentials (`-J` equivalent)
+- **SFTP quotas & bandwidth limits** per access profile: max file size, per-session byte/file caps, throughput throttling
+- **Typed audit event stream**: structured, strongly-typed events (auth, sessions, transfers, policy/ACL denials, disconnects) for SIEM integration
+- **Pre-auth authentication banner** (`SSH_MSG_USERAUTH_BANNER`): server-configurable legal notice; client surfaces peer banners
 - **TOTP two-factor authentication** (server side): `publickey` + one-time code over keyboard-interactive, standard authenticator apps **and** a phishing-resistant session-bound variant (reuses Hermod `TOTP`)
 - **Session recording** (server side): interactive/exec sessions to replayable asciicast v2, SFTP sessions to structured transcripts — for compliance and demos
 - **Keystroke-timing obfuscation** for interactive sessions (chaff packets, OpenSSH `ping@openssh.com`) — defeats keystroke timing analysis
@@ -40,7 +44,7 @@ submodules, conventions in `CLAUDE.md`) — implementation ⬜, next up: M0 (sol
 - Full interactive shell **hosting** in the server (protocol support yes: `pty-req`, `shell`, `exec`; actual PTY hosting via ConPTY only as a demo/extension)
 
 ### Parked "fun/optional" features (kept as a backlog, not scheduled in v1)
-Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the WS stack — strong later candidate for firewalled devices), ProxyJump/jump-host client, `~/.ssh/config` reader, agent forwarding, FIDO2/`sk-*` security keys, Unix-domain-socket forwarding, admin-console subsystem, honeypot/tarpit listener. **Committed for v1 from this backlog:** TOTP 2FA, session recording, keystroke-timing obfuscation (see Goals).
+Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the WS stack — strong later candidate for firewalled devices), `~/.ssh/config` reader, agent forwarding, FIDO2/`sk-*` security keys, Unix-domain-socket forwarding, admin-console subsystem, honeypot/tarpit listener. **Committed for v1 from this backlog:** TOTP 2FA, session recording, keystroke-timing obfuscation, ProxyJump, SFTP quotas/bandwidth, typed audit stream, pre-auth banner (see Goals).
 
 ---
 
@@ -51,7 +55,8 @@ Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the
 | Architecture / numbers | RFC 4251, RFC 4250 |
 | Transport / KEX | RFC 4253, RFC 9142 (KEX update), RFC 8268 (DH-SHA2), RFC 5656 (ECDH/ECDSA), RFC 8731 (curve25519-sha256), RFC 4344 (CTR) |
 | PQ hybrid KEX | draft-ietf-sshm-mlkem-hybrid-kex (`mlkem768x25519-sha256`; may have been published as an RFC by now → verify), OpenSSH `sntrup761x25519-sha512`, FIPS 203 (ML-KEM) |
-| Auth | RFC 4252, RFC 4256 (keyboard-interactive), RFC 8332 (rsa-sha2), RFC 8709 (Ed25519), RFC 8308 (ext-info / server-sig-algs) |
+| Auth | RFC 4252 (incl. §5.4 `SSH_MSG_USERAUTH_BANNER`), RFC 4256 (keyboard-interactive), RFC 8332 (rsa-sha2), RFC 8709 (Ed25519), RFC 8308 (ext-info / server-sig-algs) |
+| ProxyJump | OpenSSH `ssh_config` `ProxyJump`/`-J` (SSH-over-SSH layered on `direct-tcpip`, RFC 4254 §7) |
 | Connection | RFC 4254 |
 | AEAD | RFC 5647 + OpenSSH semantics (`aes*-gcm@openssh.com`), OpenSSH `PROTOCOL.chacha20poly1305` |
 | MACs | RFC 6668 (hmac-sha2), OpenSSH `-etm@openssh.com` |
@@ -216,6 +221,8 @@ public sealed class SshServerOptions
     public Func<SshSession, ShellRequest, CancellationToken, Task<ISshChannelHandler?>>? ShellHandler { get; init; }
     public ISftpFileSystem?                       SftpFileSystem  { get; init; }   // enables the SFTP subsystem
     public ISessionRecordingSink?                 Recording       { get; init; }   // asciicast/transcript recording (§7)
+    public ISshAuditSink?                         AuditSink       { get; init; }   // typed audit event stream (§8)
+    public Func<SshPeer, CancellationToken, Task<string?>>? AuthBanner { get; init; } // SSH_MSG_USERAUTH_BANNER (§6)
     public KeystrokeTimingObfuscation             KeystrokeTiming { get; init; } = KeystrokeTimingObfuscation.InteractiveDefault; // chaff (§9)
     public SshAlgorithmOptions                    Algorithms      { get; init; } = SshAlgorithmOptions.Default;
     public SshServerLimits                        Limits          { get; init; } = new();  // MaxAuthTries, LoginGraceTime, MaxSessions, …
@@ -239,7 +246,10 @@ await using var client = await SshClient.ConnectAsync(
             SshCredential.Certificate("id_ed25519-cert.pub", "id_ed25519"),  // cert auth first-class
             SshCredential.PrivateKeyFile("id_ed25519", passphrase),
             SshCredential.Agent()                                            // ssh-agent (Windows named pipe / SSH_AUTH_SOCK)
-        ]
+        ],
+        // Jump hosts (ssh -J): tunnel through one or more bastions; each hop has its own policy + credentials
+        ProxyJump     = [ SshJumpHost.Parse("achim@bastion1:22"), SshJumpHost.Parse("bastion2") ],
+        BannerCallback = (banner, lang) => Console.Error.Write(banner),      // surface SSH_MSG_USERAUTH_BANNER
     }, ct);
 
 // Remote command execution (exec channel): log in once, run commands, capture everything, log out
@@ -285,6 +295,8 @@ await using var server = new SshServer(new SshServerOptions {
             user.Name == "admin" ? TotpValidator.Rfc6238(LoadTotpSecret(user)) : null)),
     SftpFileSystem = new LocalSftpFileSystem(root: "C:\\SftpRoot", readOnly: false),
     Recording      = new AsciicastRecordingSink("D:\\ssh-recordings"),  // + JSON sidecar per session
+    AuthBanner     = (peer, ct) => Task.FromResult<string?>("Authorized use only. Sessions are recorded."),
+    AuditSink      = new SerilogAuditSink(logger),                      // typed SshAuditEvent stream → SIEM
     ExecHandler    = HandleExecAsync
 });
 await server.StartAsync(new IPEndPoint(IPAddress.Any, 22), ct);
@@ -354,6 +366,16 @@ policy is `publickey,keyboard-interactive`: a valid key/cert gets *partial* succ
 - Interop: real OpenSSH `ssh` renders our keyboard-interactive prompt and submits the code; our client can
   likewise answer a keyboard-interactive challenge from a PAM/OTP-configured `sshd` (§11.3 #6)
 
+### Authentication banner (`SSH_MSG_USERAUTH_BANNER`, RFC 4252 §5.4)
+
+- **Server:** `AuthBanner` — a static string or `Func<SshPeer, CancellationToken, Task<string?>>` (per-peer,
+  e.g. include source IP / time); sent during the authentication phase (the portable-sshd equivalent of
+  `Banner`). Emits a `BannerSent` audit event. Independent of the SSH **identification-string** comment and of
+  any post-auth MOTD (a shell/PTY concern, not this).
+- **Client:** `BannerCallback(string text, string languageTag)` surfaces peer banners (legal notices); no
+  callback ⇒ banner ignored safely. Banner text is untrusted peer data — length-capped, control characters
+  sanitized before it can reach a terminal.
+
 ### Certificate validation (server, user cert) — mandatory check order
 1. Parse the format (`PROTOCOL.certkeys`: nonce, pubkey, serial, type, key id, principals, validity, critical options, extensions, signature key, signature)
 2. `type == user` (or `host` for host certs — mismatch ⇒ reject)
@@ -400,6 +422,16 @@ source wins (server profile ∧ authorized_keys options ∧ certificate constrai
 - **`SftpPermissions`** — operation-level rights as `[Flags] SftpOperations` (Read, Write, Create, Overwrite,
   Delete, Rename, List, Stat, SetAttrs, Mkdir, Rmdir, Symlink, …) plus a **per-profile root jail** with
   `{username}` templating (e.g. `D:\logs\{username}` → per-device drop directories).
+- **`SftpQuota` (quotas & bandwidth per profile)** — resource caps so a single account can't exhaust the host:
+  - **Size caps:** `MaxFileSize`, `MaxBytesPerSession`, `MaxFileCount`, `MaxOpenHandles`; optional
+    **directory-tree quota** (total bytes under the root jail, checked on write) for the log-drop case
+  - **Bandwidth throttling:** per-session (and optional per-account, shared across sessions) upload/download
+    byte-rate limits via a token-bucket `RateLimitedStream` — smooths device fleets hammering the firmware
+    server; the presets take an optional `bandwidth:` argument
+  - **Enforcement at the same central gate:** exceeding a size cap answers `SSH_FX_FAILURE` /
+    `SSH_FX_QUOTA_EXCEEDED`-style status (v3 has no quota code → documented status + message), mid-write
+    overruns stop cleanly and remove the partial file (upload) rather than leaving a truncated artifact;
+    `limits@openssh.com` advertises our per-operation ceilings so well-behaved clients pre-chunk correctly
 - **Ready-made profiles** (the two driving use cases):
   - `SshAccessProfile.SftpUploadOnly(root, allowOverwrite: false)` — **log upload**: allows `REALPATH`,
     `OPEN(CREATE|WRITE)`, `WRITE`, `CLOSE` (+ optional `MKDIR`, `STAT`, tolerated `SETSTAT` on the session's
@@ -453,6 +485,23 @@ Both roles share one reusable rule engine:
 - The same `NetworkAcl` engine is available client-side to cap what local applications may request through
   a tunnel (relevant for the dynamic/SOCKS forward, which stays a stretch goal)
 
+### Jump hosts / ProxyJump (client)
+
+The everyday `ssh -J bastion target` admin pattern — reach a target that's only routable from a bastion.
+Almost free here: the transport already runs on `IDuplexPipe`, so a hop is just **SSH-over-SSH**.
+
+- `SshClientOptions.ProxyJump` = an ordered list of `SshJumpHost` (each `user@host:port` with its **own**
+  `HostKeyPolicy` + `Credentials` — jump hosts are not more trusted than the target)
+- Mechanism: connect + authenticate to hop 1, open a `direct-tcpip` channel to hop 2, wrap **that channel's
+  `Stream` as the `IDuplexPipe`** for the next `SshClient`, repeat — the final client speaks end-to-end with
+  the target, so **host-key verification and auth for the target happen through the tunnel** (the bastion
+  never sees the target session's plaintext or credentials)
+- Arbitrary chain depth; each hop is torn down in reverse on dispose; a failure at any hop reports which one
+- `SshJumpHost.Parse("achim@bastion:22")` and a parser for the `-J host1,host2` comma syntax; reading it from
+  `~/.ssh/config` (`ProxyJump`/`ProxyCommand`) stays parked with the config-reader
+- Composes with everything downstream: exec, SFTP and even further local/remote forwards run over the
+  tunneled connection unchanged
+
 ### Session recording (server-side, compliance & demos)
 
 Opt-in per server (`Recording` sink) and gated per access profile (`RecordSessions`) — capture what happened
@@ -479,7 +528,7 @@ in a session in a replayable, tamper-evident-ish form.
 
 ---
 
-## 8. Async & Performance Guidelines
+## 8. Async, Performance & Observability
 
 - Public API fully `Task`/`ValueTask` + `CancellationToken`; `IAsyncDisposable`; no sync-over-async; internal loops over `PipeReader`/`PipeWriter`
 - Channel flow control = real backpressure (window ↔ `PipeWriter` flush), no unbounded buffering
@@ -488,6 +537,30 @@ in a session in a replayable, tamper-evident-ish form.
 - Rekeying: after 1 GiB or 1 h (configurable), initiable from both sides, without blocking active channels
 - Observability: `ILogger` (Serilog-compatible like the sibling projects), `System.Diagnostics.Metrics` (handshakes, active sessions, bytes, auth failures), optional `ActivitySource`
 - Benchmarks (BenchmarkDotNet, separate project, not NUnit): handshake latency, throughput per cipher, SFTP throughput. Target: SFTP ≥ 100 MB/s loopback with AES-GCM
+
+### Typed audit event stream
+
+Free-text logs are for humans; **auditing is for machines**. Every security-relevant thing that happens emits
+a strongly-typed event, so fleet operators can feed a SIEM without regex-parsing log lines.
+
+- **`SshAuditEvent`** — an immutable record hierarchy, every event carrying a common envelope: monotonic
+  sequence no., `DateTimeOffset`, connection id (correlates all events of one connection), peer endpoint, and
+  the server/client role. Emitted by **both** roles.
+- **Event catalog** (grows with the milestones): `ConnectionOpened`/`Closed`, `VersionExchanged`,
+  `KexCompleted` (negotiated KEX/cipher/MAC/host-key alg + whether PQ/strict-KEX were used),
+  `HostKeyAccepted`/`Rejected` (how it was trusted: pin/known_hosts/cert/SSHFP), `BannerSent`,
+  `AuthAttempt` (method, key fingerprint / cert key-id / principal) → `AuthSucceeded` (with the assigned
+  `SshAccessProfile`) / `AuthFailed` (**with the real, un-sanitized reason** — the wire stays timing-neutral,
+  the audit log tells the truth: unknown user / bad key / expired key window / expired cert / wrong TOTP / …),
+  `SessionOpened`/`Closed`, `ChannelOpened` (session/`direct-tcpip`/`tcpip-forward`), `ExecRequested`
+  (command), `SubsystemRequested`, `SftpOperation` (op/path/bytes/result), `PolicyDenied`
+  (ACL/profile/quota — what and why), `Rekeyed`, `LimitExceeded`, `Disconnected` (code + description).
+- **`ISshAuditSink`** — pluggable: `SerilogAuditSink`/`ILoggerAuditSink` (structured properties, not string
+  interpolation), an `IAsyncEnumerable<SshAuditEvent>` observer for in-process consumers, or a custom SIEM
+  forwarder. **Never blocks the connection**: bounded queue with an explicit overflow policy (drop-oldest +
+  a counter, or apply backpressure) — configurable, because dropping audit events is itself a security event.
+- **One source of truth:** metrics counters, `ILogger` entries and session-recording sidecars are all derived
+  from this event stream, so they can never disagree about what happened.
 
 ---
 
@@ -538,6 +611,10 @@ Async tests with `[CancelAfter(…)]` + `CancellationToken` parameter, `Assert.T
 - TOTP: **RFC 6238 official test vectors** (SHA-1/256/512), base32 secret round-trips, `otpauth://` URI generation, ±1 step skew window, replay rejection (same code twice → deny), FakeTimeProvider stepping across slots; Hermod session-bound variant: a code bound to session A is rejected under session B
 - Session recording: asciicast v2 output parses back / plays (round-trip through a minimal asciicast reader), exec header carries command + exit status, SFTP transcript reconstructs the op sequence, **redaction**: password/keyboard-interactive/TOTP inputs never appear in the recording, partial (crash-truncated) recording is still valid
 - Keystroke-timing obfuscation: with FakeTimeProvider, injected keystrokes at irregular intervals produce an output packet cadence that is ~constant (timing decorrelated from input); chaff present while "typing", stops after the idle timeout; `SSH_MSG_PING` → correct `SSH_MSG_PONG`
+- SFTP quotas/bandwidth: size-cap decisions (`MaxFileSize`/`MaxBytesPerSession`/`MaxFileCount`/tree quota) at boundaries; token-bucket rate limiter throughput under FakeTimeProvider (asserted bytes-per-interval); mid-write overrun → clean stop + partial upload removed
+- Audit events: envelope correctness (sequence, connection id correlation, `DateTimeOffset`), `AuthFailed` carries the real reason while the paired wire response is generic, sink overflow policy (drop-oldest increments the counter vs backpressure), structured-property serialization round-trip
+- ProxyJump: `-J host1,host2` parsing + `SshJumpHost.Parse`, chain assembly order, per-hop policy isolation (a hop's `HostKeyPolicy` applies to that hop only)
+- Auth banner: control-character/length sanitization of untrusted banner text before it can reach a terminal
 
 ### 10.2 Loopback integration tests (no networking)
 Our client ↔ our server over an in-memory `IDuplexPipe`:
@@ -550,6 +627,8 @@ Our client ↔ our server over an in-memory `IDuplexPipe`:
 - Port forwarding end-to-end against `ForwardingPolicy` profiles: allowed `direct-tcpip` targets reach an in-process echo server, denied targets get `CHANNEL_OPEN_FAILURE (ADMINISTRATIVELY_PROHIBITED)` with the session intact; `tcpip-forward` bind/port ACLs (denied binds → request failure); remote-forward round-trips; `OpenTcpStreamAsync` data integrity through the tunnel
 - 2FA end-to-end: `publickey,keyboard-interactive` chain — key alone yields partial success, correct TOTP completes auth, wrong/expired/replayed code fails with attempts counted against `MaxAuthTries`; session-bound variant rejects a code minted for another session
 - Recording end-to-end: an exec + a scripted PTY session produce valid asciicast files matching the actual I/O; an upload-only SFTP session yields a transcript listing exactly the writes; recording a 2FA login never captures the code
+- ProxyJump end-to-end: our client reaches a target **through one and two in-process bastions**; the target's host key is verified end-to-end and a wrong-key bastion vs wrong-key target are distinguished; exec + SFTP work unchanged over the tunneled hop; disposing tears hops down in reverse
+- Quotas/bandwidth end-to-end: an upload exceeding `MaxFileSize` fails cleanly with no partial file left; a throttled download's duration matches the configured rate (FakeTimeProvider); a full session's audit stream contains exactly the expected typed events in order
 - Robustness: corrupted/truncated/oversized packets, wrong MAC, messages in the wrong state, Terrapin scenario (injected messages before NEWKEYS ⇒ abort)
 
 ### 10.3 Definition of Done per feature
@@ -621,12 +700,12 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 
 ### 11.3 Test dimensions (checklist per peer, where supported)
 
-1. **Version exchange:** banners with comments, pre-banner lines, CRLF handling
+1. **Version exchange:** identification strings with comments, pre-banner lines, CRLF handling
 2. **KEX:** every mutually supported method (incl. PQ hybrids); preference-order fallbacks; strict-KEX on/off peers; guessed-KEX packets; clean failure when no common algorithm
 3. **Host keys:** every mutual algorithm; `server-sig-algs` honored (RSA keys must end up rsa-sha2); host certificates where supported
 4. **Ciphers/MACs:** full sub-matrix vs OpenSSH; per-peer supported subset elsewhere; ETM vs E&M
 5. **ext-info:** peers that send it, peers that don't
-6. **Auth:** publickey per key type; certificates (issue with `ssh-keygen`, verify with peer — and vice versa); password; keyboard-interactive; partial-success chains; `MaxAuthTries` behavior; **TOTP 2FA**: real `ssh` renders our keyboard-interactive prompt and a code from a standard authenticator app (RFC 6238) completes `publickey,keyboard-interactive`; our client answers a keyboard-interactive challenge from an OTP-configured `sshd`
+6. **Auth:** publickey per key type; certificates (issue with `ssh-keygen`, verify with peer — and vice versa); password; keyboard-interactive; partial-success chains; `MaxAuthTries` behavior; **TOTP 2FA**: real `ssh` renders our keyboard-interactive prompt and a code from a standard authenticator app (RFC 6238) completes `publickey,keyboard-interactive`; our client answers a keyboard-interactive challenge from an OTP-configured `sshd`; **auth banner**: our server's `SSH_MSG_USERAUTH_BANNER` shows up in the real `ssh` client, and our client surfaces a banner from an `sshd` configured with `Banner`
 7. **Channels (plumbing):** shell with PTY (`pty-req`, `window-change`; scripted expect-style checks); window stress (tiny windows, huge bursts); parallel channels
 8. **Remote command execution end-to-end** — the everyday "log in to a Linux box, run a bash command, capture the output, log out" workflow (the friendly kind of remote code execution, not the CVE kind). Runs with our client against real Linux sshds (WSL2 + containers), and mirrored against our server using `ssh`/`plink` as clients:
    - stdout capture (`uname -a`, `lsb_release -a`), stderr kept separate (`ls /nonexistent`), exit codes (`exit 42`, `false` → 1, command not found → 127)
@@ -643,6 +722,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 12. **SFTP:** against OpenSSH `sftp`/`sftp-server`, `psftp`, WinSCP, curl, AsyncSSH (which will ask for v4–v6 → must settle on v3 correctly); extensions (`limits@`, `posix-rename@`, `statvfs@`, `fsync@`, `copy-data`); large files, thousands of small files, weird filenames (UTF-8, spaces, quotes, newlines), resume, abort mid-transfer; **access profiles against real clients**: upload-only accepts `put` from the `sftp` CLI while `get`/`ls`/`rm` are cleanly denied, download-only serves `get`/curl while uploads are denied, WinSCP/`psftp` handle denials gracefully
 13. **Disconnect semantics:** clean disconnect codes both ways; behavior on abrupt TCP resets
 14. **Keepalives/timeouts:** `ServerAliveInterval`-style traffic must not confuse us
+15. **Jump hosts / ProxyJump:** our client reaches a target `sshd` **through a real OpenSSH bastion** (`-J`), and a real `ssh -J our-server target` uses **our server as the bastion** (our `direct-tcpip` carries their inner session); two-hop chains; mixed vendors on the path (OpenSSH bastion → Dropbear target)
 
 ### 11.4 Certificate & key tooling interop (core-feature deep dive)
 
@@ -683,12 +763,12 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 | **M1** | ⬜ | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, disconnect, **strict KEX from day one**; interop harness skeleton (env discovery, process orchestration, WSL bridge) | loopback handshake green; scripted handshake vs OpenSSH under WSL, both roles | L |
 | **M2** | ⬜ | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH | M–L |
 | **M3** | ⬜ | **PQ hybrid**: spike "MLKem availability .NET 10 on Win/Linux", then `mlkem768x25519-sha256` (BCL, BC fallback) + `sntrup761x25519-sha512` (BC); K-as-string encoding | automated interop vs OpenSSH ≥ 9.9 (both roles) + TinySSH (sntrup761) + plink ML-KEM against our server | M |
-| **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716), authorized_keys/known_hosts (incl. **notBefore/notAfter validity windows** on authorized keys), server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain), **TOTP 2FA** (`publickey,keyboard-interactive`, RFC 6238 + Hermod session-bound, replay cache) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips; RFC 6238 vectors green + real `ssh` completes a TOTP login against our server | L |
+| **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716), authorized_keys/known_hosts (incl. **notBefore/notAfter validity windows** on authorized keys), server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain), **TOTP 2FA** (`publickey,keyboard-interactive`, RFC 6238 + Hermod session-bound, replay cache), **auth banner**, **typed audit stream** (core `SshAuditEvent` model + `ISshAuditSink`, auth/transport events) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips; RFC 6238 vectors green + real `ssh` completes a TOTP login and shows our banner; audit events assert correct in loopback | L |
 | **M5** | ⬜ | **Certificates**: parser/validator (check chain from §6), `CertificateBuilder` (mini-CA), client cert auth, server CA trust + principals + critical options, host certificates, revocation list | full §11.4 cert program vs OpenSSH (`ssh-keygen -L` validates our certs) + AsyncSSH as second validator; full negative suite | L |
 | **M6** | ⬜ | Connection layer: channels + flow control, `exec`/`shell`/`pty-req`/`env`/`exit-status`/`window-change`, subsystem dispatch, keepalives, **`SSH_MSG_PING`/`PONG` (`ping@openssh.com`)**; **`SshCommand` API** (capture + streaming, stdin, env, PTY toggle, exit-status/exit-signal, `SshCommandLine.Quote`); **session recording** for PTY/exec (asciicast v2 + sidecar, redaction) | remote-exec E2E suite (§11.3 #8) green vs WSL/container sshds; `ssh` CLI and `plink` execute against our server (incl. winadj quirk pinned); asciicast validates with `asciinema play`; PING chaff from OpenSSH ≥ 9.5 tolerated | L |
-| **M7** | ⬜ | **SFTP** v3 client + server + extensions, pipelining, `ISftpFileSystem` (local with root jail, in-memory); **access profiles** (`SshAccessProfile`/`SftpPermissions`, upload-only & download-only presets, central default-deny gate) | `sftp` CLI + `psftp` + curl against our server; our client vs `sftp-server` across the OpenSSH version spread; v4–v6 downgrade vs AsyncSSH; profile permission matrix green incl. real-client denial behavior; **SFTP session transcripts** (structured op log, tied to recording); throughput benchmark; traversal suite green | L |
-| **M8** | ⬜ | Forwarding (`direct-tcpip`, `tcpip-forward`, `OpenTcpStreamAsync`) with **`NetworkAcl` engine + `ForwardingPolicy` presets** (loopback-only, private-networks, subnet), ssh-agent client, **SSHFP DNS** (`ISshfpResolver` + Hermod-DNS adapter, `SshfpTrust` modes, zone-record generator), `hostkeys-00@openssh.com` (optional) | ACL permission matrix green; real `ssh -L/-R` vs our ACL'd server (clean denials) and our forwards vs `PermitOpen`-restricted sshd; loopback + interop proof (OpenSSH agent on Windows pipe and WSL socket); SSHFP generator matches `ssh-keygen -r`; resolver E2E with DNSSEC on/off | M–L |
-| **M9** | ⬜ | Hardening + full interop program: DoS limits, **keystroke-timing obfuscation sender** (chaff cadence for interactive PTY, both roles), robustness/fuzz-light suite, timing review, security review checklist; Tier 2 matrix automated nightly, quirk registry + interop matrix report generator | all gates green; keystroke-timing decorrelation test green + interop with OpenSSH chaff; nightly matrix job runs; `docs/INTEROP-MATRIX.md` generated | M–L |
+| **M7** | ⬜ | **SFTP** v3 client + server + extensions, pipelining, `ISftpFileSystem` (local with root jail, in-memory); **access profiles** (`SshAccessProfile`/`SftpPermissions`, upload-only & download-only presets, central default-deny gate), **quotas & bandwidth limits** (`SftpQuota`: size caps, tree quota, token-bucket throttling) | `sftp` CLI + `psftp` + curl against our server; our client vs `sftp-server` across the OpenSSH version spread; v4–v6 downgrade vs AsyncSSH; profile permission matrix green incl. real-client denial behavior; **quota/bandwidth tests green** (caps enforced, throttle rate accurate, partial uploads cleaned up); **SFTP session transcripts** (structured op log, tied to recording); throughput benchmark; traversal suite green | L |
+| **M8** | ⬜ | Forwarding (`direct-tcpip`, `tcpip-forward`, `OpenTcpStreamAsync`) with **`NetworkAcl` engine + `ForwardingPolicy` presets** (loopback-only, private-networks, subnet), **ProxyJump / jump-host chaining** (SSH-over-SSH, per-hop policy), ssh-agent client, **SSHFP DNS** (`ISshfpResolver` + Hermod-DNS adapter, `SshfpTrust` modes, zone-record generator), `hostkeys-00@openssh.com` (optional) | ACL permission matrix green; real `ssh -L/-R` vs our ACL'd server (clean denials) and our forwards vs `PermitOpen`-restricted sshd; **ProxyJump both ways** (our client `-J` through real bastion; real `ssh -J` through our server); loopback + interop proof (OpenSSH agent on Windows pipe and WSL socket); SSHFP generator matches `ssh-keygen -r`; resolver E2E with DNSSEC on/off | L |
+| **M9** | ⬜ | Hardening + full interop program: DoS limits, **keystroke-timing obfuscation sender** (chaff cadence for interactive PTY, both roles), **audit catalog complete** (all event types across layers + documented SIEM sink), robustness/fuzz-light suite, timing review, security review checklist; Tier 2 matrix automated nightly, quirk registry + interop matrix report generator | all gates green; keystroke-timing decorrelation test green + interop with OpenSSH chaff; full audit event catalog covered by tests; nightly matrix job runs; `docs/INTEROP-MATRIX.md` generated | M–L |
 | **M10** | ⬜ | Polish: complete XML docs, README + samples, demo CLI (`exec` = log in / run command / capture output / log out, `sftp` transfers, `serve` = demo server mapping exec to local processes), optional NuGet packaging, BenchmarkDotNet baseline | release v1 | S–M |
 
 \* Rough relations: S ≈ a few days, M ≈ 1–2 weeks, L ≈ 2–4 weeks (single person, focused). Realistic overall frame **5–7 months** including the extended interop program (the matrix infrastructure adds ~2–4 weeks spread across milestones); a working modern core (M0–M5: transport + PQ + keys + certs) is reachable around the halfway mark.
