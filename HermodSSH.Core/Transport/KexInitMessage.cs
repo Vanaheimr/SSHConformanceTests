@@ -117,6 +117,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>The default cipher preference list (most preferred first).</summary>
         public static readonly String[] DefaultCiphers =
         [
+            SshAlgorithmNames.Cipher.ChaCha20Poly1305,
             SshAlgorithmNames.Cipher.Aes256Gcm,
             SshAlgorithmNames.Cipher.Aes128Gcm,
             SshAlgorithmNames.Cipher.Aes256Ctr,

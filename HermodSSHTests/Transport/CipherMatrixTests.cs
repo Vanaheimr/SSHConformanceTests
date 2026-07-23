@@ -43,6 +43,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         public static System.Collections.Generic.IEnumerable<TestCaseData> CipherMatrix()
         {
+            yield return new TestCaseData(SshAlgorithmNames.Cipher.ChaCha20Poly1305, SshAlgorithmNames.Mac.HmacSha2_256Etm).SetName("chacha20-poly1305");
             yield return new TestCaseData(SshAlgorithmNames.Cipher.Aes256Gcm, SshAlgorithmNames.Mac.HmacSha2_256Etm).SetName("aes256-gcm");
             yield return new TestCaseData(SshAlgorithmNames.Cipher.Aes128Gcm, SshAlgorithmNames.Mac.HmacSha2_256Etm).SetName("aes128-gcm");
             yield return new TestCaseData(SshAlgorithmNames.Cipher.Aes256Ctr, SshAlgorithmNames.Mac.HmacSha2_256Etm).SetName("aes256-ctr+hmac-sha2-256-etm");

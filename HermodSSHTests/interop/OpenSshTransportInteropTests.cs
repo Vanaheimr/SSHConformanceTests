@@ -77,6 +77,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         [Test]
         [CancelAfter(30000)]
+        [TestCase("curve25519-sha256",   "ssh-ed25519",         "chacha20-poly1305@openssh.com", "hmac-sha2-256",          "chacha20-poly1305@openssh.com")]
         [TestCase("curve25519-sha256",   "ssh-ed25519",         "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
         [TestCase("curve25519-sha256",   "ssh-ed25519",         "aes256-ctr",             "hmac-sha2-256-etm@openssh.com", "aes256-ctr")]
         [TestCase("ecdh-sha2-nistp256",  "ssh-ed25519",         "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]

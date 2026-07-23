@@ -77,8 +77,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             Assert.Multiple(() => {
                 Assert.That(result.KeyExchange,           Is.EqualTo(SshAlgorithmNames.Kex.Curve25519Sha256));
                 Assert.That(result.HostKey,               Is.EqualTo(SshAlgorithmNames.HostKey.Ed25519));
-                Assert.That(result.CipherClientToServer,  Is.EqualTo(SshAlgorithmNames.Cipher.Aes256Gcm));
-                Assert.That(result.CipherServerToClient,  Is.EqualTo(SshAlgorithmNames.Cipher.Aes256Gcm));
+                Assert.That(result.CipherClientToServer,  Is.EqualTo(SshAlgorithmNames.Cipher.ChaCha20Poly1305));
+                Assert.That(result.CipherServerToClient,  Is.EqualTo(SshAlgorithmNames.Cipher.ChaCha20Poly1305));
                 Assert.That(result.StrictKex,             Is.True);
                 Assert.That(result.ExtensionInfo,         Is.True);
             });

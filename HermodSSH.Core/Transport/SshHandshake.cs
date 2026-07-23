@@ -205,11 +205,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         private static void EnsureCipherSupported(String Cipher, String Mac)
         {
 
-            var isGcm = Cipher is SshAlgorithmNames.Cipher.Aes256Gcm or SshAlgorithmNames.Cipher.Aes128Gcm;
-            var isCtr = Cipher is SshAlgorithmNames.Cipher.Aes256Ctr or SshAlgorithmNames.Cipher.Aes192Ctr or SshAlgorithmNames.Cipher.Aes128Ctr;
+            var isAead = Cipher is SshAlgorithmNames.Cipher.Aes256Gcm or SshAlgorithmNames.Cipher.Aes128Gcm or SshAlgorithmNames.Cipher.ChaCha20Poly1305;
+            var isCtr  = Cipher is SshAlgorithmNames.Cipher.Aes256Ctr or SshAlgorithmNames.Cipher.Aes192Ctr or SshAlgorithmNames.Cipher.Aes128Ctr;
 
-            if (!isGcm && !isCtr)
-                throw new SshWireException($"Unsupported cipher '{Cipher}' (supported: aes*-gcm@openssh.com, aes*-ctr).");
+            if (!isAead && !isCtr)
+                throw new SshWireException($"Unsupported cipher '{Cipher}' (supported: chacha20-poly1305@openssh.com, aes*-gcm@openssh.com, aes*-ctr).");
 
             if (isCtr && Mac is not (SshAlgorithmNames.Mac.HmacSha2_256Etm or SshAlgorithmNames.Mac.HmacSha2_512Etm))
                 throw new SshWireException($"The CTR cipher '{Cipher}' requires an encrypt-then-MAC ('{Mac}' is not supported yet).");
@@ -249,6 +249,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                                                                 Byte                      MacLetter)
 
             => CipherName switch {
+                   SshAlgorithmNames.Cipher.ChaCha20Poly1305 => (new ChaCha20Poly1305Cipher(Derive(KeyLetter, ChaCha20Poly1305Cipher.KeyLength)), null),
                    SshAlgorithmNames.Cipher.Aes256Gcm => (new AesGcmTransportCipher(Derive(KeyLetter, 32), Derive(IVLetter, AesGcmTransportCipher.NonceLength)), null),
                    SshAlgorithmNames.Cipher.Aes128Gcm => (new AesGcmTransportCipher(Derive(KeyLetter, 16), Derive(IVLetter, AesGcmTransportCipher.NonceLength)), null),
                    SshAlgorithmNames.Cipher.Aes256Ctr => (new AesCtrTransportCipher(Derive(KeyLetter, 32), Derive(IVLetter, AesCtrTransportCipher.CounterLength)), BuildMac(MacName, Derive, MacLetter)),

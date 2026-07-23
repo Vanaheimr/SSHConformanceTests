@@ -65,6 +65,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             public const String Aes256Ctr                = "aes256-ctr";
             public const String Aes192Ctr                = "aes192-ctr";
             public const String Aes128Ctr                = "aes128-ctr";
+            public const String ChaCha20Poly1305         = "chacha20-poly1305@openssh.com";
         }
 
         /// <summary>MAC algorithm names (ignored when an AEAD cipher is selected).</summary>

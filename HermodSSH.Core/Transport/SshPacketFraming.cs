@@ -88,6 +88,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                        ISshMac?             Mac             = null)
         {
 
+            // chacha20-poly1305@openssh.com encrypts the length field itself; it owns the whole packet.
+            if (Cipher is ChaCha20Poly1305Cipher chacha)
+            {
+                chacha.EncryptPacketInto(SequenceNumber, Payload, Output);
+                return;
+            }
+
             var paddingLength  = ComputePaddingLength(Payload.Length, Cipher.BlockSize, Cipher.LengthIncludedInPaddingAlignment);
             var packetLength   = 1 + Payload.Length + paddingLength;
             var macLength      = Mac?.Length ?? 0;
@@ -140,6 +147,28 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                                               ISshMac?            Mac                = null,
                                                               CancellationToken   CancellationToken  = default)
         {
+
+            // chacha20-poly1305@openssh.com: the length field is encrypted and must be decrypted first.
+            if (Cipher is ChaCha20Poly1305Cipher chacha)
+            {
+
+                var encryptedLength  = await ReadExactAsync(Input, 4, CancellationToken).ConfigureAwait(false);
+                var chachaLength     = chacha.DecryptLength(SequenceNumber, encryptedLength);
+
+                if (chachaLength < MinPacketLength || chachaLength > MaxPacketLength)
+                    throw new SshWireException($"Illegal SSH packet_length {chachaLength} (must be {MinPacketLength}..{MaxPacketLength})!");
+
+                var chachaBody   = await ReadExactAsync(Input, (Int32) chachaLength + chacha.TagLength, CancellationToken).ConfigureAwait(false);
+                var chachaPlain  = chacha.DecryptAndVerify(SequenceNumber, encryptedLength, chachaBody);
+
+                var chachaPad    = chachaPlain[0];
+                var chachaPayLen = (Int32) chachaLength - chachaPad - 1;
+                if (chachaPad < 4 || chachaPayLen < 0)
+                    throw new SshWireException($"Illegal SSH padding_length {chachaPad} for packet_length {chachaLength}!");
+
+                return chachaPlain[1..(1 + chachaPayLen)];
+
+            }
 
             var macLength = Mac?.Length ?? 0;
 
