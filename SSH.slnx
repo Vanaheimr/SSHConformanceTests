@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="HermodSSH/HermodSSH.csproj" />
+  <Project Path="HermodSSHTests/HermodSSHTests.csproj" />
+  <Project Path="HermodSSHDemo/HermodSSHDemo.csproj" />
+</Solution>
