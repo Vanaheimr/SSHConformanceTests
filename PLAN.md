@@ -6,6 +6,10 @@ and **OpenSSH certificates** as first-class features. Unit tests with **NUnit**.
 Interoperability with OpenSSH and a broad set of third-party implementations is a
 hard acceptance criterion (see §11).
 
+**Status legend:** ✅ done · 🔶 partial · ⬜ open — markers are kept current as implementation proceeds.
+**Current state (2026-07-23):** planning & repo scaffolding ✅ (git repo on `master`, `libs/Hermod` + `libs/Styx`
+submodules, conventions in `CLAUDE.md`) — implementation ⬜, next up: M0 (solution, wire format, NUnit).
+
 ---
 
 ## 1. Goals & Non-Goals
@@ -501,19 +505,19 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 
 ## 12. Milestones
 
-| # | Content | Acceptance (DoD) | Effort* |
-|---|---|---|---|
-| **M0** | Repo/solution skeleton (`SSH.slnx`, 2–3 projects, sibling-project conventions), wire format (reader/writer, mpint & co.), NUnit setup | round-trip and error-case tests green | S |
-| **M1** | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, disconnect, **strict KEX from day one**; interop harness skeleton (env discovery, process orchestration, WSL bridge) | loopback handshake green; scripted handshake vs OpenSSH under WSL, both roles | L |
-| **M2** | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH | M–L |
-| **M3** | **PQ hybrid**: spike "MLKem availability .NET 10 on Win/Linux", then `mlkem768x25519-sha256` (BCL, BC fallback) + `sntrup761x25519-sha512` (BC); K-as-string encoding | automated interop vs OpenSSH ≥ 9.9 (both roles) + TinySSH (sntrup761) + plink ML-KEM against our server | M |
-| **M4** | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716), authorized_keys/known_hosts, server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips | L |
-| **M5** | **Certificates**: parser/validator (check chain from §6), `CertificateBuilder` (mini-CA), client cert auth, server CA trust + principals + critical options, host certificates, revocation list | full §11.4 cert program vs OpenSSH (`ssh-keygen -L` validates our certs) + AsyncSSH as second validator; full negative suite | L |
-| **M6** | Connection layer: channels + flow control, `exec`/`shell`/`pty-req`/`env`/`exit-status`/`window-change`, subsystem dispatch, keepalives; **`SshCommand` API** (capture + streaming, stdin, env, PTY toggle, exit-status/exit-signal, `SshCommandLine.Quote`) | remote-exec E2E suite (§11.3 #8) green vs WSL/container sshds; `ssh` CLI and `plink` execute against our server (incl. winadj quirk pinned) | L |
-| **M7** | **SFTP** v3 client + server + extensions, pipelining, `ISftpFileSystem` (local with root jail, in-memory) | `sftp` CLI + `psftp` + curl against our server; our client vs `sftp-server` across the OpenSSH version spread; v4–v6 downgrade vs AsyncSSH; throughput benchmark; traversal suite green | L |
-| **M8** | Forwarding (`direct-tcpip`, `tcpip-forward`), ssh-agent client, **SSHFP DNS** (`ISshfpResolver` + Hermod-DNS adapter, `SshfpTrust` modes, zone-record generator), `hostkeys-00@openssh.com` (optional) | loopback + interop proof (OpenSSH agent on Windows pipe and WSL socket); SSHFP generator matches `ssh-keygen -r`; resolver E2E with DNSSEC on/off | M |
-| **M9** | Hardening + full interop program: DoS limits, robustness/fuzz-light suite, timing review, security review checklist; Tier 2 matrix automated nightly, quirk registry + interop matrix report generator | all gates green; nightly matrix job runs; `docs/INTEROP-MATRIX.md` generated | M–L |
-| **M10** | Polish: complete XML docs, README + samples, demo CLI (`exec` = log in / run command / capture output / log out, `sftp` transfers, `serve` = demo server mapping exec to local processes), optional NuGet packaging, BenchmarkDotNet baseline | release v1 | S–M |
+| # | Status | Content | Acceptance (DoD) | Effort* |
+|---|---|---|---|---|
+| **M0** | 🔶 | Repo/solution skeleton (`SSH.slnx`, 2–3 projects, sibling-project conventions), wire format (reader/writer, mpint & co.), NUnit setup — git repo, submodules & conventions ✅; solution, wire format, NUnit ⬜ | round-trip and error-case tests green | S |
+| **M1** | ⬜ | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, disconnect, **strict KEX from day one**; interop harness skeleton (env discovery, process orchestration, WSL bridge) | loopback handshake green; scripted handshake vs OpenSSH under WSL, both roles | L |
+| **M2** | ⬜ | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH | M–L |
+| **M3** | ⬜ | **PQ hybrid**: spike "MLKem availability .NET 10 on Win/Linux", then `mlkem768x25519-sha256` (BCL, BC fallback) + `sntrup761x25519-sha512` (BC); K-as-string encoding | automated interop vs OpenSSH ≥ 9.9 (both roles) + TinySSH (sntrup761) + plink ML-KEM against our server | M |
+| **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716), authorized_keys/known_hosts, server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips | L |
+| **M5** | ⬜ | **Certificates**: parser/validator (check chain from §6), `CertificateBuilder` (mini-CA), client cert auth, server CA trust + principals + critical options, host certificates, revocation list | full §11.4 cert program vs OpenSSH (`ssh-keygen -L` validates our certs) + AsyncSSH as second validator; full negative suite | L |
+| **M6** | ⬜ | Connection layer: channels + flow control, `exec`/`shell`/`pty-req`/`env`/`exit-status`/`window-change`, subsystem dispatch, keepalives; **`SshCommand` API** (capture + streaming, stdin, env, PTY toggle, exit-status/exit-signal, `SshCommandLine.Quote`) | remote-exec E2E suite (§11.3 #8) green vs WSL/container sshds; `ssh` CLI and `plink` execute against our server (incl. winadj quirk pinned) | L |
+| **M7** | ⬜ | **SFTP** v3 client + server + extensions, pipelining, `ISftpFileSystem` (local with root jail, in-memory) | `sftp` CLI + `psftp` + curl against our server; our client vs `sftp-server` across the OpenSSH version spread; v4–v6 downgrade vs AsyncSSH; throughput benchmark; traversal suite green | L |
+| **M8** | ⬜ | Forwarding (`direct-tcpip`, `tcpip-forward`), ssh-agent client, **SSHFP DNS** (`ISshfpResolver` + Hermod-DNS adapter, `SshfpTrust` modes, zone-record generator), `hostkeys-00@openssh.com` (optional) | loopback + interop proof (OpenSSH agent on Windows pipe and WSL socket); SSHFP generator matches `ssh-keygen -r`; resolver E2E with DNSSEC on/off | M |
+| **M9** | ⬜ | Hardening + full interop program: DoS limits, robustness/fuzz-light suite, timing review, security review checklist; Tier 2 matrix automated nightly, quirk registry + interop matrix report generator | all gates green; nightly matrix job runs; `docs/INTEROP-MATRIX.md` generated | M–L |
+| **M10** | ⬜ | Polish: complete XML docs, README + samples, demo CLI (`exec` = log in / run command / capture output / log out, `sftp` transfers, `serve` = demo server mapping exec to local processes), optional NuGet packaging, BenchmarkDotNet baseline | release v1 | S–M |
 
 \* Rough relations: S ≈ a few days, M ≈ 1–2 weeks, L ≈ 2–4 weeks (single person, focused). Realistic overall frame **5–7 months** including the extended interop program (the matrix infrastructure adds ~2–4 weeks spread across milestones); a working modern core (M0–M5: transport + PQ + keys + certs) is reachable around the halfway mark.
 
@@ -537,20 +541,21 @@ Ordering logic: first the **narrow modern path** (Ed25519 + Curve25519 + AES-GCM
 | Scope creep (SSH is huge) | non-goals list, milestone gates, legacy only as opt-in |
 
 ### Open decisions (please confirm/decide)
-1. **Naming — resolved (2026-07-23):** namespace `org.GraphDefined.Vanaheimr.Hermod.SSH` (+ `.SFTP`/`.Tests`/`.CLI`) with the GraphDefined Apache-2.0 file header on every `.cs` file (template in `CLAUDE.md`). Project folders stay `HermodSSH`/`HermodSSHTests`/`HermodSSHDemo` with `<RootNamespace>` set.
-2. **One assembly** (client+server+SFTP, proposal) vs. split into Core/Client/Server packages?
-3. **BouncyCastle as a dependency** — ok? (Alternative: implement everything in-house = far more effort + crypto risk — not recommended.) Note: `libs/Hermod` already references `BouncyCastle.Cryptography`, so BC is in the dependency tree anyway — this is only about direct use.
-4. Demo CLI (`HermodSSHDemo`) wanted, or library only?
-5. **CI provider** for the nightly interop matrix (GitHub Actions with Linux + Windows runners?) — repo is currently local-only
-6. Tier 3 peers: any that matter specifically to you (e.g. WinSCP because your users use it)? Commercial peers (Rebex) only if a license exists
-7. **Hermod DNS integration — resolved (2026-07-23):** Vanaheimr Hermod + Styx are vendored as git submodules under `libs/` (internal `git.graphdefined.com` URLs, same as SMTPServer). The SSHFP adapter binds to the Hermod DNS client and lives in this repo; HermodSSH core still only depends on `ISshfpResolver`.
+1. ✅ **Naming — resolved (2026-07-23):** namespace `org.GraphDefined.Vanaheimr.Hermod.SSH` (+ `.SFTP`/`.Tests`/`.CLI`) with the GraphDefined Apache-2.0 file header on every `.cs` file (template in `CLAUDE.md`). Project folders stay `HermodSSH`/`HermodSSHTests`/`HermodSSHDemo` with `<RootNamespace>` set.
+2. ⬜ **One assembly** (client+server+SFTP, proposal) vs. split into Core/Client/Server packages?
+3. ⬜ **BouncyCastle as a dependency** — ok? (Alternative: implement everything in-house = far more effort + crypto risk — not recommended.) Note: `libs/Hermod` already references `BouncyCastle.Cryptography`, so BC is in the dependency tree anyway — this is only about direct use.
+4. ⬜ Demo CLI (`HermodSSHDemo`) wanted, or library only?
+5. ⬜ **CI provider** for the nightly interop matrix (GitHub Actions with Linux + Windows runners?) — repo is currently local-only
+6. ⬜ Tier 3 peers: any that matter specifically to you (e.g. WinSCP because your users use it)? Commercial peers (Rebex) only if a license exists
+7. ✅ **Hermod DNS integration — resolved (2026-07-23):** Vanaheimr Hermod + Styx are vendored as git submodules under `libs/` (internal `git.graphdefined.com` URLs, same as SMTPServer). The SSHFP adapter binds to the Hermod DNS client and lives in this repo; HermodSSH core still only depends on `ISshfpResolver`.
 
 ---
 
 ## 14. First Concrete Steps (M0)
 
-1. Create `SSH.slnx` + `HermodSSH` (classlib, net10.0) + `HermodSSHTests` (NUnit), adopting the sibling-project conventions
-2. Implement `Core/SshPacketReader|Writer` + constants (`SshMessageNumber`, disconnect codes)
-3. NUnit suite for the wire format incl. error cases
-4. Set up WSL prerequisites (`setup-wsl.sh`) so the M1 interop harness has a target from day one
-5. Then straight into M1: version exchange + KEXINIT, compared against a local OpenSSH server
+0. ✅ Git repo on `master` + `.gitignore`, `libs/Hermod` & `libs/Styx` submodules, conventions (`CLAUDE.md`: file template, namespace)
+1. ⬜ Create `SSH.slnx` + `HermodSSH` (classlib, net10.0) + `HermodSSHTests` (NUnit), adopting the sibling-project conventions
+2. ⬜ Implement `Core/SshPacketReader|Writer` + constants (`SshMessageNumber`, disconnect codes)
+3. ⬜ NUnit suite for the wire format incl. error cases
+4. ⬜ Set up WSL prerequisites (`setup-wsl.sh`) so the M1 interop harness has a target from day one
+5. ⬜ Then straight into M1: version exchange + KEXINIT, compared against a local OpenSSH server

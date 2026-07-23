@@ -60,3 +60,5 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
   solution folder in `SSH.slnx`; BouncyCastle comes in through Hermod
 - No self-implemented crypto primitives — BCL first, BouncyCastle for gaps; in-house code only for
   modes/constructions (CTR, chacha20-poly1305@openssh.com, bcrypt_pbkdf, KDF) with official test vectors
+- [PLAN.md](PLAN.md) carries status markers (✅ done · 🔶 partial · ⬜ open) — keep them current
+  whenever a feature lands, a milestone completes or a decision is made
