@@ -153,7 +153,11 @@ SSH/
 `SSH.slnx` references the submodule projects in a `/Dependencies/` solution folder
 (`libs/Hermod/Hermod/Hermod.csproj`, `libs/Styx/Styx/Styx.csproj` + their test projects) — exactly like SMTPServer.
 
-**One** assembly instead of a client/server split — transport, crypto, keys and the SFTP protocol are almost entirely shared; separation via namespaces (`Hermod.SSH.Client`, `Hermod.SSH.Server`, …). Can be split later if needed.
+**One** assembly instead of a client/server split — transport, crypto, keys and the SFTP protocol are almost entirely shared. Root namespace `org.GraphDefined.Vanaheimr.Hermod.SSH` (client and server side by side, like other Hermod modules), SFTP under `….SSH.SFTP`. Can be split later if needed.
+
+### Code conventions
+
+Every `.cs` file follows the GraphDefined template (verbatim header in `CLAUDE.md`): Apache-2.0 license header (© 2010-2026 GraphDefined GmbH, "This file is part of Vanaheimr Hermod" — this repo is part of that ecosystem), `#region Usings` block, **block-scoped** namespace. Namespaces: `org.GraphDefined.Vanaheimr.Hermod.SSH` (library), `….SSH.SFTP` (SFTP), `….SSH.Tests` (NUnit), `….SSH.CLI` (demo). Project folders keep their names (`HermodSSH`, `HermodSSHTests`, `HermodSSHDemo`) with `<RootNamespace>` set accordingly. All code, XML docs, comments and commit messages in English.
 
 ### Layer model
 
@@ -533,7 +537,7 @@ Ordering logic: first the **narrow modern path** (Ed25519 + Curve25519 + AES-GCM
 | Scope creep (SSH is huge) | non-goals list, milestone gates, legacy only as opt-in |
 
 ### Open decisions (please confirm/decide)
-1. **Naming**: project `HermodSSH`, namespace `Hermod.SSH.*` (proposal — sibling projects use short namespaces like `DhcpServer.*`)?
+1. **Naming — resolved (2026-07-23):** namespace `org.GraphDefined.Vanaheimr.Hermod.SSH` (+ `.SFTP`/`.Tests`/`.CLI`) with the GraphDefined Apache-2.0 file header on every `.cs` file (template in `CLAUDE.md`). Project folders stay `HermodSSH`/`HermodSSHTests`/`HermodSSHDemo` with `<RootNamespace>` set.
 2. **One assembly** (client+server+SFTP, proposal) vs. split into Core/Client/Server packages?
 3. **BouncyCastle as a dependency** — ok? (Alternative: implement everything in-house = far more effort + crypto risk — not recommended.) Note: `libs/Hermod` already references `BouncyCastle.Cryptography`, so BC is in the dependency tree anyway — this is only about direct use.
 4. Demo CLI (`HermodSSHDemo`) wanted, or library only?
