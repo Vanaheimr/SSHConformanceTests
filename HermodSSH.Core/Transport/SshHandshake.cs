@@ -73,16 +73,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var iS            = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken: CancellationToken).ConfigureAwait(false);
             var remoteKexInit = KexInitMessage.Decode(iS);
             var negotiated    = AlgorithmNegotiation.Negotiate(localKexInit, remoteKexInit, WeAreServer: false);
-            EnsureSupported(negotiated);
+            SshKexCore.EnsureSupported(negotiated);
 
             // 3. ECDH init: send our ephemeral public key.
             using var kex = SshKeyExchange.Create(negotiated.KeyExchange);
             var qC        = kex.PublicKey;
-            await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, BuildEcdhInit(qC), CancellationToken).ConfigureAwait(false);
+            await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, SshKexCore.BuildEcdhInit(qC), CancellationToken).ConfigureAwait(false);
 
             // 4. ECDH reply: host key, server ephemeral, signature.
             var reply = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken: CancellationToken).ConfigureAwait(false);
-            var (kS, qS, signatureBlob) = ParseEcdhReply(reply);
+            var (kS, qS, signatureBlob) = SshKexCore.ParseEcdhReply(reply);
 
             // 5. Shared secret, exchange hash, signature verification.
             var rawSecret  = kex.Agree(qS);
@@ -99,9 +99,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var sessionId = h;
             await ExchangeNewKeysAsync(Pipe, CancellationToken).ConfigureAwait(false);
 
-            var derive = MakeDeriver(kex.HashAlgorithm, kMpint, h, sessionId);
-            var (sendCipher,    sendMac)    = BuildDirection(negotiated.CipherClientToServer, negotiated.MacClientToServer, derive, Kdf.KeyLetter.EncryptionKeyClientToServer, Kdf.KeyLetter.InitialIVClientToServer, Kdf.KeyLetter.IntegrityKeyClientToServer);
-            var (receiveCipher, receiveMac) = BuildDirection(negotiated.CipherServerToClient, negotiated.MacServerToClient, derive, Kdf.KeyLetter.EncryptionKeyServerToClient, Kdf.KeyLetter.InitialIVServerToClient, Kdf.KeyLetter.IntegrityKeyServerToClient);
+            var derive = SshKexCore.MakeDeriver(kex.HashAlgorithm, kMpint, h, sessionId);
+            var (sendCipher,    sendMac)    = SshKexCore.BuildDirection(negotiated.CipherClientToServer, negotiated.MacClientToServer, derive, Kdf.KeyLetter.EncryptionKeyClientToServer, Kdf.KeyLetter.InitialIVClientToServer, Kdf.KeyLetter.IntegrityKeyClientToServer);
+            var (receiveCipher, receiveMac) = SshKexCore.BuildDirection(negotiated.CipherServerToClient, negotiated.MacServerToClient, derive, Kdf.KeyLetter.EncryptionKeyServerToClient, Kdf.KeyLetter.InitialIVServerToClient, Kdf.KeyLetter.IntegrityKeyServerToClient);
 
             return new SshTransportContext(sessionId, h, negotiated, kS, sendCipher, receiveCipher, sendMac, receiveMac);
 
@@ -143,11 +143,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var iC            = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken: CancellationToken).ConfigureAwait(false);
             var remoteKexInit = KexInitMessage.Decode(iC);
             var negotiated    = AlgorithmNegotiation.Negotiate(remoteKexInit, localKexInit, WeAreServer: true);
-            EnsureSupported(negotiated);
+            SshKexCore.EnsureSupported(negotiated);
 
             // 3. ECDH init: the client's ephemeral public key.
             var initPayload = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken: CancellationToken).ConfigureAwait(false);
-            var qC          = ParseEcdhInit(initPayload);
+            var qC          = SshKexCore.ParseEcdhInit(initPayload);
 
             // 4. Compute the shared secret and the exchange hash, then sign it.
             using var kex  = SshKeyExchange.Create(negotiated.KeyExchange);
@@ -159,15 +159,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var h          = ExchangeHash.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kMpint);
             var signature  = HostKey.Sign(negotiated.HostKey, h);
 
-            await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, BuildEcdhReply(kS, qS, signature), CancellationToken).ConfigureAwait(false);
+            await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, SshKexCore.BuildEcdhReply(kS, qS, signature), CancellationToken).ConfigureAwait(false);
 
             // 5. NEWKEYS + key derivation.
             var sessionId = h;
             await ExchangeNewKeysAsync(Pipe, CancellationToken).ConfigureAwait(false);
 
-            var derive = MakeDeriver(kex.HashAlgorithm, kMpint, h, sessionId);
-            var (sendCipher,    sendMac)    = BuildDirection(negotiated.CipherServerToClient, negotiated.MacServerToClient, derive, Kdf.KeyLetter.EncryptionKeyServerToClient, Kdf.KeyLetter.InitialIVServerToClient, Kdf.KeyLetter.IntegrityKeyServerToClient);
-            var (receiveCipher, receiveMac) = BuildDirection(negotiated.CipherClientToServer, negotiated.MacClientToServer, derive, Kdf.KeyLetter.EncryptionKeyClientToServer, Kdf.KeyLetter.InitialIVClientToServer, Kdf.KeyLetter.IntegrityKeyClientToServer);
+            var derive = SshKexCore.MakeDeriver(kex.HashAlgorithm, kMpint, h, sessionId);
+            var (sendCipher,    sendMac)    = SshKexCore.BuildDirection(negotiated.CipherServerToClient, negotiated.MacServerToClient, derive, Kdf.KeyLetter.EncryptionKeyServerToClient, Kdf.KeyLetter.InitialIVServerToClient, Kdf.KeyLetter.IntegrityKeyServerToClient);
+            var (receiveCipher, receiveMac) = SshKexCore.BuildDirection(negotiated.CipherClientToServer, negotiated.MacClientToServer, derive, Kdf.KeyLetter.EncryptionKeyClientToServer, Kdf.KeyLetter.InitialIVClientToServer, Kdf.KeyLetter.IntegrityKeyClientToServer);
 
             return new SshTransportContext(sessionId, h, negotiated, kS, sendCipher, receiveCipher, sendMac, receiveMac);
 
@@ -175,50 +175,6 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #endregion
 
-
-        #region (private) EnsureSupported(Negotiated)
-
-        // Current support: curve25519-sha256 + ssh-ed25519 + (aes*-gcm | aes*-ctr with an -etm MAC).
-        private static void EnsureSupported(NegotiatedAlgorithms Negotiated)
-        {
-
-            if (Negotiated.KeyExchange is not (SshAlgorithmNames.Kex.Curve25519Sha256       or
-                                               SshAlgorithmNames.Kex.Curve25519Sha256LibSsh or
-                                               SshAlgorithmNames.Kex.EcdhNistP256            or
-                                               SshAlgorithmNames.Kex.EcdhNistP384            or
-                                               SshAlgorithmNames.Kex.EcdhNistP521            or
-                                               SshAlgorithmNames.Kex.DhGroup14Sha256         or
-                                               SshAlgorithmNames.Kex.DhGroup16Sha512))
-                throw new SshWireException($"Unsupported key exchange '{Negotiated.KeyExchange}' (supported: curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha256, diffie-hellman-group16-sha512).");
-
-            if (Negotiated.HostKey is not (SshAlgorithmNames.HostKey.Ed25519       or
-                                           SshAlgorithmNames.HostKey.EcdsaNistP256 or
-                                           SshAlgorithmNames.HostKey.EcdsaNistP384 or
-                                           SshAlgorithmNames.HostKey.EcdsaNistP521 or
-                                           SshAlgorithmNames.HostKey.RsaSha2_256   or
-                                           SshAlgorithmNames.HostKey.RsaSha2_512))
-                throw new SshWireException($"Unsupported host key '{Negotiated.HostKey}' (supported: ssh-ed25519, ecdsa-sha2-nistp256/384/521, rsa-sha2-256/512).");
-
-            EnsureCipherSupported(Negotiated.CipherClientToServer, Negotiated.MacClientToServer);
-            EnsureCipherSupported(Negotiated.CipherServerToClient, Negotiated.MacServerToClient);
-
-        }
-
-        private static void EnsureCipherSupported(String Cipher, String Mac)
-        {
-
-            var isAead = Cipher is SshAlgorithmNames.Cipher.Aes256Gcm or SshAlgorithmNames.Cipher.Aes128Gcm or SshAlgorithmNames.Cipher.ChaCha20Poly1305;
-            var isCtr  = Cipher is SshAlgorithmNames.Cipher.Aes256Ctr or SshAlgorithmNames.Cipher.Aes192Ctr or SshAlgorithmNames.Cipher.Aes128Ctr;
-
-            if (!isAead && !isCtr)
-                throw new SshWireException($"Unsupported cipher '{Cipher}' (supported: chacha20-poly1305@openssh.com, aes*-gcm@openssh.com, aes*-ctr).");
-
-            if (isCtr && Mac is not (SshAlgorithmNames.Mac.HmacSha2_256Etm or SshAlgorithmNames.Mac.HmacSha2_512Etm))
-                throw new SshWireException($"The CTR cipher '{Cipher}' requires an encrypt-then-MAC ('{Mac}' is not supported yet).");
-
-        }
-
-        #endregion
 
         #region (private) ExchangeNewKeysAsync(Pipe, CancellationToken)
 
@@ -236,39 +192,6 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #endregion
 
-        #region (private) MakeDeriver / BuildDirection / BuildMac
-
-        // A closure that derives 'length' key bytes for a given key-derivation letter (RFC 4253 §7.2).
-        private static Func<Byte, Int32, Byte[]> MakeDeriver(HashAlgorithmName HashAlgorithm, Byte[] SharedSecretMPInt, Byte[] H, Byte[] SessionId)
-            => (letter, length) => Kdf.Derive(HashAlgorithm, SharedSecretMPInt, H, letter, SessionId, length);
-
-        // Build the cipher (and, for CTR, the encrypt-then-MAC) for one direction from the negotiated names.
-        private static (SshTransportCipher Cipher, ISshMac? Mac) BuildDirection(String                    CipherName,
-                                                                                String                    MacName,
-                                                                                Func<Byte, Int32, Byte[]> Derive,
-                                                                                Byte                      KeyLetter,
-                                                                                Byte                      IVLetter,
-                                                                                Byte                      MacLetter)
-
-            => CipherName switch {
-                   SshAlgorithmNames.Cipher.ChaCha20Poly1305 => (new ChaCha20Poly1305Cipher(Derive(KeyLetter, ChaCha20Poly1305Cipher.KeyLength)), null),
-                   SshAlgorithmNames.Cipher.Aes256Gcm => (new AesGcmTransportCipher(Derive(KeyLetter, 32), Derive(IVLetter, AesGcmTransportCipher.NonceLength)), null),
-                   SshAlgorithmNames.Cipher.Aes128Gcm => (new AesGcmTransportCipher(Derive(KeyLetter, 16), Derive(IVLetter, AesGcmTransportCipher.NonceLength)), null),
-                   SshAlgorithmNames.Cipher.Aes256Ctr => (new AesCtrTransportCipher(Derive(KeyLetter, 32), Derive(IVLetter, AesCtrTransportCipher.CounterLength)), BuildMac(MacName, Derive, MacLetter)),
-                   SshAlgorithmNames.Cipher.Aes192Ctr => (new AesCtrTransportCipher(Derive(KeyLetter, 24), Derive(IVLetter, AesCtrTransportCipher.CounterLength)), BuildMac(MacName, Derive, MacLetter)),
-                   SshAlgorithmNames.Cipher.Aes128Ctr => (new AesCtrTransportCipher(Derive(KeyLetter, 16), Derive(IVLetter, AesCtrTransportCipher.CounterLength)), BuildMac(MacName, Derive, MacLetter)),
-                   _                                  => throw new SshWireException($"Unsupported cipher '{CipherName}'.")
-               };
-
-        private static ISshMac BuildMac(String MacName, Func<Byte, Int32, Byte[]> Derive, Byte MacLetter)
-            => MacName switch {
-                   SshAlgorithmNames.Mac.HmacSha2_256Etm => HmacSha2Mac.Sha256(Derive(MacLetter, 32)),
-                   SshAlgorithmNames.Mac.HmacSha2_512Etm => HmacSha2Mac.Sha512(Derive(MacLetter, 64)),
-                   _                                     => throw new SshWireException($"Unsupported MAC '{MacName}'.")
-               };
-
-        #endregion
-
         #region (private) WritePacketAsync(Output, Cipher, Payload, CancellationToken)
 
         private static async ValueTask WritePacketAsync(PipeWriter          Output,
@@ -278,49 +201,6 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         {
             SshPacketFraming.WritePacket(Output, Cipher, Payload);
             await Output.FlushAsync(CancellationToken).ConfigureAwait(false);
-        }
-
-        #endregion
-
-        #region (private) ECDH message builders / parsers
-
-        private static Byte[] BuildEcdhInit(ReadOnlySpan<Byte> Q_C)
-        {
-            var abw     = new ArrayBufferWriter<Byte>();
-            var writer  = new SshPacketWriter(abw);
-            writer.WriteByte((Byte) SshMessageNumber.KexEcdhInit);
-            writer.WriteBinaryString(Q_C);
-            return abw.WrittenSpan.ToArray();
-        }
-
-        private static Byte[] ParseEcdhInit(ReadOnlySpan<Byte> Payload)
-        {
-            var reader  = new SshPacketReader(Payload);
-            if (reader.ReadByte() != (Byte) SshMessageNumber.KexEcdhInit)
-                throw new SshWireException("Expected SSH_MSG_KEX_ECDH_INIT (30)!");
-            return reader.ReadBinaryString();
-        }
-
-        private static Byte[] BuildEcdhReply(ReadOnlySpan<Byte> K_S, ReadOnlySpan<Byte> Q_S, ReadOnlySpan<Byte> Signature)
-        {
-            var abw     = new ArrayBufferWriter<Byte>();
-            var writer  = new SshPacketWriter(abw);
-            writer.WriteByte((Byte) SshMessageNumber.KexEcdhReply);
-            writer.WriteBinaryString(K_S);
-            writer.WriteBinaryString(Q_S);
-            writer.WriteBinaryString(Signature);
-            return abw.WrittenSpan.ToArray();
-        }
-
-        private static (Byte[] K_S, Byte[] Q_S, Byte[] Signature) ParseEcdhReply(ReadOnlySpan<Byte> Payload)
-        {
-            var reader  = new SshPacketReader(Payload);
-            if (reader.ReadByte() != (Byte) SshMessageNumber.KexEcdhReply)
-                throw new SshWireException("Expected SSH_MSG_KEX_ECDH_REPLY (31)!");
-            var kS   = reader.ReadBinaryString();
-            var qS   = reader.ReadBinaryString();
-            var sig  = reader.ReadBinaryString();
-            return (kS, qS, sig);
         }
 
         #endregion
