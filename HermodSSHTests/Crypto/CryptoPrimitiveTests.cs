@@ -126,7 +126,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var keyPair  = Ed25519KeyPair.FromSeed(seed);
             var message  = "hermod"u8.ToArray();
 
-            Assert.That(keyPair.Sign(message), Is.EqualTo(keyPair.Sign(message)));
+            var firstSignature   = keyPair.Sign(message);
+            var secondSignature  = keyPair.Sign(message);
+
+            Assert.That(secondSignature, Is.EqualTo(firstSignature));
 
         }
 
