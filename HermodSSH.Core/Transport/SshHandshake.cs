@@ -53,6 +53,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                                                                 String[]?                 Ciphers              = null,
                                                                                 String[]?                 Macs                 = null,
                                                                                 String[]?                 KeyExchanges         = null,
+                                                                                String[]?                 HostKeyAlgorithms    = null,
                                                                                 CancellationToken         CancellationToken    = default)
         {
 
@@ -65,7 +66,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var vS       = remote.WireBytes;
 
             // 2. KEXINIT exchange + negotiation.
-            var localKexInit = KexInitMessage.CreateLocal(IsServer: false, Ciphers, Macs, KeyExchanges);
+            var localKexInit = KexInitMessage.CreateLocal(IsServer: false, Ciphers, Macs, KeyExchanges, HostKeyAlgorithms);
             var iC           = localKexInit.Encode();
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, iC, CancellationToken).ConfigureAwait(false);
 
@@ -88,10 +89,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var kMpint     = ExchangeHash.EncodeSharedSecretMPInt(rawSecret);
             var h          = ExchangeHash.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kMpint);
 
-            var hostPublicKey  = SshEd25519.ParsePublicKeyBlob(kS);
-            var signature      = SshEd25519.ParseSignatureBlob(signatureBlob);
-
-            if (!Ed25519KeyPair.Verify(hostPublicKey, h, signature))
+            if (!SshSignature.Verify(kS, h, signatureBlob))
                 throw new SshWireException("The server's host-key signature over the exchange hash is invalid!");
 
             if (VerifyHostKey is not null && !VerifyHostKey(kS))
@@ -121,7 +119,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <param name="LocalIdentification">Our identification string.</param>
         /// <param name="CancellationToken">An optional cancellation token.</param>
         public static async ValueTask<SshTransportContext> ServerHandshakeAsync(IDuplexPipe               Pipe,
-                                                                                Ed25519KeyPair            HostKey,
+                                                                                ISshHostKey               HostKey,
                                                                                 SshIdentificationString?  LocalIdentification  = null,
                                                                                 String[]?                 Ciphers              = null,
                                                                                 String[]?                 Macs                 = null,
@@ -137,8 +135,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var vS       = localId.ToWireBytes();
             var vC       = remote.WireBytes;
 
-            // 2. KEXINIT exchange + negotiation.
-            var localKexInit = KexInitMessage.CreateLocal(IsServer: true, Ciphers, Macs, KeyExchanges);
+            // 2. KEXINIT exchange + negotiation. The server offers only its host key's algorithms.
+            var localKexInit = KexInitMessage.CreateLocal(IsServer: true, Ciphers, Macs, KeyExchanges, [.. HostKey.AlgorithmNames]);
             var iS           = localKexInit.Encode();
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, iS, CancellationToken).ConfigureAwait(false);
 
@@ -157,9 +155,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var rawSecret  = kex.Agree(qC);
             var kMpint     = ExchangeHash.EncodeSharedSecretMPInt(rawSecret);
 
-            var kS         = SshEd25519.EncodePublicKeyBlob(HostKey.PublicKey);
+            var kS         = HostKey.PublicKeyBlob;
             var h          = ExchangeHash.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kMpint);
-            var signature  = SshEd25519.EncodeSignatureBlob(HostKey.Sign(h));
+            var signature  = HostKey.Sign(negotiated.HostKey, h);
 
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, BuildEcdhReply(kS, qS, signature), CancellationToken).ConfigureAwait(false);
 
@@ -191,8 +189,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                                SshAlgorithmNames.Kex.EcdhNistP521))
                 throw new SshWireException($"Unsupported key exchange '{Negotiated.KeyExchange}' (supported: curve25519-sha256, ecdh-sha2-nistp256/384/521).");
 
-            if (Negotiated.HostKey != SshAlgorithmNames.HostKey.Ed25519)
-                throw new SshWireException($"Unsupported host key '{Negotiated.HostKey}' (supported: ssh-ed25519).");
+            if (Negotiated.HostKey is not (SshAlgorithmNames.HostKey.Ed25519       or
+                                           SshAlgorithmNames.HostKey.EcdsaNistP256 or
+                                           SshAlgorithmNames.HostKey.EcdsaNistP384 or
+                                           SshAlgorithmNames.HostKey.EcdsaNistP521 or
+                                           SshAlgorithmNames.HostKey.RsaSha2_256   or
+                                           SshAlgorithmNames.HostKey.RsaSha2_512))
+                throw new SshWireException($"Unsupported host key '{Negotiated.HostKey}' (supported: ssh-ed25519, ecdsa-sha2-nistp256/384/521, rsa-sha2-256/512).");
 
             EnsureCipherSupported(Negotiated.CipherClientToServer, Negotiated.MacClientToServer);
             EnsureCipherSupported(Negotiated.CipherServerToClient, Negotiated.MacServerToClient);

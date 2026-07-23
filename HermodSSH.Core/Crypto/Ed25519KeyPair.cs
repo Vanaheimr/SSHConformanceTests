@@ -30,7 +30,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
     /// An Ed25519 key pair for the <c>ssh-ed25519</c> host-key and public-key signature algorithm
     /// (RFC 8032, RFC 8709). Used to sign the key-exchange hash and to authenticate.
     /// </summary>
-    public sealed class Ed25519KeyPair
+    public sealed class Ed25519KeyPair : ISshHostKey
     {
 
         #region Data
@@ -109,6 +109,20 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             return signer.GenerateSignature();
 
         }
+
+        #endregion
+
+        #region ISshHostKey
+
+        /// <summary>The signature algorithm this key supports (<c>ssh-ed25519</c>).</summary>
+        public IReadOnlyList<String> AlgorithmNames => [ SshAlgorithmNames.HostKey.Ed25519 ];
+
+        /// <summary>The SSH public-key blob (<c>string "ssh-ed25519" || string publickey</c>).</summary>
+        public Byte[] PublicKeyBlob => SshEd25519.EncodePublicKeyBlob(PublicKey);
+
+        /// <summary>Sign the data and return the SSH signature blob (<c>string "ssh-ed25519" || string sig</c>).</summary>
+        public Byte[] Sign(String AlgorithmName, ReadOnlySpan<Byte> Data)
+            => SshEd25519.EncodeSignatureBlob(Sign(Data));
 
         #endregion
 

@@ -77,11 +77,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         [Test]
         [CancelAfter(30000)]
-        [TestCase("curve25519-sha256",   "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
-        [TestCase("curve25519-sha256",   "aes256-ctr",             "hmac-sha2-256-etm@openssh.com", "aes256-ctr")]
-        [TestCase("ecdh-sha2-nistp256",  "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
-        [TestCase("ecdh-sha2-nistp521",  "aes256-ctr",             "hmac-sha2-512-etm@openssh.com", "aes256-ctr")]
+        [TestCase("curve25519-sha256",   "ssh-ed25519",         "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
+        [TestCase("curve25519-sha256",   "ssh-ed25519",         "aes256-ctr",             "hmac-sha2-256-etm@openssh.com", "aes256-ctr")]
+        [TestCase("ecdh-sha2-nistp256",  "ssh-ed25519",         "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
+        [TestCase("ecdh-sha2-nistp521",  "ssh-ed25519",         "aes256-ctr",             "hmac-sha2-512-etm@openssh.com", "aes256-ctr")]
+        [TestCase("curve25519-sha256",   "ecdsa-sha2-nistp256", "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
+        [TestCase("curve25519-sha256",   "rsa-sha2-512",        "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
         public async Task OurServer_CompletesTransport_WithRealOpenSshClient(String             SshKex,
+                                                                             String             SshHostKeyAlg,
                                                                              String             SshCipher,
                                                                              String             SshMac,
                                                                              String             ExpectedCipher,
@@ -92,7 +95,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             if (sshClient is null)
                 Assert.Ignore("No 'ssh' client found — skipping OpenSSH transport interop.");
 
-            var hostKey = Ed25519KeyPair.Generate();
+            var hostKey = HostKeyMatrixTests.MakeHostKey(SshHostKeyAlg);
 
             using var listener = SshTcpListener.Start(new IPSocket(IPv4Address.Localhost, IPPort.Auto));
             var port = listener.LocalEndPoint.Port.ToInt32();
@@ -126,7 +129,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 "-o", "StrictHostKeyChecking=no",
                 "-o", $"UserKnownHostsFile={knownHosts}",
                 "-o", $"KexAlgorithms={SshKex}",
-                "-o", "HostKeyAlgorithms=ssh-ed25519",
+                "-o", $"HostKeyAlgorithms={SshHostKeyAlg}",
                 "-o", $"Ciphers={SshCipher}",
                 "-o", $"MACs={SshMac}",
                 "-o", "PreferredAuthentications=none",

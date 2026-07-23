@@ -103,6 +103,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             SshAlgorithmNames.Kex.EcdhNistP521
         ];
 
+        /// <summary>The default host-key algorithm preference list a client accepts (most preferred first).</summary>
+        public static readonly String[] DefaultHostKeyAlgorithms =
+        [
+            SshAlgorithmNames.HostKey.Ed25519,
+            SshAlgorithmNames.HostKey.EcdsaNistP256,
+            SshAlgorithmNames.HostKey.EcdsaNistP384,
+            SshAlgorithmNames.HostKey.EcdsaNistP521,
+            SshAlgorithmNames.HostKey.RsaSha2_512,
+            SshAlgorithmNames.HostKey.RsaSha2_256
+        ];
+
         /// <summary>The default cipher preference list (most preferred first).</summary>
         public static readonly String[] DefaultCiphers =
         [
@@ -128,10 +139,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <param name="Ciphers">Optional cipher preference override (both directions).</param>
         /// <param name="Macs">Optional MAC preference override (both directions).</param>
         /// <param name="KeyExchanges">Optional key-exchange preference override (without the markers).</param>
+        /// <param name="HostKeyAlgorithms">Optional host-key algorithm override (a server passes its key's algorithms).</param>
         public static KexInitMessage CreateLocal(Boolean    IsServer,
-                                                 String[]?  Ciphers       = null,
-                                                 String[]?  Macs          = null,
-                                                 String[]?  KeyExchanges  = null)
+                                                 String[]?  Ciphers            = null,
+                                                 String[]?  Macs               = null,
+                                                 String[]?  KeyExchanges       = null,
+                                                 String[]?  HostKeyAlgorithms  = null)
         {
 
             var ciphers = Ciphers ?? DefaultCiphers;
@@ -147,7 +160,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             return new (
                    Cookie:                    RandomNumberGenerator.GetBytes(16),
                    KexAlgorithms:             [.. kex],
-                   ServerHostKeyAlgorithms:   [ SshAlgorithmNames.HostKey.Ed25519 ],
+                   ServerHostKeyAlgorithms:   HostKeyAlgorithms ?? DefaultHostKeyAlgorithms,
                    EncryptionClientToServer:  ciphers,
                    EncryptionServerToClient:  ciphers,
                    MacClientToServer:         macs,

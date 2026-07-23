@@ -49,6 +49,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         public static class HostKey
         {
             public const String Ed25519                  = "ssh-ed25519";
+            public const String EcdsaNistP256            = "ecdsa-sha2-nistp256";
+            public const String EcdsaNistP384            = "ecdsa-sha2-nistp384";
+            public const String EcdsaNistP521            = "ecdsa-sha2-nistp521";
+            public const String RsaSha2_256              = "rsa-sha2-256";
+            public const String RsaSha2_512              = "rsa-sha2-512";
+            public const String SshRsa                   = "ssh-rsa";   // RSA key type (SHA-1 sig; off by default)
         }
 
         /// <summary>Encryption algorithm names.</summary>
