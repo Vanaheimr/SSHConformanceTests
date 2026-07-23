@@ -259,7 +259,7 @@ await using var server = new SshServer(new SshServerOptions {
     HostKeys      = [hostKey, hostCertKey],
     Authenticator = SshUserAuthenticator.Create(auth => auth
         .TrustUserCA(caPublicKey)                          // OpenSSH certificates
-        .WithAuthorizedKeys(user => LoadAuthorizedKeys(user))
+        .WithAuthorizedKeys(user => LoadAuthorizedKeys(user))   // entries carry optional NotBefore/NotAfter
         .WithPassword((user, pw, ct) => CheckPasswordAsync(user, pw, ct))
         .WithAccessProfile(user => user.Name switch {      // authorization: least privilege per account
             "logdrop"  => SshAccessProfile.SftpUploadOnly  ("D:\\logs\\{username}", allowOverwrite: false),
@@ -312,7 +312,8 @@ Pins and known_hosts entries also steer the **host-key algorithm negotiation ord
 ### Server — auth pipeline
 Pluggable backends behind `ISshUserAuthenticator`; policy: allowed methods, method chains (e.g. `publickey,password` as 2FA via partial success), `MaxAuthTries`, `LoginGraceTime`, uniform (timing-neutral) failure responses to prevent user enumeration.
 
-- `authorized_keys` parser incl. options: `from=`, `command=`, `environment=`, `no-*`/`restrict`, `expiry-time=`, **`cert-authority`**, **`principals=`**
+- `authorized_keys` parser incl. options: `from=`, `command=`, `environment=`, `no-*`/`restrict`, **`cert-authority`**, **`principals=`**, plus **validity windows on plain keys**: `not-before="…"` / `not-after="…"` (HermodSSH extension) and `expiry-time="…"` (OpenSSH-compatible alias of not-after)
+- **Key validity windows** — certificate-style `notBefore`/`notAfter` on every authorized key, settable programmatically (`new AuthorizedKey(key) { NotBefore = …, NotAfter = … }`, both optional) or in the file (accepted formats: OpenSSH `YYYYMMDD[HHMM[SS]][Z]` and ISO 8601). Semantics exactly as in certificates: `notBefore ≤ now < notAfter`, evaluated via `TimeProvider` **at authentication time only** (established sessions survive expiry, same as with certs). Outside the window ⇒ generic, timing-neutral auth failure on the wire; the server audit log records the real reason (expired / not yet valid). Portability note: stock `sshd` rejects lines with unknown options — `expiry-time=` is the portable subset, `not-before=` is our extension.
 - `TrustedUserCAKeys` equivalent + `AuthorizedPrincipals` mechanism
 - **Authorization result:** successful authentication yields an `SshAccessProfile` (via `WithAccessProfile`) attached to the session; effective rights = intersection of server profile ∧ `authorized_keys` options ∧ certificate critical options/extensions — the most restrictive source always wins (details in §7)
 
@@ -452,6 +453,7 @@ Async tests with `[CancelAfter(…)]` + `CancellationToken` parameter, `Assert.T
 - Crypto: RFC 7748 vectors (X25519), RFC 8032 (Ed25519), NIST KATs (ML-KEM), OpenSSH regress vectors (chacha20-poly1305@openssh.com, bcrypt_pbkdf), Wycheproof (X25519, AES-GCM), our CTR against NIST SP 800-38A
 - Negotiation: algorithm selection logic (RFC 4253 §7.1) incl. corner cases (no common algorithm, ext-info, strict-KEX markers, guessed KEX packets)
 - Keys/formats: openssh-key-v1 (plain + bcrypt_pbkdf-encrypted), PKCS#8/PEM, RFC 4716, authorized_keys (all options), known_hosts (hashed, cert-authority, revoked, wildcards, ports)
+- Authorized-key validity windows: parser round-trips (`not-before`/`not-after`/`expiry-time`, OpenSSH date formats incl. `Z` suffix + ISO 8601), decision matrix (no window / only notBefore / only notAfter / inside / before / after / exact boundary values — `notBefore ≤ now < notAfter`), FakeTimeProvider crossing the boundary (auth-time check only, established sessions unaffected)
 - **Certificate suite** (focus area): valid / expired / not-yet-valid / wrong principal / foreign CA / tampered signature / unknown critical option ⇒ reject / unknown extension ⇒ accept / `source-address` violation / user cert used as host cert (and vice versa) / CA key is itself a cert / revoked — each from both client and server perspective
 - SFTP: packet round-trips, attrs encoding, path canonicalization incl. traversal attacks
 - SFTP access profiles: table-driven permission matrix — every SFTP packet type (incl. extensions) × profile (upload-only, download-only, read-write, custom) → expected allow/deny; per-profile root jails against traversal; intersection logic (profile ∧ authorized_keys options ∧ cert constraints)
@@ -460,7 +462,7 @@ Async tests with `[CancelAfter(…)]` + `CancellationToken` parameter, `Assert.T
 ### 10.2 Loopback integration tests (no networking)
 Our client ↔ our server over an in-memory `IDuplexPipe`:
 - **Full handshake matrix**: every KEX × cipher × MAC × host key format (TestCaseSource, cartesian) — every combination must establish a session + echo channel
-- Auth flows positive/negative (key not authorized, cert expired, wrong password, MaxAuthTries, partial-success chain)
+- Auth flows positive/negative (key not authorized, key outside its validity window — not yet valid / expired, cert expired, wrong password, MaxAuthTries, partial-success chain)
 - Exec semantics against an in-process command handler: exit-status vs exit-signal, stderr separation, stdin piping, binary-safe round-trips, output larger than the channel window, cancellation tears down the handler, parallel exec channels on one session
 - Rekey mid-transfer (initiated from both sides), large transfers (> 1 GiB trigger via FakeTimeProvider/byte counters), cancellation at every point, abrupt disconnects, parallel channels
 - SFTP round-trips on temp directories + in-memory FS, aborts mid-transfer, resume
@@ -565,6 +567,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 - **Key format round-trips with `ssh-keygen`:** every key type, openssh-key-v1 plain + passphrase-encrypted (bcrypt_pbkdf), PKCS#8, RFC 4716 — import theirs, export ours, `ssh-keygen -l`/`-y` agree on fingerprints
 - **Certificates, both directions:** (a) `ssh-keygen -s` issues → we authenticate with it and our server validates it; (b) our `OpenSshCertificateBuilder` issues → `sshd` accepts it and `ssh-keygen -L -f` pretty-prints it (external structural validator); AsyncSSH as a second independent cert validator/issuer
 - **Server-side cert configs vs real `sshd`:** `TrustedUserCAKeys`, `AuthorizedPrincipalsFile`, `RevokedKeys`, `cert-authority`/`principals=` in authorized_keys — same scenarios mirrored onto our server with the `ssh` CLI as client
+- **`expiry-time` parity:** the same authorized_keys file with `expiry-time=` entries behaves identically under our server and `sshd` (accepted before the deadline, rejected after)
 - **Host certificates:** `sshd` with `HostCertificate` → our client validates via `@cert-authority` known_hosts; our server presents a host cert → `ssh` with `@cert-authority` accepts it
 - **SSHFP:** our zone-record generator vs `ssh-keygen -r` (identical output for every key type); client-side SSHFP verification E2E against the in-process fake resolver (DNSSEC flag on/off → auto-accept vs advisory-only)
 - **Critical options end-to-end:** `force-command`, `source-address` (positive + violation), certs with unknown critical options must be rejected by both sides
@@ -598,7 +601,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 | **M1** | ⬜ | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, disconnect, **strict KEX from day one**; interop harness skeleton (env discovery, process orchestration, WSL bridge) | loopback handshake green; scripted handshake vs OpenSSH under WSL, both roles | L |
 | **M2** | ⬜ | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH | M–L |
 | **M3** | ⬜ | **PQ hybrid**: spike "MLKem availability .NET 10 on Win/Linux", then `mlkem768x25519-sha256` (BCL, BC fallback) + `sntrup761x25519-sha512` (BC); K-as-string encoding | automated interop vs OpenSSH ≥ 9.9 (both roles) + TinySSH (sntrup761) + plink ML-KEM against our server | M |
-| **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716), authorized_keys/known_hosts, server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips | L |
+| **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716), authorized_keys/known_hosts (incl. **notBefore/notAfter validity windows** on authorized keys), server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips | L |
 | **M5** | ⬜ | **Certificates**: parser/validator (check chain from §6), `CertificateBuilder` (mini-CA), client cert auth, server CA trust + principals + critical options, host certificates, revocation list | full §11.4 cert program vs OpenSSH (`ssh-keygen -L` validates our certs) + AsyncSSH as second validator; full negative suite | L |
 | **M6** | ⬜ | Connection layer: channels + flow control, `exec`/`shell`/`pty-req`/`env`/`exit-status`/`window-change`, subsystem dispatch, keepalives; **`SshCommand` API** (capture + streaming, stdin, env, PTY toggle, exit-status/exit-signal, `SshCommandLine.Quote`) | remote-exec E2E suite (§11.3 #8) green vs WSL/container sshds; `ssh` CLI and `plink` execute against our server (incl. winadj quirk pinned) | L |
 | **M7** | ⬜ | **SFTP** v3 client + server + extensions, pipelining, `ISftpFileSystem` (local with root jail, in-memory); **access profiles** (`SshAccessProfile`/`SftpPermissions`, upload-only & download-only presets, central default-deny gate) | `sftp` CLI + `psftp` + curl against our server; our client vs `sftp-server` across the OpenSSH version spread; v4–v6 downgrade vs AsyncSSH; profile permission matrix green incl. real-client denial behavior; throughput benchmark; traversal suite green | L |
