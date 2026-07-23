@@ -795,7 +795,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 
 | # | Status | Content | Acceptance (DoD) | Effort* |
 |---|---|---|---|---|
-| **M0** | ✅ | Repo/solution skeleton (`SSH.slnx`, **Core/Client/Server split** + Tests + Demo, Hermod/Styx referenced → BouncyCastle available), wire format (`SshPacketReader`/`Writer`, mpint & co.), message/disconnect constants, NUnit setup, demo-CLI scaffold | round-trip and error-case tests green (38 tests, incl. RFC 4251 §5 mpint vectors) ✅ | S |
+| **M0** | ✅ | Repo/solution skeleton (`SSH.slnx`, **Core/Client/Server split** + Tests + Demo, Hermod/Styx referenced → BouncyCastle available), wire format (`SshPacketReader`/`Writer`, mpint & co.), message/disconnect constants, NUnit setup, demo-CLI scaffold, interop harness prereqs (`setup-wsl.sh`) | round-trip and error-case tests green (38 tests, incl. RFC 4251 §5 mpint vectors) ✅ | S |
 | **M1** | ⬜ | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, disconnect, **strict KEX from day one**, **dual-stack IPv6 listener**; interop harness skeleton (env discovery, process orchestration, WSL bridge) | loopback handshake green (IPv4 + `::1`); scripted handshake vs OpenSSH under WSL, both roles | L |
 | **M2** | ⬜ | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH | M–L |
 | **M3** | ⬜ | **PQ hybrid**: spike "MLKem availability .NET 10 on Win/Linux", then `mlkem768x25519-sha256` (BCL, BC fallback) + `sntrup761x25519-sha512` (BC); K-as-string encoding | automated interop vs OpenSSH ≥ 9.9 (both roles) + TinySSH (sntrup761) + plink ML-KEM against our server | M |
@@ -845,5 +845,5 @@ Ordering logic: first the **narrow modern path** (Ed25519 + Curve25519 + AES-GCM
 1. ✅ Create `SSH.slnx` + `HermodSSH.Core`/`.Client`/`.Server` (net10.0) + `HermodSSHTests` (NUnit) + `HermodSSHDemo`, Hermod/Styx submodules referenced on Core, adopting the sibling-project conventions
 2. ✅ Implement `Core/SshPacketReader|Writer` + constants (`SshMessageNumber`, `DisconnectReason`)
 3. ✅ NUnit suite for the wire format incl. error cases (38 tests green)
-4. ⬜ Set up WSL prerequisites (`setup-wsl.sh`) so the M1 interop harness has a target from day one
+4. ✅ Set up WSL prerequisites (`HermodSSHTests/interop/setup-wsl.sh`, idempotent, syntax-checked under WSL) so the M1 interop harness has a target from day one; `.gitattributes` keeps `*.sh` LF
 5. ⬜ Then straight into M1: version exchange + KEXINIT, compared against a local OpenSSH server

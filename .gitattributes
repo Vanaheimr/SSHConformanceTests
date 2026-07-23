@@ -1,0 +1,12 @@
+# Normalize line endings. Git stores text with LF; checkout converts per platform.
+* text=auto
+
+# Shell scripts MUST stay LF, otherwise they fail to run under WSL/bash (\r errors).
+*.sh    text eol=lf
+
+# Solution files are Windows-native tooling; keep CRLF.
+*.slnx  text eol=crlf
+
+# Binary assets: never convert.
+*.png   binary
+*.snk   binary
