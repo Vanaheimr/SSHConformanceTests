@@ -123,7 +123,7 @@ Principle: **no self-implemented crypto primitives** — in-house code only for 
 
 ## 5. Architecture & Project Structure
 
-Following the conventions of the sibling projects (own git repo, `.slnx`, `net10.0`, `Nullable`, `ImplicitUsings`, `LangVersion latest`, file-scoped namespaces, logging via `Microsoft.Extensions.Logging` + Serilog):
+Following the conventions of the sibling projects (own git repo, `.slnx`, `net10.0`, `Nullable`, `ImplicitUsings`, `LangVersion latest`, block-scoped namespaces per the GraphDefined template, logging via `Microsoft.Extensions.Logging` + Serilog):
 
 ```
 SSH/
