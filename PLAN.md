@@ -7,14 +7,15 @@ Interoperability with OpenSSH and a broad set of third-party implementations is 
 hard acceptance criterion (see §11).
 
 **Status legend:** ✅ done · 🔶 partial · ⬜ open — markers are kept current as implementation proceeds.
-**Current state (2026-07-23):** **M0 ✅**, **M1 🔶 (core handshake done)**. Core/Client/Server split
-(net10.0, GraphDefined conventions, BouncyCastle via submodules). The **modern loopback handshake works
-end-to-end**: version exchange → KEXINIT negotiation → curve25519-sha256 → ssh-ed25519 host-key signature →
-KDF → NEWKEYS → aes256-gcm, both roles over an in-memory `IDuplexPipe`, strict-KEX + ext-info advertised and
-detected. **74 NUnit tests green** (wire format incl. RFC 4251 §5 mpint vectors; X25519 RFC 7748 vector +
-Ed25519 round-trips; version exchange; BPP + AES-GCM with tamper detection; KEXINIT negotiation; full
-handshake with matching session ids and working encrypted round-trips both ways). Still open in M1: the
-TCP/dual-stack-IPv6 socket listener and the interop harness against real OpenSSH under WSL.
+**Current state (2026-07-23):** **M0 ✅**, **M1 ✅ (transport complete, OpenSSH-validated)**. Core/Client/Server
+split (net10.0, GraphDefined conventions, BouncyCastle via submodules). The **modern transport works
+end-to-end and interops with real OpenSSH**: version exchange → KEXINIT negotiation → curve25519-sha256 →
+ssh-ed25519 host-key signature → KDF → NEWKEYS → aes256-gcm, both roles, over an in-memory `IDuplexPipe`
+**and real TCP (IPv4 + `::1`)**, strict-KEX + ext-info advertised and detected. **77 NUnit tests green**,
+including a real-OpenSSH interop test: our server completes the handshake with the actual `ssh` client
+(OpenSSH 10.2) and **decrypts its `SERVICE_REQUEST`**, proving KEX + KDF + AES-GCM match OpenSSH byte-for-byte.
+Remaining interop breadth (our client ↔ real `sshd`, full WSL harness) grows with the interop program.
+Next: **M2** (rekeying, chacha20-poly1305, AES-CTR + EtM HMACs, ecdh-nistp*, group14/16, rsa-sha2, ext-info).
 
 ---
 
@@ -798,7 +799,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 | # | Status | Content | Acceptance (DoD) | Effort* |
 |---|---|---|---|---|
 | **M0** | ✅ | Repo/solution skeleton (`SSH.slnx`, **Core/Client/Server split** + Tests + Demo, Hermod/Styx referenced → BouncyCastle available), wire format (`SshPacketReader`/`Writer`, mpint & co.), message/disconnect constants, NUnit setup, demo-CLI scaffold, interop harness prereqs (`setup-wsl.sh`) | round-trip and error-case tests green (38 tests, incl. RFC 4251 §5 mpint vectors) ✅ | S |
-| **M1** | 🔶 | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, disconnect, **strict KEX from day one**, **dual-stack IPv6 listener**; interop harness skeleton (env discovery, process orchestration, WSL bridge) — **loopback handshake ✅ (both roles, matching keys, 74 tests)**; strict-KEX/ext-info advertised+detected ✅; **⬜ TCP/IPv6 socket layer, ⬜ interop harness + scripted handshake vs OpenSSH** | loopback handshake green (IPv4 + `::1`); scripted handshake vs OpenSSH under WSL, both roles | L |
+| **M1** | ✅ | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, **strict KEX from day one**, **dual-stack IPv6 listener** (`SshTcp`/`SshTcpListener`), OpenSSH interop test — loopback both roles ✅, TCP IPv4 + `::1` ✅, real OpenSSH client ↔ our server decrypts `SERVICE_REQUEST` ✅ (KEX+KDF+GCM match byte-for-byte). Residual interop breadth (our client ↔ real `sshd`; full WSL harness) tracked in the interop program | loopback handshake green (IPv4 + `::1`); handshake vs OpenSSH ✅ (server role) | L |
 | **M2** | ⬜ | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH | M–L |
 | **M3** | ⬜ | **PQ hybrid**: spike "MLKem availability .NET 10 on Win/Linux", then `mlkem768x25519-sha256` (BCL, BC fallback) + `sntrup761x25519-sha512` (BC); K-as-string encoding | automated interop vs OpenSSH ≥ 9.9 (both roles) + TinySSH (sntrup761) + plink ML-KEM against our server | M |
 | **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716) + **`SshKeyGenerator`** (all key types, first-run host-key generation), authorized_keys/known_hosts (incl. **notBefore/notAfter validity windows** on authorized keys), server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain), **TOTP 2FA** (`publickey,keyboard-interactive`, RFC 6238 + Hermod session-bound, replay cache), **auth banner**, **typed audit stream** (core `SshAuditEvent` model + `ISshAuditSink`, auth/transport events) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips; RFC 6238 vectors green + real `ssh` completes a TOTP login and shows our banner; audit events assert correct in loopback | L |

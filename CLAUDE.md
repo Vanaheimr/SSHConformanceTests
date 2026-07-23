@@ -71,3 +71,8 @@ Hermod's DNS/TCP/PKI/logging transitively — do **not** add a direct `BouncyCas
   modes/constructions (CTR, chacha20-poly1305@openssh.com, bcrypt_pbkdf, KDF) with official test vectors
 - [PLAN.md](PLAN.md) carries status markers (✅ done · 🔶 partial · ⬜ open) — keep them current
   whenever a feature lands, a milestone completes or a decision is made
+- **Namespace gotcha:** our root namespace is nested under `org.GraphDefined.Vanaheimr.Hermod`, which
+  defines its own `IPAddress` (and other networking types). An unqualified `IPAddress` in our code
+  resolves to Hermod's, not `System.Net`'s. When you need the `System.Net` type, either fully-qualify it
+  or add `using IPAddress = System.Net.IPAddress;` **inside the namespace block** (a file-scoped alias sits
+  at the global level and loses to the enclosing Hermod type).
