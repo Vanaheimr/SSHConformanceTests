@@ -25,6 +25,9 @@ submodules, conventions in `CLAUDE.md`) — implementation ⬜, next up: M0 (sol
 - Flexible client-side host key trust: explicit fingerprint pinning via options, known_hosts, host certificates, SSHFP DNS lookups (RFC 4255, DNSSEC-gated, pluggable resolver → Hermod DNS)
 - Server-side least-privilege authorization: per-account session permissions with ready-made SFTP profiles — upload-only (device log collection) and download-only (firmware distribution) — **essential**
 - Port forwarding as an admin/debugging feature — gated by fine-grained network ACLs (loopback-only, private-networks-only, specific subnets, port sets) on both roles
+- **TOTP two-factor authentication** (server side): `publickey` + one-time code over keyboard-interactive, standard authenticator apps **and** a phishing-resistant session-bound variant (reuses Hermod `TOTP`)
+- **Session recording** (server side): interactive/exec sessions to replayable asciicast v2, SFTP sessions to structured transcripts — for compliance and demos
+- **Keystroke-timing obfuscation** for interactive sessions (chaff packets, OpenSSH `ping@openssh.com`) — defeats keystroke timing analysis
 - Interoperability with OpenSSH (≥ 9.x, incl. Windows OpenSSH) and other major implementations as a hard acceptance criterion (full program in §11)
 - Hardening: strict KEX (Terrapin mitigation), DoS limits, constant-time comparisons, key zeroization
 - Fully `async`/`await`, `CancellationToken`, `IAsyncDisposable`, System.IO.Pipelines, Span/Memory
@@ -35,6 +38,9 @@ submodules, conventions in `CLAUDE.md`) — implementation ⬜, next up: M0 (sol
 - Connection multiplexing à la ControlMaster; compression (`zlib@openssh.com` later, optional)
 - SSH1 and any legacy cryptography (CBC, 3DES, hmac-md5/sha1, DH group1, ssh-rsa/SHA-1 — at most as an explicit opt-in)
 - Full interactive shell **hosting** in the server (protocol support yes: `pty-req`, `shell`, `exec`; actual PTY hosting via ConPTY only as a demo/extension)
+
+### Parked "fun/optional" features (kept as a backlog, not scheduled in v1)
+Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the WS stack — strong later candidate for firewalled devices), ProxyJump/jump-host client, `~/.ssh/config` reader, agent forwarding, FIDO2/`sk-*` security keys, Unix-domain-socket forwarding, admin-console subsystem, honeypot/tarpit listener. **Committed for v1 from this backlog:** TOTP 2FA, session recording, keystroke-timing obfuscation (see Goals).
 
 ---
 
@@ -53,6 +59,9 @@ submodules, conventions in `CLAUDE.md`) — implementation ⬜, next up: M0 (sol
 | SFTP | draft-ietf-secsh-filexfer-02 (v3), OpenSSH `PROTOCOL` (extensions) |
 | Key formats | OpenSSH `PROTOCOL.key` (openssh-key-v1 + bcrypt_pbkdf), PKCS#8, RFC 7468 (PEM), RFC 4716 |
 | Agent | draft-miller-ssh-agent |
+| 2FA / TOTP | RFC 6238 (TOTP), RFC 4226 (HOTP), RFC 4256 (keyboard-interactive), `otpauth://` enrollment URI; Hermod `TOTP` (session-bindable variant) |
+| Session recording | asciicast v2 (asciinema recording format) for PTY/exec; structured JSON transcript for SFTP |
+| Keystroke timing | OpenSSH `PROTOCOL` (`ping@openssh.com`, `SSH_MSG_PING`/`PONG`, chaff-based timing obfuscation ≥ 9.5); background: Song/Wagner/Tian, "Timing Analysis of Keystrokes and Timing Attacks on SSH" (2001) |
 | SSHFP / DNS | RFC 4255 (SSHFP RR, type 44), RFC 6594 (SHA-256, ECDSA), RFC 7479 (Ed25519), IANA SSHFP registry (Ed448 = 6); DNSSEC validation as the trust anchor |
 | Security | CVE-2023-48795 "Terrapin" → strict KEX (`kex-strict-c/s-v00@openssh.com`) |
 
@@ -206,6 +215,8 @@ public sealed class SshServerOptions
     public Func<SshSession, ExecRequest,  CancellationToken, Task<ISshChannelHandler?>>? ExecHandler  { get; init; }
     public Func<SshSession, ShellRequest, CancellationToken, Task<ISshChannelHandler?>>? ShellHandler { get; init; }
     public ISftpFileSystem?                       SftpFileSystem  { get; init; }   // enables the SFTP subsystem
+    public ISessionRecordingSink?                 Recording       { get; init; }   // asciicast/transcript recording (§7)
+    public KeystrokeTimingObfuscation             KeystrokeTiming { get; init; } = KeystrokeTimingObfuscation.InteractiveDefault; // chaff (§9)
     public SshAlgorithmOptions                    Algorithms      { get; init; } = SshAlgorithmOptions.Default;
     public SshServerLimits                        Limits          { get; init; } = new();  // MaxAuthTries, LoginGraceTime, MaxSessions, …
 }
@@ -265,11 +276,15 @@ await using var server = new SshServer(new SshServerOptions {
             "logdrop"  => SshAccessProfile.SftpUploadOnly  ("D:\\logs\\{username}", allowOverwrite: false),
             "firmware" => SshAccessProfile.SftpDownloadOnly("D:\\firmware"),
             "admin"    => SshAccessProfile.Default with {
-                              PortForwarding = ForwardingPolicy.LoopbackOnly   // tunnel only to services on this host
+                              PortForwarding = ForwardingPolicy.LoopbackOnly,  // tunnel only to services on this host
+                              RecordSessions = true                            // capture this profile's sessions (§7)
                           },
             _          => SshAccessProfile.Default
-        })),
+        })
+        .WithSecondFactor(user =>                            // TOTP 2FA, e.g. only for admins
+            user.Name == "admin" ? TotpValidator.Rfc6238(LoadTotpSecret(user)) : null)),
     SftpFileSystem = new LocalSftpFileSystem(root: "C:\\SftpRoot", readOnly: false),
+    Recording      = new AsciicastRecordingSink("D:\\ssh-recordings"),  // + JSON sidecar per session
     ExecHandler    = HandleExecAsync
 });
 await server.StartAsync(new IPEndPoint(IPAddress.Any, 22), ct);
@@ -317,6 +332,28 @@ Pluggable backends behind `ISshUserAuthenticator`; policy: allowed methods, meth
 - `TrustedUserCAKeys` equivalent + `AuthorizedPrincipals` mechanism
 - **Authorization result:** successful authentication yields an `SshAccessProfile` (via `WithAccessProfile`) attached to the session; effective rights = intersection of server profile ∧ `authorized_keys` options ∧ certificate critical options/extensions — the most restrictive source always wins (details in §7)
 
+### Two-factor authentication (TOTP)
+
+Real 2FA for admin accounts, built on the auth pipeline's existing partial-success chaining — the typical
+policy is `publickey,keyboard-interactive`: a valid key/cert gets *partial* success, then a TOTP prompt
+(RFC 4256 keyboard-interactive) must be answered before the session opens.
+
+- **`WithSecondFactor(user => …)`** attaches an `ISshSecondFactor` requirement per account (or per access
+  profile — e.g. only the `admin` profile needs it); accounts without it keep single-factor publickey
+- **`ISshSecondFactor` / `ITotpValidator`** — pluggable; two built-in providers:
+  1. **RFC 6238 standard TOTP** — base32 shared secret, 6/8 digits, HMAC-SHA1/256/512, 30 s step,
+     ±1 step skew tolerance; compatible with Google Authenticator / Authy / YubiKey OATH / KeePassXC.
+     Enrollment helper emits an `otpauth://totp/HermodSSH:user?secret=…&issuer=…` URI + QR for provisioning
+  2. **Hermod session-bound TOTP** — reuses `libs/Hermod`'s `TOTPGenerator`, passing the **SSH session
+     identifier** (exchange hash H of the first KEX) as binding material (the slot Hermod uses for
+     TLS-exporter binding). A code is then valid *only inside the session it was generated for* →
+     phishing/relay-resistant; ideal for closed GraphDefined device fleets that share the library
+- **Hardening:** replay cache (a code is single-use within its window), attempt rate-limiting shared with
+  `MaxAuthTries`, all comparisons `FixedTimeEquals`, clock via `TimeProvider` (skew + tests deterministic),
+  secrets zeroized; the prompt/response text is excluded from session recording (§7)
+- Interop: real OpenSSH `ssh` renders our keyboard-interactive prompt and submits the code; our client can
+  likewise answer a keyboard-interactive challenge from a PAM/OTP-configured `sshd` (§11.3 #6)
+
 ### Certificate validation (server, user cert) — mandatory check order
 1. Parse the format (`PROTOCOL.certkeys`: nonce, pubkey, serial, type, key id, principals, validity, critical options, extensions, signature key, signature)
 2. `type == user` (or `host` for host certs — mismatch ⇒ reject)
@@ -333,7 +370,7 @@ Pluggable backends behind `ISshUserAuthenticator`; policy: allowed methods, meth
 
 ---
 
-## 7. SFTP & Server-Side Access Control
+## 7. SFTP, Access Control & Session Recording
 
 **Version 3** (the de-facto standard, draft-ietf-secsh-filexfer-02) + OpenSSH extensions:
 `posix-rename@openssh.com`, `statvfs@openssh.com`, `fsync@openssh.com`, `hardlink@openssh.com`, `limits@openssh.com`, `expand-path@openssh.com`, `copy-data`.
@@ -416,6 +453,30 @@ Both roles share one reusable rule engine:
 - The same `NetworkAcl` engine is available client-side to cap what local applications may request through
   a tunnel (relevant for the dynamic/SOCKS forward, which stays a stretch goal)
 
+### Session recording (server-side, compliance & demos)
+
+Opt-in per server (`Recording` sink) and gated per access profile (`RecordSessions`) — capture what happened
+in a session in a replayable, tamper-evident-ish form.
+
+- **`ISessionRecordingSink`** — pluggable target: `AsciicastRecordingSink` (files in a rotating directory),
+  or custom (stream to blob storage / a SIEM / Hermod logging). One recording per channel, plus a per-session
+  JSON **sidecar** (who: user + key fingerprint / cert key-id / principal; from where: peer endpoint; when:
+  `DateTimeOffset` start/end; which access profile; session id; disconnect reason)
+- **Formats:**
+  - **PTY / shell** → **asciicast v2** (asciinema JSON-lines: header + `[elapsed, "o", data]` output events) —
+    replayable with `asciinema play` or the web player; window size + resizes captured (`[t,"r","CxR"]`)
+  - **exec** → asciicast (output) plus a header line with the exact command, argv and exit status/signal
+  - **SFTP** → structured operation transcript (op, path, offset, length, result, `DateTimeOffset`) — not
+    asciicast; enough to reconstruct exactly which bytes/paths a device touched (pairs with the upload/download
+    profiles: a full audit trail of every firmware fetch and log drop)
+- **Redaction is mandatory, not optional:** password and keyboard-interactive **inputs** (incl. TOTP codes)
+  are never written; by default recording captures channel **output** (what a reviewer sees on replay), with
+  input/keystroke capture as an explicit opt-in that still masks credential prompts
+- **Streaming & bounded:** events flow to the sink incrementally via `PipeWriter`-style backpressure (never
+  buffer a whole session in memory); size/time caps with rotation; a crash leaves a valid partial asciicast
+- **Ties into the audit story:** the same events feed `System.Diagnostics.Metrics`/`ILogger`, so recording and
+  live monitoring share one pipeline
+
 ---
 
 ## 8. Async & Performance Guidelines
@@ -440,6 +501,22 @@ Both roles share one reusable rule engine:
 - Clear trust boundaries: everything from the peer is untrusted until MAC/AEAD-verified; auth decisions only from verified data
 - Security review checklist as a gate before v1 (incl. running `/security-review` over the code base)
 
+### Keystroke-timing obfuscation
+
+In an interactive PTY session each keystroke is its own packet, so the encrypted inter-packet timing leaks
+typing rhythm — enough to narrow down passwords (Song/Wagner/Tian 2001). Mitigation, matching OpenSSH ≥ 9.5:
+
+- **`SSH_MSG_PING`/`SSH_MSG_PONG` (`ping@openssh.com`) — correctness first:** understand, answer and (when
+  obfuscating) send these chaff packets. We must tolerate a peer's chaff from the moment interactive channels
+  exist — so PING/PONG handling ships with the connection layer (M6), independent of our own obfuscation.
+- **`KeystrokeTimingObfuscation` option** (both roles, default on for interactive PTY sessions like OpenSSH):
+  while a PTY channel is active, real keystroke packets are sent on a **fixed cadence** (≈ 20 ms grid) and the
+  gaps filled with chaff PINGs, so an observer sees a constant-rate stream instead of keystroke timing;
+  the chaff stream stops shortly (~1 s) after typing pauses to bound overhead. Interval + enable configurable.
+- **Scope & honesty:** protects interactive typing only (not bulk transfer, which isn't timing-sensitive that
+  way); it is traffic-analysis mitigation, not perfect — documented as such.
+- Uses `TimeProvider` for the cadence so tests are deterministic (`FakeTimeProvider`).
+
 ---
 
 ## 10. Testing Strategy (NUnit)
@@ -458,6 +535,9 @@ Async tests with `[CancelAfter(…)]` + `CancellationToken` parameter, `Assert.T
 - SFTP: packet round-trips, attrs encoding, path canonicalization incl. traversal attacks
 - SFTP access profiles: table-driven permission matrix — every SFTP packet type (incl. extensions) × profile (upload-only, download-only, read-write, custom) → expected allow/deny; per-profile root jails against traversal; intersection logic (profile ∧ authorized_keys options ∧ cert constraints)
 - `NetworkAcl` engine: CIDR matching (IPv4/IPv6, edge prefixes /0 /32 /128), port ranges/sets, rule ordering & first-match, presets (loopback, private networks, subnet), hostname rules with a mock resolver, DNS-rebinding case (name resolves to allowed **and** disallowed addresses → deny)
+- TOTP: **RFC 6238 official test vectors** (SHA-1/256/512), base32 secret round-trips, `otpauth://` URI generation, ±1 step skew window, replay rejection (same code twice → deny), FakeTimeProvider stepping across slots; Hermod session-bound variant: a code bound to session A is rejected under session B
+- Session recording: asciicast v2 output parses back / plays (round-trip through a minimal asciicast reader), exec header carries command + exit status, SFTP transcript reconstructs the op sequence, **redaction**: password/keyboard-interactive/TOTP inputs never appear in the recording, partial (crash-truncated) recording is still valid
+- Keystroke-timing obfuscation: with FakeTimeProvider, injected keystrokes at irregular intervals produce an output packet cadence that is ~constant (timing decorrelated from input); chaff present while "typing", stops after the idle timeout; `SSH_MSG_PING` → correct `SSH_MSG_PONG`
 
 ### 10.2 Loopback integration tests (no networking)
 Our client ↔ our server over an in-memory `IDuplexPipe`:
@@ -468,6 +548,8 @@ Our client ↔ our server over an in-memory `IDuplexPipe`:
 - SFTP round-trips on temp directories + in-memory FS, aborts mid-transfer, resume
 - Access profiles end-to-end: an upload-only session can create + write, but READ/READDIR/REMOVE/RENAME return `SSH_FX_PERMISSION_DENIED`; download-only as the mirror image; denied operations leave the session and open handles healthy
 - Port forwarding end-to-end against `ForwardingPolicy` profiles: allowed `direct-tcpip` targets reach an in-process echo server, denied targets get `CHANNEL_OPEN_FAILURE (ADMINISTRATIVELY_PROHIBITED)` with the session intact; `tcpip-forward` bind/port ACLs (denied binds → request failure); remote-forward round-trips; `OpenTcpStreamAsync` data integrity through the tunnel
+- 2FA end-to-end: `publickey,keyboard-interactive` chain — key alone yields partial success, correct TOTP completes auth, wrong/expired/replayed code fails with attempts counted against `MaxAuthTries`; session-bound variant rejects a code minted for another session
+- Recording end-to-end: an exec + a scripted PTY session produce valid asciicast files matching the actual I/O; an upload-only SFTP session yields a transcript listing exactly the writes; recording a 2FA login never captures the code
 - Robustness: corrupted/truncated/oversized packets, wrong MAC, messages in the wrong state, Terrapin scenario (injected messages before NEWKEYS ⇒ abort)
 
 ### 10.3 Definition of Done per feature
@@ -544,7 +626,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 3. **Host keys:** every mutual algorithm; `server-sig-algs` honored (RSA keys must end up rsa-sha2); host certificates where supported
 4. **Ciphers/MACs:** full sub-matrix vs OpenSSH; per-peer supported subset elsewhere; ETM vs E&M
 5. **ext-info:** peers that send it, peers that don't
-6. **Auth:** publickey per key type; certificates (issue with `ssh-keygen`, verify with peer — and vice versa); password; keyboard-interactive; partial-success chains; `MaxAuthTries` behavior
+6. **Auth:** publickey per key type; certificates (issue with `ssh-keygen`, verify with peer — and vice versa); password; keyboard-interactive; partial-success chains; `MaxAuthTries` behavior; **TOTP 2FA**: real `ssh` renders our keyboard-interactive prompt and a code from a standard authenticator app (RFC 6238) completes `publickey,keyboard-interactive`; our client answers a keyboard-interactive challenge from an OTP-configured `sshd`
 7. **Channels (plumbing):** shell with PTY (`pty-req`, `window-change`; scripted expect-style checks); window stress (tiny windows, huge bursts); parallel channels
 8. **Remote command execution end-to-end** — the everyday "log in to a Linux box, run a bash command, capture the output, log out" workflow (the friendly kind of remote code execution, not the CVE kind). Runs with our client against real Linux sshds (WSL2 + containers), and mirrored against our server using `ssh`/`plink` as clients:
    - stdout capture (`uname -a`, `lsb_release -a`), stderr kept separate (`ls /nonexistent`), exit codes (`exit 42`, `false` → 1, command not found → 127)
@@ -556,7 +638,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
    - `SshCommandLine.Quote` round-trips: arguments with spaces, quotes, `$`, backticks, newlines survive the remote shell
    - Windows sshd as exec target (cmd.exe/PowerShell semantics, different quoting) — smoke level
 9. **Port forwarding & ACLs:** real `ssh -L`/`-R` (and `plink`) against our server under different `ForwardingPolicy` profiles — allowed targets connect end-to-end, denied targets yield failures that real clients surface cleanly (no hangs, no drops); our client's forwards against `sshd` restricted via `PermitOpen`/`PermitListen`/`AllowTcpForwarding` (denials surfaced as clear errors); remote-forward round-trips in both directions
-10. **Known global/channel-request quirks:** `winadj@putty.projects.tartarus.org` (must answer CHANNEL_FAILURE, not die), `no-more-sessions@openssh.com`, `hostkeys-00@openssh.com` after auth, `keepalive@openssh.com` — respond correctly to unknown requests with/without `want_reply`
+10. **Known global/channel-request quirks:** `winadj@putty.projects.tartarus.org` (must answer CHANNEL_FAILURE, not die), `no-more-sessions@openssh.com`, `hostkeys-00@openssh.com` after auth, `keepalive@openssh.com`, **`ping@openssh.com` (`SSH_MSG_PING`→`PONG`)** — respond correctly to unknown requests with/without `want_reply`; OpenSSH ≥ 9.5 sends keystroke-timing chaff by default → our client/server must accept it and interoperate with our own obfuscation on/off
 11. **Rekey:** forced rekeys (`RekeyLimit 512K` on the peer / byte trigger on ours) mid-transfer, both directions
 12. **SFTP:** against OpenSSH `sftp`/`sftp-server`, `psftp`, WinSCP, curl, AsyncSSH (which will ask for v4–v6 → must settle on v3 correctly); extensions (`limits@`, `posix-rename@`, `statvfs@`, `fsync@`, `copy-data`); large files, thousands of small files, weird filenames (UTF-8, spaces, quotes, newlines), resume, abort mid-transfer; **access profiles against real clients**: upload-only accepts `put` from the `sftp` CLI while `get`/`ls`/`rm` are cleanly denied, download-only serves `get`/curl while uploads are denied, WinSCP/`psftp` handle denials gracefully
 13. **Disconnect semantics:** clean disconnect codes both ways; behavior on abrupt TCP resets
@@ -601,12 +683,12 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 | **M1** | ⬜ | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, disconnect, **strict KEX from day one**; interop harness skeleton (env discovery, process orchestration, WSL bridge) | loopback handshake green; scripted handshake vs OpenSSH under WSL, both roles | L |
 | **M2** | ⬜ | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH | M–L |
 | **M3** | ⬜ | **PQ hybrid**: spike "MLKem availability .NET 10 on Win/Linux", then `mlkem768x25519-sha256` (BCL, BC fallback) + `sntrup761x25519-sha512` (BC); K-as-string encoding | automated interop vs OpenSSH ≥ 9.9 (both roles) + TinySSH (sntrup761) + plink ML-KEM against our server | M |
-| **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716), authorized_keys/known_hosts (incl. **notBefore/notAfter validity windows** on authorized keys), server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips | L |
+| **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716), authorized_keys/known_hosts (incl. **notBefore/notAfter validity windows** on authorized keys), server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain), **TOTP 2FA** (`publickey,keyboard-interactive`, RFC 6238 + Hermod session-bound, replay cache) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips; RFC 6238 vectors green + real `ssh` completes a TOTP login against our server | L |
 | **M5** | ⬜ | **Certificates**: parser/validator (check chain from §6), `CertificateBuilder` (mini-CA), client cert auth, server CA trust + principals + critical options, host certificates, revocation list | full §11.4 cert program vs OpenSSH (`ssh-keygen -L` validates our certs) + AsyncSSH as second validator; full negative suite | L |
-| **M6** | ⬜ | Connection layer: channels + flow control, `exec`/`shell`/`pty-req`/`env`/`exit-status`/`window-change`, subsystem dispatch, keepalives; **`SshCommand` API** (capture + streaming, stdin, env, PTY toggle, exit-status/exit-signal, `SshCommandLine.Quote`) | remote-exec E2E suite (§11.3 #8) green vs WSL/container sshds; `ssh` CLI and `plink` execute against our server (incl. winadj quirk pinned) | L |
-| **M7** | ⬜ | **SFTP** v3 client + server + extensions, pipelining, `ISftpFileSystem` (local with root jail, in-memory); **access profiles** (`SshAccessProfile`/`SftpPermissions`, upload-only & download-only presets, central default-deny gate) | `sftp` CLI + `psftp` + curl against our server; our client vs `sftp-server` across the OpenSSH version spread; v4–v6 downgrade vs AsyncSSH; profile permission matrix green incl. real-client denial behavior; throughput benchmark; traversal suite green | L |
+| **M6** | ⬜ | Connection layer: channels + flow control, `exec`/`shell`/`pty-req`/`env`/`exit-status`/`window-change`, subsystem dispatch, keepalives, **`SSH_MSG_PING`/`PONG` (`ping@openssh.com`)**; **`SshCommand` API** (capture + streaming, stdin, env, PTY toggle, exit-status/exit-signal, `SshCommandLine.Quote`); **session recording** for PTY/exec (asciicast v2 + sidecar, redaction) | remote-exec E2E suite (§11.3 #8) green vs WSL/container sshds; `ssh` CLI and `plink` execute against our server (incl. winadj quirk pinned); asciicast validates with `asciinema play`; PING chaff from OpenSSH ≥ 9.5 tolerated | L |
+| **M7** | ⬜ | **SFTP** v3 client + server + extensions, pipelining, `ISftpFileSystem` (local with root jail, in-memory); **access profiles** (`SshAccessProfile`/`SftpPermissions`, upload-only & download-only presets, central default-deny gate) | `sftp` CLI + `psftp` + curl against our server; our client vs `sftp-server` across the OpenSSH version spread; v4–v6 downgrade vs AsyncSSH; profile permission matrix green incl. real-client denial behavior; **SFTP session transcripts** (structured op log, tied to recording); throughput benchmark; traversal suite green | L |
 | **M8** | ⬜ | Forwarding (`direct-tcpip`, `tcpip-forward`, `OpenTcpStreamAsync`) with **`NetworkAcl` engine + `ForwardingPolicy` presets** (loopback-only, private-networks, subnet), ssh-agent client, **SSHFP DNS** (`ISshfpResolver` + Hermod-DNS adapter, `SshfpTrust` modes, zone-record generator), `hostkeys-00@openssh.com` (optional) | ACL permission matrix green; real `ssh -L/-R` vs our ACL'd server (clean denials) and our forwards vs `PermitOpen`-restricted sshd; loopback + interop proof (OpenSSH agent on Windows pipe and WSL socket); SSHFP generator matches `ssh-keygen -r`; resolver E2E with DNSSEC on/off | M–L |
-| **M9** | ⬜ | Hardening + full interop program: DoS limits, robustness/fuzz-light suite, timing review, security review checklist; Tier 2 matrix automated nightly, quirk registry + interop matrix report generator | all gates green; nightly matrix job runs; `docs/INTEROP-MATRIX.md` generated | M–L |
+| **M9** | ⬜ | Hardening + full interop program: DoS limits, **keystroke-timing obfuscation sender** (chaff cadence for interactive PTY, both roles), robustness/fuzz-light suite, timing review, security review checklist; Tier 2 matrix automated nightly, quirk registry + interop matrix report generator | all gates green; keystroke-timing decorrelation test green + interop with OpenSSH chaff; nightly matrix job runs; `docs/INTEROP-MATRIX.md` generated | M–L |
 | **M10** | ⬜ | Polish: complete XML docs, README + samples, demo CLI (`exec` = log in / run command / capture output / log out, `sftp` transfers, `serve` = demo server mapping exec to local processes), optional NuGet packaging, BenchmarkDotNet baseline | release v1 | S–M |
 
 \* Rough relations: S ≈ a few days, M ≈ 1–2 weeks, L ≈ 2–4 weeks (single person, focused). Realistic overall frame **5–7 months** including the extended interop program (the matrix infrastructure adds ~2–4 weeks spread across milestones); a working modern core (M0–M5: transport + PQ + keys + certs) is reachable around the halfway mark.
