@@ -1,0 +1,73 @@
+/*
+ * Copyright (c) 2010-2026 GraphDefined GmbH <achim.friedland@graphdefined.com>
+ * This file is part of Vanaheimr Hermod <https://www.github.com/Vanaheimr/Hermod>
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+namespace org.GraphDefined.Vanaheimr.Hermod.SSH
+{
+
+    /// <summary>
+    /// The wire names of the SSH algorithms and the pseudo-algorithm markers used during
+    /// KEXINIT negotiation (RFC 4253, RFC 8308, OpenSSH extensions).
+    /// </summary>
+    public static class SshAlgorithmNames
+    {
+
+        /// <summary>Key exchange method names and negotiation markers.</summary>
+        public static class Kex
+        {
+            public const String Curve25519Sha256         = "curve25519-sha256";
+            public const String Curve25519Sha256LibSsh   = "curve25519-sha256@libssh.org";
+
+            /// <summary>Client's "I support ext-info" marker (RFC 8308).</summary>
+            public const String ExtInfoClient            = "ext-info-c";
+            /// <summary>Server's "I support ext-info" marker (RFC 8308).</summary>
+            public const String ExtInfoServer            = "ext-info-s";
+
+            /// <summary>Client's strict-KEX marker (Terrapin mitigation, CVE-2023-48795).</summary>
+            public const String StrictKexClient          = "kex-strict-c-v00@openssh.com";
+            /// <summary>Server's strict-KEX marker (Terrapin mitigation, CVE-2023-48795).</summary>
+            public const String StrictKexServer          = "kex-strict-s-v00@openssh.com";
+        }
+
+        /// <summary>Host-key / public-key signature algorithm names.</summary>
+        public static class HostKey
+        {
+            public const String Ed25519                  = "ssh-ed25519";
+        }
+
+        /// <summary>Encryption algorithm names.</summary>
+        public static class Cipher
+        {
+            public const String Aes256Gcm                = "aes256-gcm@openssh.com";
+            public const String Aes128Gcm                = "aes128-gcm@openssh.com";
+        }
+
+        /// <summary>MAC algorithm names (ignored when an AEAD cipher is selected).</summary>
+        public static class Mac
+        {
+            public const String HmacSha2_256             = "hmac-sha2-256";
+            public const String HmacSha2_512             = "hmac-sha2-512";
+        }
+
+        /// <summary>Compression algorithm names.</summary>
+        public static class Compression
+        {
+            public const String None                     = "none";
+        }
+
+    }
+
+}

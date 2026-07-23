@@ -107,6 +107,23 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #endregion
 
+        #region ReadBytes(Count)
+
+        /// <summary>
+        /// Read <paramref name="Count"/> raw bytes (not length-prefixed) as a span into the underlying
+        /// buffer. Used for fixed-size fields such as the 16-byte KEXINIT cookie.
+        /// </summary>
+        /// <param name="Count">The number of bytes to read.</param>
+        public ReadOnlySpan<Byte> ReadBytes(Int32 Count)
+        {
+            EnsureAvailable(Count);
+            var slice  = buffer.Slice(position, Count);
+            position  += Count;
+            return slice;
+        }
+
+        #endregion
+
         #region ReadBoolean()
 
         /// <summary>
