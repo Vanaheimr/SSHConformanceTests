@@ -29,6 +29,9 @@ submodules, conventions in `CLAUDE.md`) — implementation ⬜, next up: M0 (sol
 - **SFTP quotas & bandwidth limits** per access profile: max file size, per-session byte/file caps, throughput throttling
 - **Typed audit event stream**: structured, strongly-typed events (auth, sessions, transfers, policy/ACL denials, disconnects) for SIEM integration
 - **Pre-auth authentication banner** (`SSH_MSG_USERAUTH_BANNER`): server-configurable legal notice; client surfaces peer banners
+- **Connection liveness**: keepalive-based dead-peer detection and idle-session timeouts on both roles (`ClientAlive*`/`ServerAlive*` equivalents)
+- **Key generation API** (`SshKeyGenerator`): create Ed25519/ECDSA/RSA keys and export all formats; server auto-generates host keys on first run
+- **IPv6 as a first-class citizen** throughout: dual-stack listeners, ACLs, known_hosts, address parsing
 - **TOTP two-factor authentication** (server side): `publickey` + one-time code over keyboard-interactive, standard authenticator apps **and** a phishing-resistant session-bound variant (reuses Hermod `TOTP`)
 - **Session recording** (server side): interactive/exec sessions to replayable asciicast v2, SFTP sessions to structured transcripts — for compliance and demos
 - **Keystroke-timing obfuscation** for interactive sessions (chaff packets, OpenSSH `ping@openssh.com`) — defeats keystroke timing analysis
@@ -151,7 +154,7 @@ SSH/
 │   │                           name-list negotiation, error/disconnect codes
 │   ├── Crypto/                 ISshCryptoProvider, KEX implementations (incl. PQ hybrid),
 │   │                           cipher/MAC/AEAD, key derivation (KDF), registry
-│   ├── Keys/                   SshPublicKey/SshPrivateKey (Ed25519/ECDSA/RSA),
+│   ├── Keys/                   SshPublicKey/SshPrivateKey (Ed25519/ECDSA/RSA), SshKeyGenerator,
 │   │                           formats: openssh-key-v1 (+bcrypt_pbkdf), PKCS#8/PEM, RFC 4716,
 │   │                           authorized_keys, known_hosts, OpenSshCertificate (+builder = mini-CA),
 │   │                           revocation
@@ -225,7 +228,7 @@ public sealed class SshServerOptions
     public Func<SshPeer, CancellationToken, Task<string?>>? AuthBanner { get; init; } // SSH_MSG_USERAUTH_BANNER (§6)
     public KeystrokeTimingObfuscation             KeystrokeTiming { get; init; } = KeystrokeTimingObfuscation.InteractiveDefault; // chaff (§9)
     public SshAlgorithmOptions                    Algorithms      { get; init; } = SshAlgorithmOptions.Default;
-    public SshServerLimits                        Limits          { get; init; } = new();  // MaxAuthTries, LoginGraceTime, MaxSessions, …
+    public SshServerLimits                        Limits          { get; init; } = new();  // MaxAuthTries, LoginGraceTime, MaxSessions, IdleTimeout, ClientAliveInterval/CountMax, …
 }
 ```
 
@@ -387,6 +390,9 @@ policy is `publickey,keyboard-interactive`: a valid key/cert gets *partial* succ
 8. Key/cert not revoked (v1: list of keys/serials/key IDs; binary KRL format as stretch goal)
 9. Only then: verify the client's signature with the public key **embedded in the certificate**
 
+### Key generation
+`SshKeyGenerator`: create `ssh-ed25519`, `ecdsa-sha2-nistp256/384/521` and `ssh-rsa` (2048/3072/4096) key pairs (the `ssh-keygen -t` equivalent), export to openssh-key-v1 (optionally passphrase-encrypted via bcrypt_pbkdf), PKCS#8/PEM and RFC 4716, with fingerprints. Feeds the mini-CA and tests; the **server auto-generates missing host keys on first run** into its config directory (matching the sibling SMTPServer's first-run crypto pattern).
+
 ### Mini-CA
 `OpenSshCertificateBuilder`: issue user/host certificates (equivalent of `ssh-keygen -s`), incl. all fields/options. Required for tests, useful as a product feature (e.g. short-lived certificates from an auth service).
 
@@ -534,6 +540,7 @@ in a session in a replayable, tamper-evident-ish form.
 - Channel flow control = real backpressure (window ↔ `PipeWriter` flush), no unbounded buffering
 - `Span<byte>`/`Memory<byte>` parsers, `ArrayPool`/`MemoryPool`, zero-copy where possible; wipe key material via `CryptographicOperations.ZeroMemory`, never pool buffers holding secrets
 - `TimeProvider` instead of `DateTime.UtcNow`/`Task.Delay` → timeouts/rekey testable with `FakeTimeProvider`; **`DateTimeOffset` everywhere** (`DateTime` never appears in public API or models — certificate validity, key windows, timestamps; third-party `DateTime` values are converted at the boundary)
+- **IPv6 is first-class, not an afterthought:** dual-stack listeners (`IPAddress.IPv6Any` with `DualMode`, or explicit v4+v6 binds), `IPAddress`/`IPEndPoint` (never string hosts) internally, IPv6 literals in known_hosts/`[host]:port` and forwarding targets, the `NetworkAcl` engine matches v4 **and** v6 CIDRs; loopback tests exercise `::1`
 - Rekeying: after 1 GiB or 1 h (configurable), initiable from both sides, without blocking active channels
 - Observability: `ILogger` (Serilog-compatible like the sibling projects), `System.Diagnostics.Metrics` (handshakes, active sessions, bytes, auth failures), optional `ActivitySource`
 - Benchmarks (BenchmarkDotNet, separate project, not NUnit): handshake latency, throughput per cipher, SFTP throughput. Target: SFTP ≥ 100 MB/s loopback with AES-GCM
@@ -569,6 +576,7 @@ a strongly-typed event, so fleet operators can feed a SIEM without regex-parsing
 - **Strict KEX** (Terrapin, CVE-2023-48795): send/detect the markers, sequence number reset at `SSH_MSG_NEWKEYS`, tolerate no foreign messages during KEX ⇒ immediate disconnect
 - Hard limits: max packet size (payload ≤ 256 KiB, minimum support 35 000 bytes), name-list/mpint/string length caps, max channels/session, window clamps
 - DoS: `LoginGraceTime`, `MaxAuthTries`, connection limits (MaxStartups semantics), optional per-source penalties
+- **Connection liveness & timeouts** (both roles, `TimeProvider`-driven): keepalive probes via `keepalive@openssh.com` global requests that expect a reply; N consecutive unanswered probes ⇒ dead-peer disconnect (`ClientAliveInterval`/`ClientAliveCountMax` on the server, `ServerAliveInterval`/`ServerAliveCountMax` on the client). Separate **idle timeout** (no channel data for a configured span ⇒ disconnect). Both emit audit events (§8) and never fire while legitimate traffic flows — important for flaky device links
 - Constant time: `FixedTimeEquals` for MAC/signature/password comparisons; identical response timing for "unknown user" vs "wrong key"
 - Defensive parsers: validate all lengths before allocation, no unbounded growth, fuzzing-friendly (SharpFuzz as a stretch goal)
 - Clear trust boundaries: everything from the peer is untrusted until MAC/AEAD-verified; auth decisions only from verified data
@@ -603,6 +611,9 @@ Async tests with `[CancelAfter(…)]` + `CancellationToken` parameter, `Assert.T
 - Crypto: RFC 7748 vectors (X25519), RFC 8032 (Ed25519), NIST KATs (ML-KEM), OpenSSH regress vectors (chacha20-poly1305@openssh.com, bcrypt_pbkdf), Wycheproof (X25519, AES-GCM), our CTR against NIST SP 800-38A
 - Negotiation: algorithm selection logic (RFC 4253 §7.1) incl. corner cases (no common algorithm, ext-info, strict-KEX markers, guessed KEX packets)
 - Keys/formats: openssh-key-v1 (plain + bcrypt_pbkdf-encrypted), PKCS#8/PEM, RFC 4716, authorized_keys (all options), known_hosts (hashed, cert-authority, revoked, wildcards, ports)
+- Key generation: `SshKeyGenerator` produces valid Ed25519/ECDSA/RSA keys, round-trips through every export format (openssh-key-v1 plain + bcrypt_pbkdf, PKCS#8/PEM, RFC 4716), fingerprints match; server first-run generates host keys once and reuses them
+- Connection liveness: with FakeTimeProvider, N unanswered keepalive probes ⇒ dead-peer disconnect (and *not* one probe short); idle timeout fires only after true inactivity; legitimate traffic resets both timers
+- IPv6: `NetworkAcl` v6 CIDRs, known_hosts/`[host]:port` with v6 literals, `IPEndPoint` parsing/formatting, loopback handshake over `::1`
 - Authorized-key validity windows: parser round-trips (`not-before`/`not-after`/`expiry-time`, OpenSSH date formats incl. `Z` suffix + ISO 8601), decision matrix (no window / only notBefore / only notAfter / inside / before / after / exact boundary values — `notBefore ≤ now < notAfter`), FakeTimeProvider crossing the boundary (auth-time check only, established sessions unaffected)
 - **Certificate suite** (focus area): valid / expired / not-yet-valid / wrong principal / foreign CA / tampered signature / unknown critical option ⇒ reject / unknown extension ⇒ accept / `source-address` violation / user cert used as host cert (and vice versa) / CA key is itself a cert / revoked — each from both client and server perspective
 - SFTP: packet round-trips, attrs encoding, path canonicalization incl. traversal attacks
@@ -726,7 +737,8 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 
 ### 11.4 Certificate & key tooling interop (core-feature deep dive)
 
-- **Key format round-trips with `ssh-keygen`:** every key type, openssh-key-v1 plain + passphrase-encrypted (bcrypt_pbkdf), PKCS#8, RFC 4716 — import theirs, export ours, `ssh-keygen -l`/`-y` agree on fingerprints
+- **Key format round-trips with `ssh-keygen`:** every key type, openssh-key-v1 plain + passphrase-encrypted (bcrypt_pbkdf), PKCS#8, RFC 4716 — import theirs, export ours, `ssh-keygen -l`/`-y` agree on fingerprints; keys minted by our `SshKeyGenerator` authenticate against real `sshd`
+- **IPv6 transport:** our client ↔ `sshd` and real `ssh` ↔ our server over IPv6 (`::1` and a v6 test address), known_hosts with v6 literals
 - **Certificates, both directions:** (a) `ssh-keygen -s` issues → we authenticate with it and our server validates it; (b) our `OpenSshCertificateBuilder` issues → `sshd` accepts it and `ssh-keygen -L -f` pretty-prints it (external structural validator); AsyncSSH as a second independent cert validator/issuer
 - **Server-side cert configs vs real `sshd`:** `TrustedUserCAKeys`, `AuthorizedPrincipalsFile`, `RevokedKeys`, `cert-authority`/`principals=` in authorized_keys — same scenarios mirrored onto our server with the `ssh` CLI as client
 - **`expiry-time` parity:** the same authorized_keys file with `expiry-time=` entries behaves identically under our server and `sshd` (accepted before the deadline, rejected after)
@@ -760,12 +772,12 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 | # | Status | Content | Acceptance (DoD) | Effort* |
 |---|---|---|---|---|
 | **M0** | 🔶 | Repo/solution skeleton (`SSH.slnx`, 2–3 projects, sibling-project conventions), wire format (reader/writer, mpint & co.), NUnit setup — git repo, submodules & conventions ✅; solution, wire format, NUnit ⬜ | round-trip and error-case tests green | S |
-| **M1** | ⬜ | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, disconnect, **strict KEX from day one**; interop harness skeleton (env discovery, process orchestration, WSL bridge) | loopback handshake green; scripted handshake vs OpenSSH under WSL, both roles | L |
+| **M1** | ⬜ | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, disconnect, **strict KEX from day one**, **dual-stack IPv6 listener**; interop harness skeleton (env discovery, process orchestration, WSL bridge) | loopback handshake green (IPv4 + `::1`); scripted handshake vs OpenSSH under WSL, both roles | L |
 | **M2** | ⬜ | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH | M–L |
 | **M3** | ⬜ | **PQ hybrid**: spike "MLKem availability .NET 10 on Win/Linux", then `mlkem768x25519-sha256` (BCL, BC fallback) + `sntrup761x25519-sha512` (BC); K-as-string encoding | automated interop vs OpenSSH ≥ 9.9 (both roles) + TinySSH (sntrup761) + plink ML-KEM against our server | M |
-| **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716), authorized_keys/known_hosts (incl. **notBefore/notAfter validity windows** on authorized keys), server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain), **TOTP 2FA** (`publickey,keyboard-interactive`, RFC 6238 + Hermod session-bound, replay cache), **auth banner**, **typed audit stream** (core `SshAuditEvent` model + `ISshAuditSink`, auth/transport events) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips; RFC 6238 vectors green + real `ssh` completes a TOTP login and shows our banner; audit events assert correct in loopback | L |
+| **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716) + **`SshKeyGenerator`** (all key types, first-run host-key generation), authorized_keys/known_hosts (incl. **notBefore/notAfter validity windows** on authorized keys), server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain), **TOTP 2FA** (`publickey,keyboard-interactive`, RFC 6238 + Hermod session-bound, replay cache), **auth banner**, **typed audit stream** (core `SshAuditEvent` model + `ISshAuditSink`, auth/transport events) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips; RFC 6238 vectors green + real `ssh` completes a TOTP login and shows our banner; audit events assert correct in loopback | L |
 | **M5** | ⬜ | **Certificates**: parser/validator (check chain from §6), `CertificateBuilder` (mini-CA), client cert auth, server CA trust + principals + critical options, host certificates, revocation list | full §11.4 cert program vs OpenSSH (`ssh-keygen -L` validates our certs) + AsyncSSH as second validator; full negative suite | L |
-| **M6** | ⬜ | Connection layer: channels + flow control, `exec`/`shell`/`pty-req`/`env`/`exit-status`/`window-change`, subsystem dispatch, keepalives, **`SSH_MSG_PING`/`PONG` (`ping@openssh.com`)**; **`SshCommand` API** (capture + streaming, stdin, env, PTY toggle, exit-status/exit-signal, `SshCommandLine.Quote`); **session recording** for PTY/exec (asciicast v2 + sidecar, redaction) | remote-exec E2E suite (§11.3 #8) green vs WSL/container sshds; `ssh` CLI and `plink` execute against our server (incl. winadj quirk pinned); asciicast validates with `asciinema play`; PING chaff from OpenSSH ≥ 9.5 tolerated | L |
+| **M6** | ⬜ | Connection layer: channels + flow control, `exec`/`shell`/`pty-req`/`env`/`exit-status`/`window-change`, subsystem dispatch, keepalives, **`SSH_MSG_PING`/`PONG` (`ping@openssh.com`)**; **`SshCommand` API** (capture + streaming, stdin, env, PTY toggle, exit-status/exit-signal, `SshCommandLine.Quote`); **session recording** for PTY/exec (asciicast v2 + sidecar, redaction), **keepalive/dead-peer + idle timeouts** (`ClientAlive*`/`ServerAlive*`, both roles) | remote-exec E2E suite (§11.3 #8) green vs WSL/container sshds; `ssh` CLI and `plink` execute against our server (incl. winadj quirk pinned); asciicast validates with `asciinema play`; PING chaff from OpenSSH ≥ 9.5 tolerated; dead-peer/idle timeouts fire correctly under FakeTimeProvider | L |
 | **M7** | ⬜ | **SFTP** v3 client + server + extensions, pipelining, `ISftpFileSystem` (local with root jail, in-memory); **access profiles** (`SshAccessProfile`/`SftpPermissions`, upload-only & download-only presets, central default-deny gate), **quotas & bandwidth limits** (`SftpQuota`: size caps, tree quota, token-bucket throttling) | `sftp` CLI + `psftp` + curl against our server; our client vs `sftp-server` across the OpenSSH version spread; v4–v6 downgrade vs AsyncSSH; profile permission matrix green incl. real-client denial behavior; **quota/bandwidth tests green** (caps enforced, throttle rate accurate, partial uploads cleaned up); **SFTP session transcripts** (structured op log, tied to recording); throughput benchmark; traversal suite green | L |
 | **M8** | ⬜ | Forwarding (`direct-tcpip`, `tcpip-forward`, `OpenTcpStreamAsync`) with **`NetworkAcl` engine + `ForwardingPolicy` presets** (loopback-only, private-networks, subnet), **ProxyJump / jump-host chaining** (SSH-over-SSH, per-hop policy), ssh-agent client, **SSHFP DNS** (`ISshfpResolver` + Hermod-DNS adapter, `SshfpTrust` modes, zone-record generator), `hostkeys-00@openssh.com` (optional) | ACL permission matrix green; real `ssh -L/-R` vs our ACL'd server (clean denials) and our forwards vs `PermitOpen`-restricted sshd; **ProxyJump both ways** (our client `-J` through real bastion; real `ssh -J` through our server); loopback + interop proof (OpenSSH agent on Windows pipe and WSL socket); SSHFP generator matches `ssh-keygen -r`; resolver E2E with DNSSEC on/off | L |
 | **M9** | ⬜ | Hardening + full interop program: DoS limits, **keystroke-timing obfuscation sender** (chaff cadence for interactive PTY, both roles), **audit catalog complete** (all event types across layers + documented SIEM sink), robustness/fuzz-light suite, timing review, security review checklist; Tier 2 matrix automated nightly, quirk registry + interop matrix report generator | all gates green; keystroke-timing decorrelation test green + interop with OpenSSH chaff; full audit event catalog covered by tests; nightly matrix job runs; `docs/INTEROP-MATRIX.md` generated | M–L |
