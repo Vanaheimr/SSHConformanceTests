@@ -33,6 +33,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             public const String EcdhNistP256             = "ecdh-sha2-nistp256";
             public const String EcdhNistP384             = "ecdh-sha2-nistp384";
             public const String EcdhNistP521             = "ecdh-sha2-nistp521";
+            public const String DhGroup14Sha256          = "diffie-hellman-group14-sha256";
+            public const String DhGroup16Sha512          = "diffie-hellman-group16-sha512";
 
             /// <summary>Client's "I support ext-info" marker (RFC 8308).</summary>
             public const String ExtInfoClient            = "ext-info-c";

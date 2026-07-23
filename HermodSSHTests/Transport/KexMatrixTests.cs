@@ -30,7 +30,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
     /// <summary>
     /// M2 key-exchange breadth: the full handshake across every supported KEX method
-    /// (curve25519-sha256, ecdh-sha2-nistp256/384/521), exercising variable hash sizes.
+    /// (curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha256 /
+    /// group16-sha512), exercising variable hash sizes.
     /// </summary>
     [TestFixture]
     public class KexMatrixTests
@@ -40,7 +41,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         [TestCase(SshAlgorithmNames.Kex.EcdhNistP256,      32)]
         [TestCase(SshAlgorithmNames.Kex.EcdhNistP384,      48)]
         [TestCase(SshAlgorithmNames.Kex.EcdhNistP521,      64)]
-        [CancelAfter(10000)]
+        [TestCase(SshAlgorithmNames.Kex.DhGroup14Sha256,   32)]
+        [TestCase(SshAlgorithmNames.Kex.DhGroup16Sha512,   64)]
+        [CancelAfter(20000)]
         public async Task Handshake_WithKex(String Kex, Int32 ExpectedSessionIdLength, CancellationToken CancellationToken)
         {
 

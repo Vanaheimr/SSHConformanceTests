@@ -84,6 +84,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         [TestCase("ecdh-sha2-nistp521",  "ssh-ed25519",         "aes256-ctr",             "hmac-sha2-512-etm@openssh.com", "aes256-ctr")]
         [TestCase("curve25519-sha256",   "ecdsa-sha2-nistp256", "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
         [TestCase("curve25519-sha256",   "rsa-sha2-512",        "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
+        [TestCase("diffie-hellman-group14-sha256", "ssh-ed25519", "aes256-gcm@openssh.com", "hmac-sha2-256",              "aes256-gcm@openssh.com")]
+        [TestCase("diffie-hellman-group16-sha512", "ssh-ed25519", "aes256-ctr",             "hmac-sha2-512-etm@openssh.com", "aes256-ctr")]
         public async Task OurServer_CompletesTransport_WithRealOpenSshClient(String             SshKex,
                                                                              String             SshHostKeyAlg,
                                                                              String             SshCipher,

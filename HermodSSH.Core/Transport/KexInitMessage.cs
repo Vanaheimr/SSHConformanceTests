@@ -100,7 +100,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             SshAlgorithmNames.Kex.Curve25519Sha256LibSsh,
             SshAlgorithmNames.Kex.EcdhNistP256,
             SshAlgorithmNames.Kex.EcdhNistP384,
-            SshAlgorithmNames.Kex.EcdhNistP521
+            SshAlgorithmNames.Kex.EcdhNistP521,
+            SshAlgorithmNames.Kex.DhGroup16Sha512,
+            SshAlgorithmNames.Kex.DhGroup14Sha256
         ];
 
         /// <summary>The default host-key algorithm preference list a client accepts (most preferred first).</summary>

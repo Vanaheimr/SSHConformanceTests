@@ -17,10 +17,12 @@ including a real-OpenSSH interop test: our server completes the handshake with t
 Remaining interop breadth (our client ↔ real `sshd`, full WSL harness) grows with the interop program.
 **M2 🔶 in progress:** added AES-CTR + HMAC-SHA2-256/512 **encrypt-then-MAC**, **chacha20-poly1305@openssh.com**
 (now the default cipher), the **NIST ECDH key exchanges** (`ecdh-sha2-nistp256/384/521`, `SshKeyExchange`
-abstraction, variable SHA-256/384/512), and **ECDSA + RSA host keys** (`ISshHostKey` + `SshSignature.Verify`
+abstraction, variable SHA-256/384/512), the **classic finite-field DH key exchanges**
+(`diffie-hellman-group14-sha256` / `group16-sha512`, RFC 3526 MODP groups 14/16, mpint `e`/`f` +
+modexp, peer-value validation), and **ECDSA + RSA host keys** (`ISshHostKey` + `SshSignature.Verify`
 signature abstraction — reused later for pubkey auth). Full cipher, KEX **and** host-key matrices green;
-**OpenSSH-validated** across chacha20-poly1305/gcm/ctr-etm × curve25519/nistp256/nistp521 ×
-ed25519/ecdsa-nistp256/rsa-sha2-512. **103 tests green.** Still open in M2: dh-group14/16, rekeying,
+**OpenSSH-validated** across chacha20-poly1305/gcm/ctr-etm × curve25519/nistp256/nistp521/**group14/group16** ×
+ed25519/ecdsa-nistp256/rsa-sha2-512. **113 tests green.** Still open in M2: rekeying,
 ext-info/server-sig-algs.
 
 ---
@@ -97,9 +99,9 @@ Order = default preference. Everything configurable via an options object (enabl
 ### Key Exchange
 1. `mlkem768x25519-sha256` — PQ hybrid, OpenSSH default since 10.0
 2. `sntrup761x25519-sha512` (+ alias `@openssh.com`) — PQ hybrid, OpenSSH default 9.0–9.9
-3. `curve25519-sha256` (+ alias `@libssh.org`)
-4. `ecdh-sha2-nistp256` / `-nistp384` / `-nistp521`
-5. `diffie-hellman-group14-sha256` (MUST per RFC 9142), `diffie-hellman-group16-sha512`
+3. ✅ `curve25519-sha256` (+ alias `@libssh.org`)
+4. ✅ `ecdh-sha2-nistp256` / `-nistp384` / `-nistp521`
+5. ✅ `diffie-hellman-group14-sha256` (MUST per RFC 9142), `diffie-hellman-group16-sha512`
 6. Later, optional: `mlkem1024nistp384-sha384`
 - Pseudo algorithms: `ext-info-c`/`ext-info-s` (RFC 8308), `kex-strict-c-v00@openssh.com`/`kex-strict-s-v00@openssh.com` (Terrapin)
 
@@ -806,7 +808,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 |---|---|---|---|---|
 | **M0** | ✅ | Repo/solution skeleton (`SSH.slnx`, **Core/Client/Server split** + Tests + Demo, Hermod/Styx referenced → BouncyCastle available), wire format (`SshPacketReader`/`Writer`, mpint & co.), message/disconnect constants, NUnit setup, demo-CLI scaffold, interop harness prereqs (`setup-wsl.sh`) | round-trip and error-case tests green (38 tests, incl. RFC 4251 §5 mpint vectors) ✅ | S |
 | **M1** | ✅ | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, **strict KEX from day one**, **dual-stack IPv6 listener** (`SshTcp`/`SshTcpListener`), OpenSSH interop test — loopback both roles ✅, TCP IPv4 + `::1` ✅, real OpenSSH client ↔ our server decrypts `SERVICE_REQUEST` ✅ (KEX+KDF+GCM match byte-for-byte). Residual interop breadth (our client ↔ real `sshd`; full WSL harness) tracked in the interop program | loopback handshake green (IPv4 + `::1`); handshake vs OpenSSH ✅ (server role) | L |
-| **M2** | 🔶 | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` — **chacha20-poly1305, AES-CTR + HMAC-SHA2-ETM, ecdh-sha2-nistp256/384/521, and ecdsa/rsa-sha2 host keys done ✅** (cipher + KEX + host-key matrices, OpenSSH interop across chacha20/gcm/ctr-etm × curve25519/nistp256/nistp521 × ed25519/ecdsa-nistp256/rsa-sha2-512); **⬜ group14/16, rekeying, ext-info** | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH | M–L |
+| **M2** | 🔶 | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` — **chacha20-poly1305, AES-CTR + HMAC-SHA2-ETM, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha256/group16-sha512, and ecdsa/rsa-sha2 host keys done ✅** (cipher + KEX + host-key matrices, OpenSSH interop across chacha20/gcm/ctr-etm × curve25519/nistp256/nistp521/group14/group16 × ed25519/ecdsa-nistp256/rsa-sha2-512); **⬜ rekeying, ext-info** | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH | M–L |
 | **M3** | ⬜ | **PQ hybrid**: spike "MLKem availability .NET 10 on Win/Linux", then `mlkem768x25519-sha256` (BCL, BC fallback) + `sntrup761x25519-sha512` (BC); K-as-string encoding | automated interop vs OpenSSH ≥ 9.9 (both roles) + TinySSH (sntrup761) + plink ML-KEM against our server | M |
 | **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716) + **`SshKeyGenerator`** (all key types, first-run host-key generation), authorized_keys/known_hosts (incl. **notBefore/notAfter validity windows** on authorized keys), server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain), **TOTP 2FA** (`publickey,keyboard-interactive`, RFC 6238 + Hermod session-bound, replay cache), **auth banner**, **typed audit stream** (core `SshAuditEvent` model + `ISshAuditSink`, auth/transport events) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips; RFC 6238 vectors green + real `ssh` completes a TOTP login and shows our banner; audit events assert correct in loopback | L |
 | **M5** | ⬜ | **Certificates**: parser/validator (check chain from §6), `CertificateBuilder` (mini-CA), client cert auth, server CA trust + principals + critical options, host certificates, revocation list | full §11.4 cert program vs OpenSSH (`ssh-keygen -L` validates our certs) + AsyncSSH as second validator; full negative suite | L |

@@ -60,6 +60,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                    SshAlgorithmNames.Kex.EcdhNistP256           => new NistEcdhKeyExchange(ECCurve.NamedCurves.nistP256, HashAlgorithmName.SHA256, SshAlgorithmNames.Kex.EcdhNistP256),
                    SshAlgorithmNames.Kex.EcdhNistP384           => new NistEcdhKeyExchange(ECCurve.NamedCurves.nistP384, HashAlgorithmName.SHA384, SshAlgorithmNames.Kex.EcdhNistP384),
                    SshAlgorithmNames.Kex.EcdhNistP521           => new NistEcdhKeyExchange(ECCurve.NamedCurves.nistP521, HashAlgorithmName.SHA512, SshAlgorithmNames.Kex.EcdhNistP521),
+                   SshAlgorithmNames.Kex.DhGroup14Sha256        => new DiffieHellmanKeyExchange(DiffieHellmanKeyExchange.Group14Prime, HashAlgorithmName.SHA256, SshAlgorithmNames.Kex.DhGroup14Sha256),
+                   SshAlgorithmNames.Kex.DhGroup16Sha512        => new DiffieHellmanKeyExchange(DiffieHellmanKeyExchange.Group16Prime, HashAlgorithmName.SHA512, SshAlgorithmNames.Kex.DhGroup16Sha512),
                    _                                            => throw new SshWireException($"Unsupported key exchange '{Name}'.")
                };
 
