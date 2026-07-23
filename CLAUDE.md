@@ -43,12 +43,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
 ## Namespaces
 
-| Area | Namespace |
-|---|---|
-| Library (client + server + transport + keys) | `org.GraphDefined.Vanaheimr.Hermod.SSH` |
-| SFTP | `org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP` |
-| Tests (NUnit) | `org.GraphDefined.Vanaheimr.Hermod.SSH.Tests` |
-| Demo CLI | `org.GraphDefined.Vanaheimr.Hermod.SSH.CLI` |
+| Project | Area | Namespace |
+|---|---|---|
+| `HermodSSH.Core`   | Shared foundation (wire format, crypto, keys, transport, connection) | `org.GraphDefined.Vanaheimr.Hermod.SSH` |
+| `HermodSSH.Core`   | SFTP protocol types | `org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP` |
+| `HermodSSH.Client` | High-level client API | `org.GraphDefined.Vanaheimr.Hermod.SSH.Client` |
+| `HermodSSH.Server` | High-level server API | `org.GraphDefined.Vanaheimr.Hermod.SSH.Server` |
+| `HermodSSHTests`   | NUnit tests | `org.GraphDefined.Vanaheimr.Hermod.SSH.Tests` |
+| `HermodSSHDemo`    | Demo CLI | `org.GraphDefined.Vanaheimr.Hermod.SSH.CLI` |
+
+Dependency direction: `Client` → `Core` ← `Server` (Client and Server never reference each other).
+`Core` references the `libs/Hermod` + `libs/Styx` submodules, which bring **BouncyCastle** (2.6.2) and
+Hermod's DNS/TCP/PKI/logging transitively — do **not** add a direct `BouncyCastle.Cryptography` package.
 
 ## Other conventions
 

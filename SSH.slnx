@@ -1,5 +1,11 @@
 <Solution>
-  <Project Path="HermodSSH/HermodSSH.csproj" />
+  <Folder Name="/Dependencies/">
+    <Project Path="libs/Hermod/Hermod/Hermod.csproj" />
+    <Project Path="libs/Styx/Styx/Styx.csproj" />
+  </Folder>
+  <Project Path="HermodSSH.Core/HermodSSH.Core.csproj" />
+  <Project Path="HermodSSH.Client/HermodSSH.Client.csproj" />
+  <Project Path="HermodSSH.Server/HermodSSH.Server.csproj" />
   <Project Path="HermodSSHTests/HermodSSHTests.csproj" />
   <Project Path="HermodSSHDemo/HermodSSHDemo.csproj" />
 </Solution>

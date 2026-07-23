@@ -7,10 +7,12 @@ Interoperability with OpenSSH and a broad set of third-party implementations is 
 hard acceptance criterion (see §11).
 
 **Status legend:** ✅ done · 🔶 partial · ⬜ open — markers are kept current as implementation proceeds.
-**Current state (2026-07-23):** **M0 ✅** — `SSH.slnx` + `HermodSSH`/`HermodSSHTests`/`HermodSSHDemo`
-(net10.0, GraphDefined conventions), the binary wire format (`SshPacketReader`/`Writer`, message numbers,
-disconnect codes) and its NUnit suite (38 tests green, incl. RFC 4251 §5 mpint vectors + malformed-input
-cases), plus the demo-CLI scaffold. Next up: **M1** (version exchange, KEXINIT, curve25519 + ed25519 + AES-GCM).
+**Current state (2026-07-23):** **M0 ✅** — `SSH.slnx` with the **Core/Client/Server split**
+(`HermodSSH.Core`/`.Client`/`.Server` + `HermodSSHTests` + `HermodSSHDemo`, net10.0, GraphDefined conventions,
+Hermod/Styx submodules referenced on Core → BouncyCastle available). Binary wire format
+(`SshPacketReader`/`Writer`, message numbers, disconnect codes) in Core with its NUnit suite (38 tests green,
+incl. RFC 4251 §5 mpint vectors + malformed-input cases), plus the demo-CLI scaffold. Next up: **M1**
+(version exchange, KEXINIT, curve25519 + ed25519 + AES-GCM).
 
 ---
 
@@ -151,7 +153,7 @@ SSH/
 │   ├── Hermod/                 Vanaheimr Hermod — networking stack incl. DNS client (SSHFP!),
 │   │                           TCP server infrastructure, PKI, logging
 │   └── Styx/                   Vanaheimr Styx — base utilities (Illias)
-├── HermodSSH/                  ← one library for client + server + SFTP
+├── HermodSSH.Core/            ← shared foundation; both client and server depend on it
 │   ├── Core/                   wire format (reader/writer), constants, message numbers,
 │   │                           name-list negotiation, error/disconnect codes
 │   ├── Crypto/                 ISshCryptoProvider, KEX implementations (incl. PQ hybrid),
@@ -160,26 +162,26 @@ SSH/
 │   │                           formats: openssh-key-v1 (+bcrypt_pbkdf), PKCS#8/PEM, RFC 4716,
 │   │                           authorized_keys, known_hosts, OpenSshCertificate (+builder = mini-CA),
 │   │                           revocation
-│   ├── Transport/              version exchange, binary packet protocol (Pipelines),
-│   │                           KEX state machine, rekeying, strict KEX, ext-info
-│   ├── Auth/                   client auth methods, server auth pipeline (policies, backends)
-│   ├── Connection/             channels + window/flow control, channel/global requests,
-│   │                           port forwarding, NetworkAcl rule engine
-│   ├── Client/                 SshClient, SshCommand, host key verification, SshAgentClient
-│   ├── Server/                 SshServer, session/handler model, limits
-│   └── Sftp/                   protocol (packets, attrs, status), SftpClient, SftpSubsystem,
-│                               ISftpFileSystem (+ local with root jail, + in-memory for tests)
+│   ├── Transport/              version exchange, binary packet protocol (Pipelines), KEX state machine,
+│   │                           rekeying, strict KEX, ext-info  (symmetric — shared by both roles)
+│   ├── Connection/             channels + window/flow control, channel/global requests, NetworkAcl
+│   ├── Sftp/                   SFTP protocol types (packets, attrs, status)  — shared
+│   └── Audit/                  SshAuditEvent model + ISshAuditSink
+├── HermodSSH.Client/          ← depends on Core
+│   ├── SshClient, SshCommand, host key verification/policies, SshAgentClient, ProxyJump,
+│   └── client auth methods, SftpClient, client-side forwarding
+├── HermodSSH.Server/          ← depends on Core
+│   ├── SshServer, auth pipeline (authorized_keys, certs, TOTP), access profiles, banner,
+│   └── SftpSubsystem, ISftpFileSystem (local with root jail, in-memory), session recording
 ├── HermodSSHTests/             ← NUnit (unit, loopback, interop)
 │   └── interop/                interop harness assets: scripts, Dockerfiles, peer configs
-└── HermodSSHDemo/              ← CLI to set up a server and connect clients (scaffold M0, grows per feature)
+└── HermodSSHDemo/              ← CLI to set up a server and connect clients (references Client + Server)
 ```
 
 `SSH.slnx` references the submodule projects in a `/Dependencies/` solution folder
-(`libs/Hermod/Hermod/Hermod.csproj`, `libs/Styx/Styx/Styx.csproj` + their test projects) — exactly like SMTPServer.
-(They are added to the solution when the first feature references them — e.g. SSHFP/DNS in M8; the M0 wire-format
-core deliberately has no external dependency so it stays fast to build and test.)
+(`libs/Hermod/Hermod/Hermod.csproj`, `libs/Styx/Styx/Styx.csproj`) — exactly like SMTPServer.
 
-**One** assembly instead of a client/server split — transport, crypto, keys and the SFTP protocol are almost entirely shared. Root namespace `org.GraphDefined.Vanaheimr.Hermod.SSH` (client and server side by side, like other Hermod modules), SFTP under `….SSH.SFTP`. Can be split later if needed.
+**Three packages** (`HermodSSH.Core` / `.Client` / `.Server`): the transport, crypto, keys and SFTP protocol are shared and live in **Core** (root namespace `org.GraphDefined.Vanaheimr.Hermod.SSH`, SFTP under `….SSH.SFTP`); the high-level client and server APIs live in **Client** (`….SSH.Client`) and **Server** (`….SSH.Server`), each depending only on Core. **BouncyCastle** (X25519/Ed25519/sntrup761/ChaCha20/…) plus Hermod's DNS/TCP/PKI/logging arrive **transitively through the `libs/Hermod` + `libs/Styx` submodule references on Core** — no direct package reference.
 
 ### Code conventions
 
@@ -793,7 +795,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 
 | # | Status | Content | Acceptance (DoD) | Effort* |
 |---|---|---|---|---|
-| **M0** | ✅ | Repo/solution skeleton (`SSH.slnx`, 3 projects, sibling-project conventions), wire format (`SshPacketReader`/`Writer`, mpint & co.), message/disconnect constants, NUnit setup, demo-CLI scaffold | round-trip and error-case tests green (38 tests, incl. RFC 4251 §5 mpint vectors) ✅ | S |
+| **M0** | ✅ | Repo/solution skeleton (`SSH.slnx`, **Core/Client/Server split** + Tests + Demo, Hermod/Styx referenced → BouncyCastle available), wire format (`SshPacketReader`/`Writer`, mpint & co.), message/disconnect constants, NUnit setup, demo-CLI scaffold | round-trip and error-case tests green (38 tests, incl. RFC 4251 §5 mpint vectors) ✅ | S |
 | **M1** | ⬜ | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, disconnect, **strict KEX from day one**, **dual-stack IPv6 listener**; interop harness skeleton (env discovery, process orchestration, WSL bridge) | loopback handshake green (IPv4 + `::1`); scripted handshake vs OpenSSH under WSL, both roles | L |
 | **M2** | ⬜ | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH | M–L |
 | **M3** | ⬜ | **PQ hybrid**: spike "MLKem availability .NET 10 on Win/Linux", then `mlkem768x25519-sha256` (BCL, BC fallback) + `sntrup761x25519-sha512` (BC); K-as-string encoding | automated interop vs OpenSSH ≥ 9.9 (both roles) + TinySSH (sntrup761) + plink ML-KEM against our server | M |
@@ -828,8 +830,8 @@ Ordering logic: first the **narrow modern path** (Ed25519 + Curve25519 + AES-GCM
 
 ### Open decisions (please confirm/decide)
 1. ✅ **Naming — resolved (2026-07-23):** namespace `org.GraphDefined.Vanaheimr.Hermod.SSH` (+ `.SFTP`/`.Tests`/`.CLI`) with the GraphDefined Apache-2.0 file header on every `.cs` file (template in `CLAUDE.md`). Project folders stay `HermodSSH`/`HermodSSHTests`/`HermodSSHDemo` with `<RootNamespace>` set.
-2. ⬜ **One assembly** (client+server+SFTP, proposal) vs. split into Core/Client/Server packages?
-3. ⬜ **BouncyCastle as a dependency** — ok? (Alternative: implement everything in-house = far more effort + crypto risk — not recommended.) Note: `libs/Hermod` already references `BouncyCastle.Cryptography`, so BC is in the dependency tree anyway — this is only about direct use.
+2. ✅ **Package split — resolved (2026-07-23):** three packages `HermodSSH.Core` / `.Client` / `.Server` (shared foundation in Core, high-level APIs in Client/Server), not one assembly.
+3. ✅ **BouncyCastle — resolved (2026-07-23):** yes, used, and it arrives **transitively via the `libs/Hermod` + `libs/Styx` submodules** (both reference `BouncyCastle.Cryptography` 2.6.2) — Core references the submodules, no direct package needed.
 4. ✅ **Demo CLI — resolved (2026-07-23):** yes, `HermodSSHDemo` is a wanted first-class deliverable for standing up a server and connecting clients (command design in §5). Scaffolded in M0, grows with the features, polished in M10.
 5. ⬜ **CI provider** for the nightly interop matrix (GitHub Actions with Linux + Windows runners?) — repo is currently local-only
 6. ⬜ Tier 3 peers: any that matter specifically to you (e.g. WinSCP because your users use it)? Commercial peers (Rebex) only if a license exists
@@ -840,7 +842,7 @@ Ordering logic: first the **narrow modern path** (Ed25519 + Curve25519 + AES-GCM
 ## 14. First Concrete Steps (M0)
 
 0. ✅ Git repo on `master` + `.gitignore`, `libs/Hermod` & `libs/Styx` submodules, conventions (`CLAUDE.md`: file template, namespace)
-1. ✅ Create `SSH.slnx` + `HermodSSH` (classlib, net10.0) + `HermodSSHTests` (NUnit) + `HermodSSHDemo`, adopting the sibling-project conventions
+1. ✅ Create `SSH.slnx` + `HermodSSH.Core`/`.Client`/`.Server` (net10.0) + `HermodSSHTests` (NUnit) + `HermodSSHDemo`, Hermod/Styx submodules referenced on Core, adopting the sibling-project conventions
 2. ✅ Implement `Core/SshPacketReader|Writer` + constants (`SshMessageNumber`, `DisconnectReason`)
 3. ✅ NUnit suite for the wire format incl. error cases (38 tests green)
 4. ⬜ Set up WSL prerequisites (`setup-wsl.sh`) so the M1 interop harness has a target from day one

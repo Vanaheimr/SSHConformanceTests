@@ -22,13 +22,15 @@ ecosystem.
 
 ## Projects
 
-| Project           | Description                                                        |
-|-------------------|--------------------------------------------------------------------|
-| `HermodSSH`       | The library — client, server, transport, crypto, keys, SFTP        |
-| `HermodSSHTests`  | NUnit test suite (unit, loopback, interop)                         |
-| `HermodSSHDemo`   | The `hermod-ssh` CLI to set up a server and connect clients        |
-| `libs/Hermod`     | Vanaheimr Hermod submodule (DNS, TCP, PKI, logging)                |
-| `libs/Styx`       | Vanaheimr Styx submodule (base utilities)                          |
+| Project             | Description                                                       |
+|---------------------|------------------------------------------------------------------|
+| `HermodSSH.Core`    | Shared foundation — wire format, crypto, keys, transport, SFTP    |
+| `HermodSSH.Client`  | High-level client API (depends on Core)                          |
+| `HermodSSH.Server`  | High-level server API (depends on Core)                          |
+| `HermodSSHTests`    | NUnit test suite (unit, loopback, interop)                       |
+| `HermodSSHDemo`     | The `hermod-ssh` CLI to set up a server and connect clients      |
+| `libs/Hermod`       | Vanaheimr Hermod submodule (DNS, TCP, PKI, logging; BouncyCastle) |
+| `libs/Styx`         | Vanaheimr Styx submodule (base utilities; BouncyCastle)          |
 
 ## Build & test
 
@@ -38,8 +40,8 @@ dotnet build SSH.slnx
 dotnet test  SSH.slnx
 ```
 
-The M0 core (binary wire format + tests) has no external dependencies; the `libs/*` submodules
-join the solution as features begin to reference them.
+`HermodSSH.Core` references the `libs/Hermod` and `libs/Styx` submodules, which provide BouncyCastle
+and Hermod's DNS/TCP/PKI/logging transitively — clone with `--recurse-submodules`.
 
 ## License
 
