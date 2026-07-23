@@ -131,6 +131,103 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #endregion
 
+        #region OpenSubsystemAsync(Transport, Subsystem, CancellationToken)
+
+        /// <summary>
+        /// Open a session channel and start a subsystem (e.g. <c>sftp</c>), returning a duplex byte
+        /// channel for the subsystem protocol (the client side).
+        /// </summary>
+        public static async ValueTask<SshChannelDuplex> OpenSubsystemAsync(SshTransport       Transport,
+                                                                           String             Subsystem,
+                                                                           CancellationToken  CancellationToken = default)
+        {
+
+            const UInt32 localChannel = 0;
+
+            await Transport.SendPacketAsync(BuildChannelOpen(localChannel, InitialWindow, MaxPacket), CancellationToken).ConfigureAwait(false);
+            var (remoteChannel, remoteWindow) = await AwaitOpenConfirmationFullAsync(Transport, CancellationToken).ConfigureAwait(false);
+
+            await Transport.SendPacketAsync(BuildSubsystemRequest(remoteChannel, Subsystem), CancellationToken).ConfigureAwait(false);
+
+            while (true)
+            {
+                var payload = await Transport.ReceivePacketAsync(CancellationToken).ConfigureAwait(false);
+                var message = (SshMessageNumber) payload[0];
+                if (message == SshMessageNumber.ChannelSuccess)
+                    return new SshChannelDuplex(Transport, remoteChannel, remoteWindow);
+                if (message == SshMessageNumber.ChannelFailure)
+                    throw new SshWireException($"The peer refused the '{Subsystem}' subsystem.");
+                await HandleTransportTrafficAsync(Transport, payload, CancellationToken).ConfigureAwait(false);
+            }
+
+        }
+
+        #endregion
+
+        #region AcceptSubsystemAsync(Transport, Subsystem, CancellationToken)
+
+        /// <summary>
+        /// Accept a session channel and a request for the named subsystem, returning a duplex byte channel
+        /// for the subsystem protocol (the server side).
+        /// </summary>
+        public static async ValueTask<SshChannelDuplex> AcceptSubsystemAsync(SshTransport       Transport,
+                                                                             String             Subsystem,
+                                                                             CancellationToken  CancellationToken = default)
+        {
+
+            const UInt32 localChannel = 0;
+            UInt32 remoteChannel = 0;
+            UInt32 remoteWindow  = 0;
+
+            while (true)
+            {
+
+                var payload = await Transport.ReceivePacketAsync(CancellationToken).ConfigureAwait(false);
+                var message = (SshMessageNumber) payload[0];
+
+                switch (message)
+                {
+
+                    case SshMessageNumber.ChannelOpen:
+                    {
+                        var open = ParseChannelOpen(payload);
+                        if (open.ChannelType != SessionType)
+                        {
+                            await Transport.SendPacketAsync(BuildChannelOpenFailure(open.SenderChannel), CancellationToken).ConfigureAwait(false);
+                            break;
+                        }
+                        remoteChannel = open.SenderChannel;
+                        remoteWindow  = open.InitialWindow;
+                        await Transport.SendPacketAsync(BuildChannelOpenConfirmation(remoteChannel, localChannel, InitialWindow, MaxPacket), CancellationToken).ConfigureAwait(false);
+                        break;
+                    }
+
+                    case SshMessageNumber.ChannelRequest:
+                    {
+                        var request = ParseChannelRequest(payload);
+                        if (request.RequestType == "subsystem" && request.Command == Subsystem)
+                        {
+                            if (request.WantReply)
+                                await Transport.SendPacketAsync(BuildChannelSuccess(remoteChannel), CancellationToken).ConfigureAwait(false);
+                            return new SshChannelDuplex(Transport, remoteChannel, remoteWindow);
+                        }
+                        if (request.WantReply)
+                            await Transport.SendPacketAsync(BuildChannelFailure(remoteChannel), CancellationToken).ConfigureAwait(false);
+                        break;
+                    }
+
+                    default:
+                        await HandleTransportTrafficAsync(Transport, payload, CancellationToken).ConfigureAwait(false);
+                        break;
+
+                }
+
+            }
+
+        }
+
+        #endregion
+
         #region ServeExecAsync(Transport, Username, Handler, CancellationToken)
 
         /// <summary>
@@ -349,6 +446,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             return abw.WrittenSpan.ToArray();
         }
 
+        private static Byte[] BuildSubsystemRequest(UInt32 Recipient, String Subsystem)
+        {
+            var abw = new ArrayBufferWriter<Byte>(); var w = new SshPacketWriter(abw);
+            w.WriteByte((Byte) SshMessageNumber.ChannelRequest);
+            w.WriteUInt32(Recipient); w.WriteString("subsystem"); w.WriteBoolean(true); w.WriteString(Subsystem);
+            return abw.WrittenSpan.ToArray();
+        }
+
         private static Byte[] BuildExecRequest(UInt32 Recipient, String Command)
         {
             var abw = new ArrayBufferWriter<Byte>(); var w = new SshPacketWriter(abw);
@@ -425,6 +530,28 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             }
         }
 
+        private static async ValueTask<(UInt32 Channel, UInt32 Window)> AwaitOpenConfirmationFullAsync(SshTransport Transport, CancellationToken CancellationToken)
+        {
+            while (true)
+            {
+                var payload = await Transport.ReceivePacketAsync(CancellationToken).ConfigureAwait(false);
+                var message = (SshMessageNumber) payload[0];
+
+                if (message == SshMessageNumber.ChannelOpenConfirmation)
+                {
+                    var reader = new SshPacketReader(payload);
+                    reader.ReadByte();
+                    reader.ReadUInt32();                          // our channel (recipient)
+                    var sender = reader.ReadUInt32();             // the peer's channel
+                    var window = reader.ReadUInt32();             // the peer's initial window
+                    return (sender, window);
+                }
+
+                if (message == SshMessageNumber.ChannelOpenFailure)
+                    throw new SshWireException("The peer refused to open the session channel.");
+            }
+        }
+
         private static Byte[] ParseChannelData(ReadOnlySpan<Byte> Payload)
         {
             var reader = new SshPacketReader(Payload);
@@ -474,7 +601,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var command    = "";
             UInt32 exit    = 0;
 
-            if (type is "exec")
+            if (type is "exec" or "subsystem")
                 command = reader.ReadString();
             else if (type == "exit-status")
                 exit = reader.ReadUInt32();
