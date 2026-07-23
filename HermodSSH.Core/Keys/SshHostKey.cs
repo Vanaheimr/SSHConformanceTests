@@ -84,6 +84,23 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             ecdsa      = ECDsa.Create(curve);
         }
 
+        /// <summary>Reconstruct an ECDSA host key from private EC parameters (key import).</summary>
+        internal EcdsaHostKey(String Algorithm, ECParameters PrivateParameters)
+        {
+            (hash, _, curveId, fieldSize) = SshSignature.EcdsaParametersFor(Algorithm);
+            algorithm  = Algorithm;
+            ecdsa      = ECDsa.Create(PrivateParameters);
+        }
+
+        /// <summary>The SSH curve identifier (e.g. <c>nistp256</c>).</summary>
+        internal String  CurveId    => curveId;
+
+        /// <summary>The coordinate field size in bytes.</summary>
+        internal Int32   FieldSize  => fieldSize;
+
+        /// <summary>Export the private EC parameters (key export).</summary>
+        internal ECParameters ExportPrivateParameters() => ecdsa.ExportParameters(true);
+
         public IReadOnlyList<String> AlgorithmNames => [ algorithm ];
 
         public Byte[] PublicKeyBlob
@@ -142,6 +159,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         {
             rsa = RSA.Create(KeySizeInBits);
         }
+
+        /// <summary>Reconstruct an RSA host key from private RSA parameters (key import).</summary>
+        internal RsaHostKey(RSAParameters PrivateParameters)
+        {
+            rsa = RSA.Create(PrivateParameters);
+        }
+
+        /// <summary>Export the private RSA parameters (key export).</summary>
+        internal RSAParameters ExportPrivateParameters() => rsa.ExportParameters(true);
 
         public IReadOnlyList<String> AlgorithmNames =>
             [ SshAlgorithmNames.HostKey.RsaSha2_512, SshAlgorithmNames.HostKey.RsaSha2_256 ];

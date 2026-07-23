@@ -99,6 +99,29 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         }
 
+        /// <summary>
+        /// An authenticator backed by parsed <c>authorized_keys</c> entries: a key is accepted only when it
+        /// matches an entry that is a plain key (not a CA) and is within its validity window at the moment
+        /// of authentication (evaluated via <paramref name="TimeProvider"/>).
+        /// </summary>
+        public static SshUserAuthenticator ForAuthorizedKeys(IEnumerable<AuthorizedKey>  AuthorizedKeys,
+                                                             TimeProvider?               TimeProvider = null)
+        {
+
+            var keys   = AuthorizedKeys.ToArray();
+            var clock  = TimeProvider ?? System.TimeProvider.System;
+
+            return new SshUserAuthenticator((request, _) =>
+            {
+                var now = clock.GetUtcNow();
+                return ValueTask.FromResult(
+                    keys.Any(key => !key.IsCertAuthority &&
+                                    key.Matches(request.PublicKeyBlob) &&
+                                    key.IsValidAt(now)));
+            });
+
+        }
+
         #endregion
 
         #region AuthorizePublicKeyAsync(Request, CancellationToken)

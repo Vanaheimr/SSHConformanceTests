@@ -50,6 +50,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>The 32-byte public key.</summary>
         public Byte[] PublicKey { get; }
 
+        /// <summary>The 32-byte private seed (for key export).</summary>
+        internal Byte[] PrivateSeed => privateKey.GetEncoded();
+
         #endregion
 
         #region Constructor(s)

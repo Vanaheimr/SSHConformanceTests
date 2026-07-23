@@ -35,9 +35,14 @@ success/failure handling — driven by `UserAuthentication` over `SshTransport`,
 `ISshUserAuthenticator` (server) and `SshSignature.Verify` reused for the client-signature check. The
 client picks the signature algorithm from the server's `server-sig-algs` (so RSA keys use rsa-sha2-256/512,
 never SHA-1). **OpenSSH-validated:** real `ssh` authenticates to our server with ssh-keygen ed25519/ecdsa/rsa
-keys and we verify the signature. Still open in M4: key formats (openssh-key-v1/PKCS#8/PEM/RFC4716) +
-`SshKeyGenerator`, authorized_keys/known_hosts + validity windows + host-key policy/pinning,
-password/keyboard-interactive + TOTP 2FA, typed audit stream. **144 tests green.**
+keys and we verify the signature. **Key material** landed too: `SshFingerprint` (SHA256/MD5), `SshPublicKey`
+(authorized_keys line + RFC 4716), `OpenSshPrivateKey` (openssh-key-v1 read incl. bcrypt-encrypted, write),
+`BcryptPbkdf` (eksblowfish KDF using BouncyCastle's Blowfish constants), PKCS#8/PEM for RSA/ECDSA, and
+`SshKeyGenerator` (+ first-run host key) — validated against `ssh-keygen` (we read its unencrypted &
+bcrypt-encrypted keys; it reads ours). **Key trust**: `AuthorizedKeysFile` (options + `notBefore`/`notAfter`
+validity windows), `KnownHostsFile` (hashed `|1|`, wildcards, `@cert-authority`/`@revoked`), and the
+`HostKeyPolicy` chain (pins → known_hosts → TOFU) wired to the client's host-key verification. Still open
+in M4: password/keyboard-interactive + TOTP 2FA, typed audit stream. **172 tests green.**
 **M3 ✅ complete (post-quantum hybrid KEX):** `mlkem768x25519-sha256` (ML-KEM-768 via the .NET BCL `MLKem`)
 and `sntrup761x25519-sha512` (+ `@openssh.com` alias, sntrup761 via BouncyCastle) — both now the default
 top KEX preference, matching OpenSSH 10. `SshKeyExchange` was generalised to an explicit client/server
