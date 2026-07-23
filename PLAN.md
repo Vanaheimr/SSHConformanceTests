@@ -24,6 +24,7 @@ submodules, conventions in `CLAUDE.md`) — implementation ⬜, next up: M0 (sol
 - OpenSSH certificates (`*-cert-v01@openssh.com`) for user **and** host auth, including a built-in mini-CA (issue certificates) — **essential**
 - Flexible client-side host key trust: explicit fingerprint pinning via options, known_hosts, host certificates, SSHFP DNS lookups (RFC 4255, DNSSEC-gated, pluggable resolver → Hermod DNS)
 - Server-side least-privilege authorization: per-account session permissions with ready-made SFTP profiles — upload-only (device log collection) and download-only (firmware distribution) — **essential**
+- Port forwarding as an admin/debugging feature — gated by fine-grained network ACLs (loopback-only, private-networks-only, specific subnets, port sets) on both roles
 - Interoperability with OpenSSH (≥ 9.x, incl. Windows OpenSSH) and other major implementations as a hard acceptance criterion (full program in §11)
 - Hardening: strict KEX (Terrapin mitigation), DoS limits, constant-time comparisons, key zeroization
 - Fully `async`/`await`, `CancellationToken`, `IAsyncDisposable`, System.IO.Pipelines, Span/Memory
@@ -144,7 +145,7 @@ SSH/
 │   │                           KEX state machine, rekeying, strict KEX, ext-info
 │   ├── Auth/                   client auth methods, server auth pipeline (policies, backends)
 │   ├── Connection/             channels + window/flow control, channel/global requests,
-│   │                           port forwarding
+│   │                           port forwarding, NetworkAcl rule engine
 │   ├── Client/                 SshClient, SshCommand, host key verification, SshAgentClient
 │   ├── Server/                 SshServer, session/handler model, limits
 │   └── Sftp/                   protocol (packets, attrs, status), SftpClient, SftpSubsystem,
@@ -243,6 +244,12 @@ await cmd.StandardOutput.CopyToAsync(localSink, ct);
 var exitCode = await cmd.WaitForExitAsync(ct);            // exit-status — or exit-signal if killed
 // plus SshCommandLine.Quote(…): safe POSIX-shell argument quoting for composed command lines
 
+// Port forwarding (admin/debugging): -L equivalent + in-process tunnel stream
+await using var fwd    = await client.StartLocalForwardAsync(
+    new IPEndPoint(IPAddress.Loopback, 15432), "db.internal", 5432, ct);      // binds loopback by default
+await using var tunnel = await client.OpenTcpStreamAsync("10.20.5.7", 443, ct); // direct-tcpip as a plain
+                                                                                // Stream — no local listener
+
 await using var sftp = await client.OpenSftpClientAsync(ct);
 await sftp.UploadFileAsync(localPath, "/remote/file", new SftpTransferOptions { Progress = p }, ct);
 await foreach (var entry in sftp.EnumerateDirectoryAsync("/remote", ct)) { … }
@@ -257,6 +264,9 @@ await using var server = new SshServer(new SshServerOptions {
         .WithAccessProfile(user => user.Name switch {      // authorization: least privilege per account
             "logdrop"  => SshAccessProfile.SftpUploadOnly  ("D:\\logs\\{username}", allowOverwrite: false),
             "firmware" => SshAccessProfile.SftpDownloadOnly("D:\\firmware"),
+            "admin"    => SshAccessProfile.Default with {
+                              PortForwarding = ForwardingPolicy.LoopbackOnly   // tunnel only to services on this host
+                          },
             _          => SshAccessProfile.Default
         })),
     SftpFileSystem = new LocalSftpFileSystem(root: "C:\\SftpRoot", readOnly: false),
@@ -322,7 +332,7 @@ Pluggable backends behind `ISshUserAuthenticator`; policy: allowed methods, meth
 
 ---
 
-## 7. SFTP
+## 7. SFTP & Server-Side Access Control
 
 **Version 3** (the de-facto standard, draft-ietf-secsh-filexfer-02) + OpenSSH extensions:
 `posix-rename@openssh.com`, `statvfs@openssh.com`, `fsync@openssh.com`, `hardlink@openssh.com`, `limits@openssh.com`, `expand-path@openssh.com`, `copy-data`.
@@ -368,6 +378,43 @@ source wins (server profile ∧ authorized_keys options ∧ certificate constrai
   (`REALPATH → OPEN → WRITE → CLOSE [→ SETSTAT]`) must succeed under upload-only; common clients must see a
   clean "Permission denied" on forbidden operations — never hangs or dropped connections.
 
+### Port forwarding & network ACLs (client + server)
+
+Port forwarding is an essential admin/debugging feature — and the most dangerous one to leave wide open.
+Both roles share one reusable rule engine:
+
+**`NetworkAcl` rule engine**
+- Ordered allow/deny rules, first match wins, configurable default — profiles default to **deny**
+- Matchers: exact IP, CIDR (IPv4 + IPv6), hostname wildcard patterns, ports (single / ranges / sets)
+- Presets: `NetworkAcl.LoopbackOnly` (127.0.0.0/8 + ::1), `NetworkAcl.PrivateNetworksOnly` (RFC 1918 +
+  ULA fc00::/7 + link-local), `NetworkAcl.Subnet("10.20.0.0/16")`, `.To("db.internal", 5432)`,
+  `.Ports(80, 443, 8000..8999)`
+- **DNS-rebinding safe:** for `direct-tcpip` requests carrying hostnames, the ACL is evaluated against
+  **all resolved addresses**, and exactly that resolution result is dialed (no re-resolve between check
+  and connect); hostname-pattern rules are an opt-in addition, never the sole gate
+
+**Server side** (`SshAccessProfile.PortForwarding`, a `ForwardingPolicy`)
+- `direct-tcpip` (`ssh -L`, client tunnels *through* the server): destination ACL — e.g. loopback-only
+  (only services on the SSH host itself), this-subnet-only, explicit host:port allowlist; the
+  OpenSSH-equivalent of `PermitOpen` + `AllowTcpForwarding local`
+- `tcpip-forward` (`ssh -R`, remote listen): listen ACL — permitted bind addresses (loopback vs any,
+  `GatewayPorts` semantics) and port ranges (e.g. ≥ 1024 only, or an explicit set); equivalent of `PermitListen`
+- Presets: `ForwardingPolicy.None` (default — and hard-off in the SFTP-only profiles), `.LoopbackOnly`,
+  `.PrivateNetworks`, `.Subnet(…)`, `.Custom(acl)`
+- Intersection as everywhere: profile ∧ `authorized_keys` (`permitopen=`/`permitlisten=`/`no-port-forwarding`)
+  ∧ certificate (`permit-port-forwarding`) — most restrictive wins
+- Every allow **and deny** decision is logged and metered — admins want to see refused attempts
+- Denials answer `SSH_MSG_CHANNEL_OPEN_FAILURE` (`ADMINISTRATIVELY_PROHIBITED`) / request failure — the
+  session stays healthy
+
+**Client side**
+- `StartLocalForwardAsync(localEndPoint, host, port)` / `StartRemoteForwardAsync(…)` → `IAsyncDisposable`
+  handles with live stats; local listeners bind **loopback by default**, non-loopback binds are explicit opt-in
+- `OpenTcpStreamAsync(host, port)` — a `direct-tcpip` channel as a plain `Stream` without any local listener
+  (in-process tunneling for admin tooling: DB clients, HTTP calls through the jump host)
+- The same `NetworkAcl` engine is available client-side to cap what local applications may request through
+  a tunnel (relevant for the dynamic/SOCKS forward, which stays a stretch goal)
+
 ---
 
 ## 8. Async & Performance Guidelines
@@ -408,6 +455,7 @@ Async tests with `[CancelAfter(…)]` + `CancellationToken` parameter, `Assert.T
 - **Certificate suite** (focus area): valid / expired / not-yet-valid / wrong principal / foreign CA / tampered signature / unknown critical option ⇒ reject / unknown extension ⇒ accept / `source-address` violation / user cert used as host cert (and vice versa) / CA key is itself a cert / revoked — each from both client and server perspective
 - SFTP: packet round-trips, attrs encoding, path canonicalization incl. traversal attacks
 - SFTP access profiles: table-driven permission matrix — every SFTP packet type (incl. extensions) × profile (upload-only, download-only, read-write, custom) → expected allow/deny; per-profile root jails against traversal; intersection logic (profile ∧ authorized_keys options ∧ cert constraints)
+- `NetworkAcl` engine: CIDR matching (IPv4/IPv6, edge prefixes /0 /32 /128), port ranges/sets, rule ordering & first-match, presets (loopback, private networks, subnet), hostname rules with a mock resolver, DNS-rebinding case (name resolves to allowed **and** disallowed addresses → deny)
 
 ### 10.2 Loopback integration tests (no networking)
 Our client ↔ our server over an in-memory `IDuplexPipe`:
@@ -417,6 +465,7 @@ Our client ↔ our server over an in-memory `IDuplexPipe`:
 - Rekey mid-transfer (initiated from both sides), large transfers (> 1 GiB trigger via FakeTimeProvider/byte counters), cancellation at every point, abrupt disconnects, parallel channels
 - SFTP round-trips on temp directories + in-memory FS, aborts mid-transfer, resume
 - Access profiles end-to-end: an upload-only session can create + write, but READ/READDIR/REMOVE/RENAME return `SSH_FX_PERMISSION_DENIED`; download-only as the mirror image; denied operations leave the session and open handles healthy
+- Port forwarding end-to-end against `ForwardingPolicy` profiles: allowed `direct-tcpip` targets reach an in-process echo server, denied targets get `CHANNEL_OPEN_FAILURE (ADMINISTRATIVELY_PROHIBITED)` with the session intact; `tcpip-forward` bind/port ACLs (denied binds → request failure); remote-forward round-trips; `OpenTcpStreamAsync` data integrity through the tunnel
 - Robustness: corrupted/truncated/oversized packets, wrong MAC, messages in the wrong state, Terrapin scenario (injected messages before NEWKEYS ⇒ abort)
 
 ### 10.3 Definition of Done per feature
@@ -504,11 +553,12 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
    - PTY vs no-PTY exec semantics (merged output + CRLF translation vs separate streams — documented and asserted)
    - `SshCommandLine.Quote` round-trips: arguments with spaces, quotes, `$`, backticks, newlines survive the remote shell
    - Windows sshd as exec target (cmd.exe/PowerShell semantics, different quoting) — smoke level
-9. **Known global/channel-request quirks:** `winadj@putty.projects.tartarus.org` (must answer CHANNEL_FAILURE, not die), `no-more-sessions@openssh.com`, `hostkeys-00@openssh.com` after auth, `keepalive@openssh.com` — respond correctly to unknown requests with/without `want_reply`
-10. **Rekey:** forced rekeys (`RekeyLimit 512K` on the peer / byte trigger on ours) mid-transfer, both directions
-11. **SFTP:** against OpenSSH `sftp`/`sftp-server`, `psftp`, WinSCP, curl, AsyncSSH (which will ask for v4–v6 → must settle on v3 correctly); extensions (`limits@`, `posix-rename@`, `statvfs@`, `fsync@`, `copy-data`); large files, thousands of small files, weird filenames (UTF-8, spaces, quotes, newlines), resume, abort mid-transfer; **access profiles against real clients**: upload-only accepts `put` from the `sftp` CLI while `get`/`ls`/`rm` are cleanly denied, download-only serves `get`/curl while uploads are denied, WinSCP/`psftp` handle denials gracefully
-12. **Disconnect semantics:** clean disconnect codes both ways; behavior on abrupt TCP resets
-13. **Keepalives/timeouts:** `ServerAliveInterval`-style traffic must not confuse us
+9. **Port forwarding & ACLs:** real `ssh -L`/`-R` (and `plink`) against our server under different `ForwardingPolicy` profiles — allowed targets connect end-to-end, denied targets yield failures that real clients surface cleanly (no hangs, no drops); our client's forwards against `sshd` restricted via `PermitOpen`/`PermitListen`/`AllowTcpForwarding` (denials surfaced as clear errors); remote-forward round-trips in both directions
+10. **Known global/channel-request quirks:** `winadj@putty.projects.tartarus.org` (must answer CHANNEL_FAILURE, not die), `no-more-sessions@openssh.com`, `hostkeys-00@openssh.com` after auth, `keepalive@openssh.com` — respond correctly to unknown requests with/without `want_reply`
+11. **Rekey:** forced rekeys (`RekeyLimit 512K` on the peer / byte trigger on ours) mid-transfer, both directions
+12. **SFTP:** against OpenSSH `sftp`/`sftp-server`, `psftp`, WinSCP, curl, AsyncSSH (which will ask for v4–v6 → must settle on v3 correctly); extensions (`limits@`, `posix-rename@`, `statvfs@`, `fsync@`, `copy-data`); large files, thousands of small files, weird filenames (UTF-8, spaces, quotes, newlines), resume, abort mid-transfer; **access profiles against real clients**: upload-only accepts `put` from the `sftp` CLI while `get`/`ls`/`rm` are cleanly denied, download-only serves `get`/curl while uploads are denied, WinSCP/`psftp` handle denials gracefully
+13. **Disconnect semantics:** clean disconnect codes both ways; behavior on abrupt TCP resets
+14. **Keepalives/timeouts:** `ServerAliveInterval`-style traffic must not confuse us
 
 ### 11.4 Certificate & key tooling interop (core-feature deep dive)
 
@@ -552,7 +602,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 | **M5** | ⬜ | **Certificates**: parser/validator (check chain from §6), `CertificateBuilder` (mini-CA), client cert auth, server CA trust + principals + critical options, host certificates, revocation list | full §11.4 cert program vs OpenSSH (`ssh-keygen -L` validates our certs) + AsyncSSH as second validator; full negative suite | L |
 | **M6** | ⬜ | Connection layer: channels + flow control, `exec`/`shell`/`pty-req`/`env`/`exit-status`/`window-change`, subsystem dispatch, keepalives; **`SshCommand` API** (capture + streaming, stdin, env, PTY toggle, exit-status/exit-signal, `SshCommandLine.Quote`) | remote-exec E2E suite (§11.3 #8) green vs WSL/container sshds; `ssh` CLI and `plink` execute against our server (incl. winadj quirk pinned) | L |
 | **M7** | ⬜ | **SFTP** v3 client + server + extensions, pipelining, `ISftpFileSystem` (local with root jail, in-memory); **access profiles** (`SshAccessProfile`/`SftpPermissions`, upload-only & download-only presets, central default-deny gate) | `sftp` CLI + `psftp` + curl against our server; our client vs `sftp-server` across the OpenSSH version spread; v4–v6 downgrade vs AsyncSSH; profile permission matrix green incl. real-client denial behavior; throughput benchmark; traversal suite green | L |
-| **M8** | ⬜ | Forwarding (`direct-tcpip`, `tcpip-forward`), ssh-agent client, **SSHFP DNS** (`ISshfpResolver` + Hermod-DNS adapter, `SshfpTrust` modes, zone-record generator), `hostkeys-00@openssh.com` (optional) | loopback + interop proof (OpenSSH agent on Windows pipe and WSL socket); SSHFP generator matches `ssh-keygen -r`; resolver E2E with DNSSEC on/off | M |
+| **M8** | ⬜ | Forwarding (`direct-tcpip`, `tcpip-forward`, `OpenTcpStreamAsync`) with **`NetworkAcl` engine + `ForwardingPolicy` presets** (loopback-only, private-networks, subnet), ssh-agent client, **SSHFP DNS** (`ISshfpResolver` + Hermod-DNS adapter, `SshfpTrust` modes, zone-record generator), `hostkeys-00@openssh.com` (optional) | ACL permission matrix green; real `ssh -L/-R` vs our ACL'd server (clean denials) and our forwards vs `PermitOpen`-restricted sshd; loopback + interop proof (OpenSSH agent on Windows pipe and WSL socket); SSHFP generator matches `ssh-keygen -r`; resolver E2E with DNSSEC on/off | M–L |
 | **M9** | ⬜ | Hardening + full interop program: DoS limits, robustness/fuzz-light suite, timing review, security review checklist; Tier 2 matrix automated nightly, quirk registry + interop matrix report generator | all gates green; nightly matrix job runs; `docs/INTEROP-MATRIX.md` generated | M–L |
 | **M10** | ⬜ | Polish: complete XML docs, README + samples, demo CLI (`exec` = log in / run command / capture output / log out, `sftp` transfers, `serve` = demo server mapping exec to local processes), optional NuGet packaging, BenchmarkDotNet baseline | release v1 | S–M |
 
