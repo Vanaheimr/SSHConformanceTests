@@ -75,19 +75,19 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var negotiated    = AlgorithmNegotiation.Negotiate(localKexInit, remoteKexInit, WeAreServer: false);
             SshKexCore.EnsureSupported(negotiated);
 
-            // 3. ECDH init: send our ephemeral public key.
+            // 3. KEX init: send our ephemeral public value (an ECDH point, a DH e, or a KEM+X25519 blob).
             using var kex = SshKeyExchange.Create(negotiated.KeyExchange);
-            var qC        = kex.PublicKey;
+            var qC        = kex.StartClient();
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, SshKexCore.BuildEcdhInit(qC), CancellationToken).ConfigureAwait(false);
 
-            // 4. ECDH reply: host key, server ephemeral, signature.
+            // 4. KEX reply: host key, server public value, signature.
             var reply = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken: CancellationToken).ConfigureAwait(false);
             var (kS, qS, signatureBlob) = SshKexCore.ParseEcdhReply(reply);
 
             // 5. Shared secret, exchange hash, signature verification.
-            var rawSecret  = kex.Agree(qS);
-            var kMpint     = ExchangeHash.EncodeSharedSecretMPInt(rawSecret);
-            var h          = ExchangeHash.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kMpint);
+            var rawSecret  = kex.ClientFinish(qS);
+            var kEncoded   = kex.EncodeSharedSecret(rawSecret);
+            var h          = ExchangeHash.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kEncoded);
 
             if (!SshSignature.Verify(kS, h, signatureBlob))
                 throw new SshWireException("The server's host-key signature over the exchange hash is invalid!");
@@ -99,7 +99,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var sessionId = h;
             await ExchangeNewKeysAsync(Pipe, CancellationToken).ConfigureAwait(false);
 
-            var derive = SshKexCore.MakeDeriver(kex.HashAlgorithm, kMpint, h, sessionId);
+            var derive = SshKexCore.MakeDeriver(kex.HashAlgorithm, kEncoded, h, sessionId);
             var (sendCipher,    sendMac)    = SshKexCore.BuildDirection(negotiated.CipherClientToServer, negotiated.MacClientToServer, derive, Kdf.KeyLetter.EncryptionKeyClientToServer, Kdf.KeyLetter.InitialIVClientToServer, Kdf.KeyLetter.IntegrityKeyClientToServer);
             var (receiveCipher, receiveMac) = SshKexCore.BuildDirection(negotiated.CipherServerToClient, negotiated.MacServerToClient, derive, Kdf.KeyLetter.EncryptionKeyServerToClient, Kdf.KeyLetter.InitialIVServerToClient, Kdf.KeyLetter.IntegrityKeyServerToClient);
 
@@ -145,18 +145,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var negotiated    = AlgorithmNegotiation.Negotiate(remoteKexInit, localKexInit, WeAreServer: true);
             SshKexCore.EnsureSupported(negotiated);
 
-            // 3. ECDH init: the client's ephemeral public key.
+            // 3. KEX init: the client's ephemeral public value.
             var initPayload = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken: CancellationToken).ConfigureAwait(false);
             var qC          = SshKexCore.ParseEcdhInit(initPayload);
 
-            // 4. Compute the shared secret and the exchange hash, then sign it.
-            using var kex  = SshKeyExchange.Create(negotiated.KeyExchange);
-            var qS         = kex.PublicKey;
-            var rawSecret  = kex.Agree(qC);
-            var kMpint     = ExchangeHash.EncodeSharedSecretMPInt(rawSecret);
+            // 4. Compute the server public value + shared secret, the exchange hash, then sign it.
+            using var kex       = SshKeyExchange.Create(negotiated.KeyExchange);
+            var (qS, rawSecret) = kex.ServerRespond(qC);
+            var kEncoded        = kex.EncodeSharedSecret(rawSecret);
 
             var kS         = HostKey.PublicKeyBlob;
-            var h          = ExchangeHash.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kMpint);
+            var h          = ExchangeHash.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kEncoded);
             var signature  = HostKey.Sign(negotiated.HostKey, h);
 
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, SshKexCore.BuildEcdhReply(kS, qS, signature), CancellationToken).ConfigureAwait(false);
@@ -165,7 +164,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var sessionId = h;
             await ExchangeNewKeysAsync(Pipe, CancellationToken).ConfigureAwait(false);
 
-            var derive = SshKexCore.MakeDeriver(kex.HashAlgorithm, kMpint, h, sessionId);
+            var derive = SshKexCore.MakeDeriver(kex.HashAlgorithm, kEncoded, h, sessionId);
             var (sendCipher,    sendMac)    = SshKexCore.BuildDirection(negotiated.CipherServerToClient, negotiated.MacServerToClient, derive, Kdf.KeyLetter.EncryptionKeyServerToClient, Kdf.KeyLetter.InitialIVServerToClient, Kdf.KeyLetter.IntegrityKeyServerToClient);
             var (receiveCipher, receiveMac) = SshKexCore.BuildDirection(negotiated.CipherClientToServer, negotiated.MacClientToServer, derive, Kdf.KeyLetter.EncryptionKeyClientToServer, Kdf.KeyLetter.InitialIVClientToServer, Kdf.KeyLetter.IntegrityKeyClientToServer);
 

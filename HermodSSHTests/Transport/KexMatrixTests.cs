@@ -37,12 +37,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     public class KexMatrixTests
     {
 
-        [TestCase(SshAlgorithmNames.Kex.Curve25519Sha256, 32)]
-        [TestCase(SshAlgorithmNames.Kex.EcdhNistP256,      32)]
-        [TestCase(SshAlgorithmNames.Kex.EcdhNistP384,      48)]
-        [TestCase(SshAlgorithmNames.Kex.EcdhNistP521,      64)]
-        [TestCase(SshAlgorithmNames.Kex.DhGroup14Sha256,   32)]
-        [TestCase(SshAlgorithmNames.Kex.DhGroup16Sha512,   64)]
+        [TestCase(SshAlgorithmNames.Kex.Curve25519Sha256,      32)]
+        [TestCase(SshAlgorithmNames.Kex.EcdhNistP256,          32)]
+        [TestCase(SshAlgorithmNames.Kex.EcdhNistP384,          48)]
+        [TestCase(SshAlgorithmNames.Kex.EcdhNistP521,          64)]
+        [TestCase(SshAlgorithmNames.Kex.DhGroup14Sha256,       32)]
+        [TestCase(SshAlgorithmNames.Kex.DhGroup16Sha512,       64)]
+        [TestCase(SshAlgorithmNames.Kex.MlKem768X25519Sha256,  32)]
+        [TestCase(SshAlgorithmNames.Kex.SntruP761X25519Sha512, 64)]
         [CancelAfter(20000)]
         public async Task Handshake_WithKex(String Kex, Int32 ExpectedSessionIdLength, CancellationToken CancellationToken)
         {

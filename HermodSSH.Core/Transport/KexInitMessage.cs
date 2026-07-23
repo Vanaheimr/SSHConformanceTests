@@ -96,6 +96,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>The default key-exchange preference list (most preferred first, without the markers).</summary>
         public static readonly String[] DefaultKeyExchanges =
         [
+            // Post-quantum hybrids first (OpenSSH's modern default preference).
+            SshAlgorithmNames.Kex.MlKem768X25519Sha256,
+            SshAlgorithmNames.Kex.SntruP761X25519Sha512,
+            SshAlgorithmNames.Kex.SntruP761X25519Sha512LibSsh,
             SshAlgorithmNames.Kex.Curve25519Sha256,
             SshAlgorithmNames.Kex.Curve25519Sha256LibSsh,
             SshAlgorithmNames.Kex.EcdhNistP256,

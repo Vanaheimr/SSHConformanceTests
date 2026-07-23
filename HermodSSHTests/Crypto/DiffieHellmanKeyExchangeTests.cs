@@ -44,15 +44,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         public void BothSides_DeriveTheSameSharedSecret(String Kex)
         {
 
-            using var alice = SshKeyExchange.Create(Kex);
-            using var bob   = SshKeyExchange.Create(Kex);
+            using var client = SshKeyExchange.Create(Kex);
+            using var server = SshKeyExchange.Create(Kex);
 
-            // e and f exchanged; each derives K from the other's public value.
-            var aliceSecret = alice.Agree(bob.PublicKey);
-            var bobSecret   = bob.Agree(alice.PublicKey);
+            // Client sends e; server answers with f and derives K; client derives the same K from f.
+            var e                       = client.StartClient();
+            var (f, serverSecret)       = server.ServerRespond(e);
+            var clientSecret            = client.ClientFinish(f);
 
-            Assert.That(aliceSecret, Is.EqualTo(bobSecret));
-            Assert.That(aliceSecret, Is.Not.Empty);
+            Assert.That(clientSecret, Is.EqualTo(serverSecret));
+            Assert.That(clientSecret, Is.Not.Empty);
 
         }
 
@@ -67,8 +68,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             using var kex = SshKeyExchange.Create(Kex);
 
+            var publicValue = kex.StartClient();
+
             // The mpint content bytes must decode (unsigned) to a value in the open interval (1, p-1).
-            var e     = new BigInteger(kex.PublicKey, isUnsigned: true, isBigEndian: true);
+            var e     = new BigInteger(publicValue, isUnsigned: true, isBigEndian: true);
             var prime = Kex == SshAlgorithmNames.Kex.DhGroup14Sha256
                             ? DiffieHellmanKeyExchange.Group14Prime
                             : DiffieHellmanKeyExchange.Group16Prime;
@@ -77,7 +80,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 Assert.That(e > BigInteger.One,       Is.True, "e must be > 1.");
                 Assert.That(e < prime - BigInteger.One, Is.True, "e must be < p-1.");
                 // Signed big-endian encoding of a positive number never has its top bit set.
-                Assert.That((kex.PublicKey[0] & 0x80), Is.Zero, "The mpint content must encode a positive value.");
+                Assert.That((publicValue[0] & 0x80), Is.Zero, "The mpint content must encode a positive value.");
             });
 
         }
@@ -97,11 +100,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var pMinus1  = (p - BigInteger.One).ToByteArray(isUnsigned: true, isBigEndian: true);
             var pValue   = p.ToByteArray(isUnsigned: true, isBigEndian: true);
 
+            // ClientFinish interprets its argument as the peer's public value and validates it.
             Assert.Multiple(() => {
-                Assert.That(() => kex.Agree(Array.Empty<Byte>()), Throws.TypeOf<SshWireException>());  // 0
-                Assert.That(() => kex.Agree(one),                 Throws.TypeOf<SshWireException>());  // 1
-                Assert.That(() => kex.Agree(pMinus1),             Throws.TypeOf<SshWireException>());  // p-1
-                Assert.That(() => kex.Agree(pValue),              Throws.TypeOf<SshWireException>());  // p
+                Assert.That(() => kex.ClientFinish(Array.Empty<Byte>()), Throws.TypeOf<SshWireException>());  // 0
+                Assert.That(() => kex.ClientFinish(one),                 Throws.TypeOf<SshWireException>());  // 1
+                Assert.That(() => kex.ClientFinish(pMinus1),             Throws.TypeOf<SshWireException>());  // p-1
+                Assert.That(() => kex.ClientFinish(pValue),              Throws.TypeOf<SshWireException>());  // p
             });
 
         }

@@ -41,34 +41,66 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     public class OpenSshTransportInteropTests
     {
 
-        #region (static) FindSshClient()
+        #region (static) FindSshClients() / SshSupportsKex() / FindSshClientSupporting()
 
-        private static String? FindSshClient()
+        // All candidate ssh clients, PATH first (often the newest) then the Windows-bundled one, deduplicated.
+        private static IEnumerable<String> FindSshClients()
         {
 
-            var windowsOpenSsh = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "OpenSSH", "ssh.exe");
-            if (File.Exists(windowsOpenSsh))
-                return windowsOpenSsh;
+            var seen = new HashSet<String>(StringComparer.OrdinalIgnoreCase);
 
-            // Fall back to whatever "ssh" is on PATH (Linux/macOS or Git for Windows).
             foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
             {
                 foreach (var name in new[] { "ssh", "ssh.exe" })
                 {
-                    try
-                    {
-                        var candidate = Path.Combine(dir.Trim(), name);
-                        if (File.Exists(candidate))
-                            return candidate;
-                    }
-                    catch
-                    { /* ignore malformed PATH entries */ }
+                    String? candidate = null;
+                    try   { candidate = Path.Combine(dir.Trim(), name); }
+                    catch { /* ignore malformed PATH entries */ }
+                    if (candidate is not null && File.Exists(candidate) && seen.Add(candidate))
+                        yield return candidate;
                 }
             }
 
-            return null;
+            var windowsOpenSsh = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "OpenSSH", "ssh.exe");
+            if (File.Exists(windowsOpenSsh) && seen.Add(windowsOpenSsh))
+                yield return windowsOpenSsh;
 
         }
+
+        // Whether the given ssh client advertises the key exchange (via "ssh -Q kex"). Older Windows-bundled
+        // OpenSSH (e.g. 9.5) lacks the post-quantum methods, so PQ interop must select a newer client.
+        private static Boolean SshSupportsKex(String SshClient, String Kex)
+        {
+            try
+            {
+                using var probe = Process.Start(new ProcessStartInfo(SshClient, "-Q kex")
+                {
+                    RedirectStandardOutput = true,
+                    UseShellExecute        = false,
+                    CreateNoWindow         = true
+                })!;
+                var output = probe.StandardOutput.ReadToEnd();
+                probe.WaitForExit(5000);
+                return output.Split('\n').Any(line => line.Trim() == Kex);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // The first available ssh client that supports the required key exchange (null if none).
+        private static String? FindSshClientSupporting(String Kex)
+        {
+            foreach (var client in FindSshClients())
+                if (SshSupportsKex(client, Kex))
+                    return client;
+            return null;
+        }
+
+        // Any available ssh client (for tests whose KEX every OpenSSH supports).
+        private static String? FindSshClient()
+            => FindSshClients().FirstOrDefault();
 
         #endregion
 
@@ -86,6 +118,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         [TestCase("curve25519-sha256",   "rsa-sha2-512",        "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
         [TestCase("diffie-hellman-group14-sha256", "ssh-ed25519", "aes256-gcm@openssh.com", "hmac-sha2-256",              "aes256-gcm@openssh.com")]
         [TestCase("diffie-hellman-group16-sha512", "ssh-ed25519", "aes256-ctr",             "hmac-sha2-512-etm@openssh.com", "aes256-ctr")]
+        [TestCase("mlkem768x25519-sha256",  "ssh-ed25519", "aes256-gcm@openssh.com",        "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
+        [TestCase("sntrup761x25519-sha512", "ssh-ed25519", "chacha20-poly1305@openssh.com", "hmac-sha2-256",                 "chacha20-poly1305@openssh.com")]
         public async Task OurServer_CompletesTransport_WithRealOpenSshClient(String             SshKex,
                                                                              String             SshHostKeyAlg,
                                                                              String             SshCipher,
@@ -94,9 +128,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                                              CancellationToken  CancellationToken)
         {
 
-            var sshClient = FindSshClient();
+            var sshClient = FindSshClientSupporting(SshKex);
             if (sshClient is null)
-                Assert.Ignore("No 'ssh' client found — skipping OpenSSH transport interop.");
+                Assert.Ignore($"No 'ssh' client supporting {SshKex} found — skipping (e.g. Windows-bundled OpenSSH 9.5 lacks the post-quantum methods).");
 
             var hostKey = HostKeyMatrixTests.MakeHostKey(SshHostKeyAlg);
 
@@ -104,14 +138,22 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var port = listener.LocalEndPoint.Port.ToInt32();
 
             // The server accepts one connection, completes the handshake, and reads the client's first
-            // encrypted packet — which must be SSH_MSG_SERVICE_REQUEST("ssh-userauth").
+            // application packet — which must decrypt to SSH_MSG_SERVICE_REQUEST("ssh-userauth"). Modern
+            // OpenSSH clients send their own SSH_MSG_EXT_INFO first (post-NEWKEYS), so skip that if present.
             var serverTask = Task.Run(async () =>
             {
                 var pipe = await listener.AcceptAsync(CancellationToken);
                 using var context = await SshHandshake.ServerHandshakeAsync(pipe, hostKey, CancellationToken: CancellationToken);
-                // First post-NEWKEYS packet is sequence number 0 (strict-KEX). ReceiveMac is null for AEAD.
-                var firstEncryptedPayload = await SshPacketFraming.ReadPacketAsync(pipe.Input, context.ReceiveCipher, 0, context.ReceiveMac, CancellationToken: CancellationToken);
-                return (context.Algorithms, firstEncryptedPayload);
+
+                // Post-NEWKEYS packets start at sequence number 0 (strict-KEX). ReceiveMac is null for AEAD.
+                UInt32 sequenceNumber = 0;
+                var payload = await SshPacketFraming.ReadPacketAsync(pipe.Input, context.ReceiveCipher, sequenceNumber++, context.ReceiveMac, CancellationToken: CancellationToken);
+
+                // Modern OpenSSH clients send their own SSH_MSG_EXT_INFO first (post-NEWKEYS); skip it.
+                if (payload.Length > 0 && payload[0] == (Byte) SshMessageNumber.ExtInfo)
+                    payload = await SshPacketFraming.ReadPacketAsync(pipe.Input, context.ReceiveCipher, sequenceNumber++, context.ReceiveMac, CancellationToken: CancellationToken);
+
+                return (context.Algorithms, payload);
             }, CancellationToken);
 
             var knownHosts = Path.GetTempFileName();
@@ -178,7 +220,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             }
             catch (Exception e)
             {
-                try   { if (!ssh.HasExited) { /* drain */ } stderr = await ssh.StandardError.ReadToEndAsync(CancellationToken); }
+                try   { if (!ssh.HasExited) ssh.Kill(entireProcessTree: true); } catch { }
+                try   { stderr = await ssh.StandardError.ReadToEndAsync(CancellationToken); }
                 catch { }
                 TestContext.Out.WriteLine("ssh -vv stderr:\n" + stderr);
                 throw new AssertionException("The OpenSSH transport interop failed. ssh -vv output:\n" + stderr, e);
@@ -217,8 +260,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             {
                 var pipe      = await listener.AcceptAsync(CancellationToken);
                 var transport = await SshTransport.ServerHandshakeAsync(pipe, hostKey, CancellationToken: CancellationToken);
-                var firstFromClient = await transport.ReceivePacketAsync(CancellationToken);
-                return (transport.Algorithms, firstFromClient);
+
+                // Modern OpenSSH clients send their own EXT_INFO first; consume it, then read SERVICE_REQUEST.
+                var payload = await transport.ReceivePacketAsync(CancellationToken);
+                if (payload.Length > 0 && payload[0] == (Byte) SshMessageNumber.ExtInfo)
+                    payload = await transport.ReceivePacketAsync(CancellationToken);
+
+                return (transport.Algorithms, payload);
             }, CancellationToken);
 
             var knownHosts = Path.GetTempFileName();

@@ -25,10 +25,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 {
 
     /// <summary>
-    /// One ephemeral key-exchange instance for an ECDH-style method: it generates a fresh ephemeral
-    /// key pair, exposes the public value Q to send to the peer, and computes the raw shared secret
-    /// from the peer's Q. The associated hash (SHA-256/384/512) is used both for the exchange hash and
-    /// for the key derivation.
+    /// One ephemeral key-exchange instance. It models the SSH KEX_ECDH message flow abstractly so that
+    /// symmetric methods (ECDH: curve25519, nistp*; classic DH: group14/16) and asymmetric KEM-based
+    /// methods (the post-quantum hybrids, where the server encapsulates against the client's public key)
+    /// share one shape: the client produces a public value, the server answers with its own public value
+    /// and the shared secret, and the client derives the same secret from the server's answer.
     /// </summary>
     public abstract class SshKeyExchange : IDisposable
     {
@@ -39,14 +40,32 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>The hash used for the exchange hash H and the key derivation.</summary>
         public abstract HashAlgorithmName  HashAlgorithm  { get; }
 
-        /// <summary>Our ephemeral public value Q (Q_C on the client, Q_S on the server).</summary>
-        public abstract Byte[]             PublicKey      { get; }
 
         /// <summary>
-        /// Compute the raw shared secret from the peer's public value. The result is interpreted as an
-        /// unsigned big-endian integer and encoded as an SSH mpint by the caller.
+        /// Client side: the client's public value Q_C (an ECDH point, a DH <c>e</c>, or a KEM public key
+        /// concatenated with an X25519 public key) to send in SSH_MSG_KEX_ECDH_INIT.
         /// </summary>
-        public abstract Byte[] Agree(ReadOnlySpan<Byte> PeerPublicKey);
+        public abstract Byte[] StartClient();
+
+        /// <summary>
+        /// Server side: given the client's public value, produce the server's public value Q_S to send in
+        /// SSH_MSG_KEX_ECDH_REPLY together with the raw shared secret.
+        /// </summary>
+        public abstract (Byte[] ServerPublic, Byte[] SharedSecret) ServerRespond(ReadOnlySpan<Byte> ClientPublic);
+
+        /// <summary>
+        /// Client side: given the server's public value, produce the raw shared secret.
+        /// </summary>
+        public abstract Byte[] ClientFinish(ReadOnlySpan<Byte> ServerPublic);
+
+
+        /// <summary>
+        /// Encode the raw shared secret as it enters the exchange hash H and the key derivation. Classical
+        /// methods encode K as an SSH mpint (RFC 4253 §8, RFC 5656); the post-quantum hybrids encode the
+        /// hash output K as an SSH <b>string</b> — the single most common PQ interop bug.
+        /// </summary>
+        public virtual Byte[] EncodeSharedSecret(ReadOnlySpan<Byte> RawSharedSecret)
+            => ExchangeHash.EncodeSharedSecretMPInt(RawSharedSecret);
 
 
         /// <summary>
@@ -62,6 +81,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                    SshAlgorithmNames.Kex.EcdhNistP521           => new NistEcdhKeyExchange(ECCurve.NamedCurves.nistP521, HashAlgorithmName.SHA512, SshAlgorithmNames.Kex.EcdhNistP521),
                    SshAlgorithmNames.Kex.DhGroup14Sha256        => new DiffieHellmanKeyExchange(DiffieHellmanKeyExchange.Group14Prime, HashAlgorithmName.SHA256, SshAlgorithmNames.Kex.DhGroup14Sha256),
                    SshAlgorithmNames.Kex.DhGroup16Sha512        => new DiffieHellmanKeyExchange(DiffieHellmanKeyExchange.Group16Prime, HashAlgorithmName.SHA512, SshAlgorithmNames.Kex.DhGroup16Sha512),
+                   SshAlgorithmNames.Kex.MlKem768X25519Sha256   => new HybridKeyExchange(SshKem.MlKem768(),  HashAlgorithmName.SHA256, SshAlgorithmNames.Kex.MlKem768X25519Sha256),
+                   SshAlgorithmNames.Kex.SntruP761X25519Sha512      or
+                   SshAlgorithmNames.Kex.SntruP761X25519Sha512LibSsh => new HybridKeyExchange(SshKem.SNtruP761(), HashAlgorithmName.SHA512, SshAlgorithmNames.Kex.SntruP761X25519Sha512),
                    _                                            => throw new SshWireException($"Unsupported key exchange '{Name}'.")
                };
 
@@ -83,10 +105,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         public override String             Name           => SshAlgorithmNames.Kex.Curve25519Sha256;
         public override HashAlgorithmName  HashAlgorithm  => HashAlgorithmName.SHA256;
-        public override Byte[]             PublicKey      => keyPair.PublicKey;
 
-        public override Byte[] Agree(ReadOnlySpan<Byte> PeerPublicKey)
-            => keyPair.Agree(PeerPublicKey);
+        public override Byte[] StartClient()
+            => keyPair.PublicKey;
+
+        public override (Byte[] ServerPublic, Byte[] SharedSecret) ServerRespond(ReadOnlySpan<Byte> ClientPublic)
+            => (keyPair.PublicKey, keyPair.Agree(ClientPublic));
+
+        public override Byte[] ClientFinish(ReadOnlySpan<Byte> ServerPublic)
+            => keyPair.Agree(ServerPublic);
 
     }
 
@@ -112,7 +139,6 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         public override String             Name           { get; }
         public override HashAlgorithmName  HashAlgorithm  { get; }
-        public override Byte[]             PublicKey      => publicKey;
 
         #endregion
 
@@ -143,9 +169,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         #endregion
 
 
-        #region Agree(PeerPublicKey)
+        #region StartClient / ServerRespond / ClientFinish
 
-        public override Byte[] Agree(ReadOnlySpan<Byte> PeerPublicKey)
+        public override Byte[] StartClient()
+            => publicKey;
+
+        public override (Byte[] ServerPublic, Byte[] SharedSecret) ServerRespond(ReadOnlySpan<Byte> ClientPublic)
+            => (publicKey, Agree(ClientPublic));
+
+        public override Byte[] ClientFinish(ReadOnlySpan<Byte> ServerPublic)
+            => Agree(ServerPublic);
+
+        private Byte[] Agree(ReadOnlySpan<Byte> PeerPublicKey)
         {
 
             if (PeerPublicKey.Length != 1 + (2 * fieldSize) || PeerPublicKey[0] != 0x04)

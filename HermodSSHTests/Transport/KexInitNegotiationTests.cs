@@ -75,7 +75,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var result  = AlgorithmNegotiation.Negotiate(client, server, WeAreServer: true);
 
             Assert.Multiple(() => {
-                Assert.That(result.KeyExchange,           Is.EqualTo(SshAlgorithmNames.Kex.Curve25519Sha256));
+                Assert.That(result.KeyExchange,           Is.EqualTo(SshAlgorithmNames.Kex.MlKem768X25519Sha256));
                 Assert.That(result.HostKey,               Is.EqualTo(SshAlgorithmNames.HostKey.Ed25519));
                 Assert.That(result.CipherClientToServer,  Is.EqualTo(SshAlgorithmNames.Cipher.ChaCha20Poly1305));
                 Assert.That(result.CipherServerToClient,  Is.EqualTo(SshAlgorithmNames.Cipher.ChaCha20Poly1305));

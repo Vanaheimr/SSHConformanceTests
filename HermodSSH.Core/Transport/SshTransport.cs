@@ -304,19 +304,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             //    initial handshake. e/f (classic DH) or Q_C/Q_S (ECDH) are carried transparently.
             using var kex = SshKeyExchange.Create(negotiated.KeyExchange);
 
-            Byte[] kS, h, kMpint;
+            Byte[] kS, h, kEncoded;
 
             if (isServer)
             {
 
-                var initPayload = await ReceivePacketAsync(CancellationToken).ConfigureAwait(false);
-                var qC          = SshKexCore.ParseEcdhInit(initPayload);
-                var qS          = kex.PublicKey;
-                var rawSecret   = kex.Agree(qC);
+                var initPayload      = await ReceivePacketAsync(CancellationToken).ConfigureAwait(false);
+                var qC               = SshKexCore.ParseEcdhInit(initPayload);
+                var (qS, rawSecret)  = kex.ServerRespond(qC);
 
-                kMpint          = ExchangeHashCalc.EncodeSharedSecretMPInt(rawSecret);
+                kEncoded        = kex.EncodeSharedSecret(rawSecret);
                 kS              = hostKey!.PublicKeyBlob;
-                h               = ExchangeHashCalc.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kMpint);
+                h               = ExchangeHashCalc.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kEncoded);
 
                 var signature   = hostKey!.Sign(negotiated.HostKey, h);
                 await SendPacketAsync(SshKexCore.BuildEcdhReply(kS, qS, signature), CancellationToken).ConfigureAwait(false);
@@ -325,16 +324,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             else
             {
 
-                var qC          = kex.PublicKey;
+                var qC          = kex.StartClient();
                 await SendPacketAsync(SshKexCore.BuildEcdhInit(qC), CancellationToken).ConfigureAwait(false);
 
                 var reply                   = await ReceivePacketAsync(CancellationToken).ConfigureAwait(false);
                 var (kServer, qS, sigBlob)  = SshKexCore.ParseEcdhReply(reply);
                 kS                          = kServer;
 
-                var rawSecret   = kex.Agree(qS);
-                kMpint          = ExchangeHashCalc.EncodeSharedSecretMPInt(rawSecret);
-                h               = ExchangeHashCalc.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kMpint);
+                var rawSecret   = kex.ClientFinish(qS);
+                kEncoded        = kex.EncodeSharedSecret(rawSecret);
+                h               = ExchangeHashCalc.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kEncoded);
 
                 if (!SshSignature.Verify(kS, h, sigBlob))
                     throw new SshWireException("The server's host-key signature over the exchange hash is invalid!");
@@ -348,7 +347,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             if (IsInitial)
                 sessionId = h;
 
-            var derive = SshKexCore.MakeDeriver(kex.HashAlgorithm, kMpint, h, sessionId);
+            var derive = SshKexCore.MakeDeriver(kex.HashAlgorithm, kEncoded, h, sessionId);
 
             // Directional keys: we send in our own direction and receive in the peer's.
             var (newSendCipher, newSendMac) = isServer

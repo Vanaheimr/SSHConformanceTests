@@ -36,6 +36,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             public const String DhGroup14Sha256          = "diffie-hellman-group14-sha256";
             public const String DhGroup16Sha512          = "diffie-hellman-group16-sha512";
 
+            /// <summary>Post-quantum hybrid ML-KEM-768 + X25519 with SHA-256 (OpenSSH default since 10.0).</summary>
+            public const String MlKem768X25519Sha256           = "mlkem768x25519-sha256";
+            /// <summary>Post-quantum hybrid sntrup761 + X25519 with SHA-512 (IANA name).</summary>
+            public const String SntruP761X25519Sha512          = "sntrup761x25519-sha512";
+            /// <summary>Post-quantum hybrid sntrup761 + X25519 with SHA-512 (original OpenSSH name).</summary>
+            public const String SntruP761X25519Sha512LibSsh    = "sntrup761x25519-sha512@openssh.com";
+
             /// <summary>Client's "I support ext-info" marker (RFC 8308).</summary>
             public const String ExtInfoClient            = "ext-info-c";
             /// <summary>Server's "I support ext-info" marker (RFC 8308).</summary>

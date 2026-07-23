@@ -41,14 +41,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         public static void EnsureSupported(NegotiatedAlgorithms Negotiated)
         {
 
-            if (Negotiated.KeyExchange is not (SshAlgorithmNames.Kex.Curve25519Sha256       or
-                                               SshAlgorithmNames.Kex.Curve25519Sha256LibSsh or
-                                               SshAlgorithmNames.Kex.EcdhNistP256            or
-                                               SshAlgorithmNames.Kex.EcdhNistP384            or
-                                               SshAlgorithmNames.Kex.EcdhNistP521            or
-                                               SshAlgorithmNames.Kex.DhGroup14Sha256         or
-                                               SshAlgorithmNames.Kex.DhGroup16Sha512))
-                throw new SshWireException($"Unsupported key exchange '{Negotiated.KeyExchange}' (supported: curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha256, diffie-hellman-group16-sha512).");
+            if (Negotiated.KeyExchange is not (SshAlgorithmNames.Kex.Curve25519Sha256          or
+                                               SshAlgorithmNames.Kex.Curve25519Sha256LibSsh    or
+                                               SshAlgorithmNames.Kex.EcdhNistP256               or
+                                               SshAlgorithmNames.Kex.EcdhNistP384               or
+                                               SshAlgorithmNames.Kex.EcdhNistP521               or
+                                               SshAlgorithmNames.Kex.DhGroup14Sha256            or
+                                               SshAlgorithmNames.Kex.DhGroup16Sha512            or
+                                               SshAlgorithmNames.Kex.MlKem768X25519Sha256       or
+                                               SshAlgorithmNames.Kex.SntruP761X25519Sha512      or
+                                               SshAlgorithmNames.Kex.SntruP761X25519Sha512LibSsh))
+                throw new SshWireException($"Unsupported key exchange '{Negotiated.KeyExchange}' (supported: mlkem768x25519-sha256, sntrup761x25519-sha512, curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha256, diffie-hellman-group16-sha512).");
 
             if (Negotiated.HostKey is not (SshAlgorithmNames.HostKey.Ed25519       or
                                            SshAlgorithmNames.HostKey.EcdsaNistP256 or

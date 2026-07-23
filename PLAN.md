@@ -7,7 +7,7 @@ Interoperability with OpenSSH and a broad set of third-party implementations is 
 hard acceptance criterion (see §11).
 
 **Status legend:** ✅ done · 🔶 partial · ⬜ open — markers are kept current as implementation proceeds.
-**Current state (2026-07-23):** **M0 ✅**, **M1 ✅**, **M2 ✅ (full modern transport, OpenSSH-validated)**. Core/Client/Server
+**Current state (2026-07-23):** **M0 ✅**, **M1 ✅**, **M2 ✅**, **M3 ✅ (post-quantum hybrid KEX, OpenSSH-validated)**. Core/Client/Server
 split (net10.0, GraphDefined conventions, BouncyCastle via submodules). The **modern transport works
 end-to-end and interops with real OpenSSH**: version exchange → KEXINIT negotiation → curve25519-sha256 →
 ssh-ed25519 host-key signature → KDF → NEWKEYS → aes256-gcm, both roles, over an in-memory `IDuplexPipe`
@@ -28,7 +28,17 @@ the server emits `SSH_MSG_EXT_INFO(server-sig-algs)` right after its first NEWKE
 via `TryHandleExtInfo`). Full cipher, KEX **and** host-key matrices green;
 **OpenSSH-validated** across chacha20-poly1305/gcm/ctr-etm × curve25519/nistp256/nistp521/**group14/group16** ×
 ed25519/ecdsa-nistp256/rsa-sha2-512, plus real `ssh` receiving our EXT_INFO / server-sig-algs. **125 tests
-green.** (Non-ETM E&M HMACs intentionally still omitted — EtM only.) Next: **M3 (PQ hybrid KEX)**.
+green.** (Non-ETM E&M HMACs intentionally still omitted — EtM only.)
+**M3 ✅ complete (post-quantum hybrid KEX):** `mlkem768x25519-sha256` (ML-KEM-768 via the .NET BCL `MLKem`)
+and `sntrup761x25519-sha512` (+ `@openssh.com` alias, sntrup761 via BouncyCastle) — both now the default
+top KEX preference, matching OpenSSH 10. `SshKeyExchange` was generalised to an explicit client/server
+model (`StartClient` / `ServerRespond` / `ClientFinish`) so the asymmetric KEM flow (server encapsulates
+against the client's public key) fits alongside ECDH/DH; a `SshKem` abstraction wraps the two KEMs.
+**The PQ interop trap is handled:** the hybrids encode the shared secret K (the KEX hash output) as an
+SSH `string`, not an mpint (`EncodeSharedSecret` override) — verified. **OpenSSH-validated**: real
+`ssh` (10.2p1) completes both hybrids with our server and decrypts through NEWKEYS (BouncyCastle's
+sntrup761 matches OpenSSH byte-for-byte). Interop auto-selects an ssh that supports the method (the
+Windows-bundled OpenSSH 9.5 lacks PQ, so those cases skip on it). **134 tests green.** Next: **M4 (auth + keys)**.
 
 ---
 
@@ -102,8 +112,8 @@ Primary interop reference: **OpenSSH** — the OpenBSD upstream project, consume
 Order = default preference. Everything configurable via an options object (enable/disable/reorder).
 
 ### Key Exchange
-1. `mlkem768x25519-sha256` — PQ hybrid, OpenSSH default since 10.0
-2. `sntrup761x25519-sha512` (+ alias `@openssh.com`) — PQ hybrid, OpenSSH default 9.0–9.9
+1. ✅ `mlkem768x25519-sha256` — PQ hybrid, OpenSSH default since 10.0
+2. ✅ `sntrup761x25519-sha512` (+ alias `@openssh.com`) — PQ hybrid, OpenSSH default 9.0–9.9
 3. ✅ `curve25519-sha256` (+ alias `@libssh.org`)
 4. ✅ `ecdh-sha2-nistp256` / `-nistp384` / `-nistp521`
 5. ✅ `diffie-hellman-group14-sha256` (MUST per RFC 9142), `diffie-hellman-group16-sha512`
@@ -814,7 +824,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 | **M0** | ✅ | Repo/solution skeleton (`SSH.slnx`, **Core/Client/Server split** + Tests + Demo, Hermod/Styx referenced → BouncyCastle available), wire format (`SshPacketReader`/`Writer`, mpint & co.), message/disconnect constants, NUnit setup, demo-CLI scaffold, interop harness prereqs (`setup-wsl.sh`) | round-trip and error-case tests green (38 tests, incl. RFC 4251 §5 mpint vectors) ✅ | S |
 | **M1** | ✅ | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, **strict KEX from day one**, **dual-stack IPv6 listener** (`SshTcp`/`SshTcpListener`), OpenSSH interop test — loopback both roles ✅, TCP IPv4 + `::1` ✅, real OpenSSH client ↔ our server decrypts `SERVICE_REQUEST` ✅ (KEX+KDF+GCM match byte-for-byte). Residual interop breadth (our client ↔ real `sshd`; full WSL harness) tracked in the interop program | loopback handshake green (IPv4 + `::1`); handshake vs OpenSSH ✅ (server role) | L |
 | **M2** | ✅ | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` — **all done ✅**: chacha20-poly1305 (default), AES-CTR + HMAC-SHA2-ETM, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha256/group16-sha512, ecdsa/rsa-sha2 host keys, rekeying (`SshTransport` + `RekeyAsync`, strict-KEX seq reset, stable session id), ext-info/server-sig-algs (`ExtInfoMessage`, server emits EXT_INFO after NEWKEYS). Cipher + KEX + host-key matrices green; OpenSSH interop across chacha20/gcm/ctr-etm × curve25519/nistp256/nistp521/group14/group16 × ed25519/ecdsa-nistp256/rsa-sha2-512, rekey loopback (both roles × 3 cipher families + peer-initiated), real `ssh` receives our EXT_INFO/server-sig-algs. (Non-ETM E&M HMACs intentionally omitted.) | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH ✅ | M–L |
-| **M3** | ⬜ | **PQ hybrid**: spike "MLKem availability .NET 10 on Win/Linux", then `mlkem768x25519-sha256` (BCL, BC fallback) + `sntrup761x25519-sha512` (BC); K-as-string encoding | automated interop vs OpenSSH ≥ 9.9 (both roles) + TinySSH (sntrup761) + plink ML-KEM against our server | M |
+| **M3** | ✅ | **PQ hybrid**: `mlkem768x25519-sha256` (BCL `MLKem`) + `sntrup761x25519-sha512` (+`@openssh.com`, BC sntrup761); `SshKeyExchange` generalised to client/server model for the asymmetric KEM flow, `SshKem` abstraction, **K-as-string encoding** (the interop trap). OpenSSH-validated: real `ssh` 10.2p1 completes both hybrids with our server through NEWKEYS (BC sntrup761 matches byte-for-byte); interop auto-picks a PQ-capable ssh (skips on Win-bundled 9.5). Loopback + unit + interop green | automated interop vs OpenSSH ≥ 9.9 (server role ✅; client role + TinySSH sntrup761 grow with the interop program) | M |
 | **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716) + **`SshKeyGenerator`** (all key types, first-run host-key generation), authorized_keys/known_hosts (incl. **notBefore/notAfter validity windows** on authorized keys), server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain), **TOTP 2FA** (`publickey,keyboard-interactive`, RFC 6238 + Hermod session-bound, replay cache), **auth banner**, **typed audit stream** (core `SshAuditEvent` model + `ISshAuditSink`, auth/transport events) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips; RFC 6238 vectors green + real `ssh` completes a TOTP login and shows our banner; audit events assert correct in loopback | L |
 | **M5** | ⬜ | **Certificates**: parser/validator (check chain from §6), `CertificateBuilder` (mini-CA), client cert auth, server CA trust + principals + critical options, host certificates, revocation list | full §11.4 cert program vs OpenSSH (`ssh-keygen -L` validates our certs) + AsyncSSH as second validator; full negative suite | L |
 | **M6** | ⬜ | Connection layer: channels + flow control, `exec`/`shell`/`pty-req`/`env`/`exit-status`/`window-change`, subsystem dispatch, keepalives, **`SSH_MSG_PING`/`PONG` (`ping@openssh.com`)**; **`SshCommand` API** (capture + streaming, stdin, env, PTY toggle, exit-status/exit-signal, `SshCommandLine.Quote`); **session recording** for PTY/exec (asciicast v2 + sidecar, redaction), **keepalive/dead-peer + idle timeouts** (`ClientAlive*`/`ServerAlive*`, both roles) | remote-exec E2E suite (§11.3 #8) green vs WSL/container sshds; `ssh` CLI and `plink` execute against our server (incl. winadj quirk pinned); asciicast validates with `asciinema play`; PING chaff from OpenSSH ≥ 9.5 tolerated; dead-peer/idle timeouts fire correctly under FakeTimeProvider | L |

@@ -55,9 +55,6 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         public override String             Name           { get; }
         public override HashAlgorithmName  HashAlgorithm  { get; }
 
-        /// <summary>Our public value (e on the client, f on the server) as mpint content bytes.</summary>
-        public override Byte[]             PublicKey      => publicKey;
-
         #endregion
 
         #region Constructor(s)
@@ -107,9 +104,19 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #endregion
 
-        #region Agree(PeerPublicKey)
+        #region StartClient / ServerRespond / ClientFinish
 
-        public override Byte[] Agree(ReadOnlySpan<Byte> PeerPublicKey)
+        // The DH public value (e for the client, f for the server) is computed identically on both sides.
+        public override Byte[] StartClient()
+            => publicKey;
+
+        public override (Byte[] ServerPublic, Byte[] SharedSecret) ServerRespond(ReadOnlySpan<Byte> ClientPublic)
+            => (publicKey, Agree(ClientPublic));
+
+        public override Byte[] ClientFinish(ReadOnlySpan<Byte> ServerPublic)
+            => Agree(ServerPublic);
+
+        private Byte[] Agree(ReadOnlySpan<Byte> PeerPublicKey)
         {
 
             // The peer value arrives as mpint content bytes; interpret it as an unsigned integer.

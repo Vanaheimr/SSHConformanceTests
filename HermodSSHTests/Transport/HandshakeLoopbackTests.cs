@@ -57,7 +57,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 // Both sides must agree on the session id (the exchange hash) and the algorithms.
                 Assert.That(client.SessionId,                    Is.EqualTo(server.SessionId));
                 Assert.That(client.SessionId.Length,             Is.EqualTo(32));   // SHA-256
-                Assert.That(client.Algorithms.KeyExchange,       Is.EqualTo(SshAlgorithmNames.Kex.Curve25519Sha256));
+                Assert.That(client.Algorithms.KeyExchange,       Is.EqualTo(SshAlgorithmNames.Kex.MlKem768X25519Sha256));
                 Assert.That(client.Algorithms.HostKey,           Is.EqualTo(SshAlgorithmNames.HostKey.Ed25519));
                 Assert.That(client.Algorithms.CipherServerToClient, Is.EqualTo(SshAlgorithmNames.Cipher.ChaCha20Poly1305));
                 Assert.That(client.Algorithms.StrictKex,         Is.True);
