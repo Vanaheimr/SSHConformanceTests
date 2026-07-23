@@ -19,18 +19,13 @@
 
 using NUnit.Framework;
 
+using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
 
 #endregion
 
 namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 {
-
-    // Our namespace is nested under org.GraphDefined.Vanaheimr.Hermod, which defines its own IPAddress.
-    // These aliases must sit INSIDE the namespace to outrank the enclosing type (a file-scoped alias
-    // sits at the global level and would lose to Hermod's IPAddress).
-    using IPAddress  = System.Net.IPAddress;
-    using IPEndPoint = System.Net.IPEndPoint;
 
 
     /// <summary>
@@ -43,13 +38,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #region (private) RunOverTcpAsync(LoopbackAddress, CancellationToken)
 
-        private static async Task RunOverTcpAsync(IPAddress LoopbackAddress, CancellationToken CancellationToken)
+        private static async Task RunOverTcpAsync(IIPAddress LoopbackAddress, CancellationToken CancellationToken)
         {
 
             var hostKey = Ed25519KeyPair.Generate();
 
-            using var listener = SshTcpListener.Start(new IPEndPoint(LoopbackAddress, 0));
-            var port = listener.LocalEndPoint.Port;
+            using var listener = SshTcpListener.Start(new IPSocket(LoopbackAddress, IPPort.Auto));
+            var localSocket = listener.LocalEndPoint;
 
             // Server: accept one connection and run the server handshake.
             var serverTask = Task.Run(async () =>
@@ -59,7 +54,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             }, CancellationToken);
 
             // Client: connect and run the client handshake.
-            var clientPipe = await SshTcp.ConnectAsync(LoopbackAddress.ToString(), port, CancellationToken);
+            var clientPipe = await SshTcp.ConnectAsync(new IPSocket(LoopbackAddress, localSocket.Port), CancellationToken);
             using var client = await SshHandshake.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
             using var server = await serverTask;
 
@@ -77,7 +72,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         [CancelAfter(15000)]
         public async Task Handshake_OverIPv4Loopback(CancellationToken CancellationToken)
         {
-            await RunOverTcpAsync(IPAddress.Loopback, CancellationToken);
+            await RunOverTcpAsync(IPv4Address.Localhost, CancellationToken);
         }
 
         [Test]
@@ -88,7 +83,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             if (!System.Net.Sockets.Socket.OSSupportsIPv6)
                 Assert.Ignore("IPv6 is not available on this host.");
 
-            await RunOverTcpAsync(IPAddress.IPv6Loopback, CancellationToken);
+            await RunOverTcpAsync(IPv6Address.Localhost, CancellationToken);
 
         }
 

@@ -71,8 +71,12 @@ Hermod's DNS/TCP/PKI/logging transitively — do **not** add a direct `BouncyCas
   modes/constructions (CTR, chacha20-poly1305@openssh.com, bcrypt_pbkdf, KDF) with official test vectors
 - [PLAN.md](PLAN.md) carries status markers (✅ done · 🔶 partial · ⬜ open) — keep them current
   whenever a feature lands, a milestone completes or a decision is made
-- **Namespace gotcha:** our root namespace is nested under `org.GraphDefined.Vanaheimr.Hermod`, which
-  defines its own `IPAddress` (and other networking types). An unqualified `IPAddress` in our code
-  resolves to Hermod's, not `System.Net`'s. When you need the `System.Net` type, either fully-qualify it
-  or add `using IPAddress = System.Net.IPAddress;` **inside the namespace block** (a file-scoped alias sits
-  at the global level and loses to the enclosing Hermod type).
+- **Use Hermod's networking types, not `System.Net`.** Public APIs and models use `IIPAddress`,
+  `IPv4Address`/`IPv6Address` (`.Localhost`/`.Any`), `IPPort`, `IPSocket` from
+  `org.GraphDefined.Vanaheimr.Hermod`. Convert to `System.Net` only at the lowest layer (actual socket
+  calls) via `IIPAddress.ToDotNet()`, `IPPort.ToInt32()/ToUInt16()`, `IPSocket.ToIPEndPoint()` /
+  `IPSocket.FromIPEndPoint(...)`, and `IPAddress.Build(...)`/`FromDotNet(...)`. Example: `SshTcp`/`SshTcpListener`.
+- **Related namespace gotcha:** our namespace is nested under `org.GraphDefined.Vanaheimr.Hermod`, whose
+  `IPAddress` is a *static factory class* (not `System.Net.IPAddress`). If you ever genuinely need the
+  `System.Net` type, fully-qualify it or alias it **inside the namespace block** (a file-scoped alias sits
+  at the global level and loses to the enclosing Hermod type) — but prefer the Hermod types above.

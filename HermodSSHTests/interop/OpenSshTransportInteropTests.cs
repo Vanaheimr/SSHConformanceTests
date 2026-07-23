@@ -21,16 +21,13 @@ using System.Diagnostics;
 
 using NUnit.Framework;
 
+using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
 
 #endregion
 
 namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 {
-
-    // Alias the System.Net types (our namespace is nested under ...Hermod, which has its own IPAddress).
-    using IPAddress  = System.Net.IPAddress;
-    using IPEndPoint = System.Net.IPEndPoint;
 
 
     /// <summary>
@@ -89,8 +86,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var hostKey = Ed25519KeyPair.Generate();
 
-            using var listener = SshTcpListener.Start(new IPEndPoint(IPAddress.Loopback, 0));
-            var port = listener.LocalEndPoint.Port;
+            using var listener = SshTcpListener.Start(new IPSocket(IPv4Address.Localhost, IPPort.Auto));
+            var port = listener.LocalEndPoint.Port.ToInt32();
 
             // The server accepts one connection, completes the handshake, and reads the client's first
             // encrypted packet — which must be SSH_MSG_SERVICE_REQUEST("ssh-userauth").

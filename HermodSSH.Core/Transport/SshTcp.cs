@@ -21,6 +21,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.IO.Pipelines;
 
+using org.GraphDefined.Vanaheimr.Hermod;
+
 #endregion
 
 namespace org.GraphDefined.Vanaheimr.Hermod.SSH
@@ -28,8 +30,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
     /// <summary>
     /// Adapts TCP sockets to the <see cref="IDuplexPipe"/> the SSH transport is written against.
-    /// IPv6 is first-class: the listener can run dual-stack (accepting IPv4 and IPv6), and the client
-    /// resolves and connects over whichever family the target offers.
+    /// The public surface uses Hermod's networking types (<see cref="IPSocket"/>, <see cref="IPPort"/>,
+    /// <see cref="IIPAddress"/>); the conversion to the <c>System.Net</c> socket types happens here at
+    /// the lowest layer. IPv6 is first-class: an IPv6 endpoint yields a dual-stack listener.
     /// </summary>
     public static class SshTcp
     {
@@ -47,13 +50,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #endregion
 
-        #region ConnectAsync(Host, Port, CancellationToken = default)
+        #region ConnectAsync(RemoteSocket, CancellationToken = default)
 
         /// <summary>
-        /// Connect to a host and port (IPv4 or IPv6) and return the connection as a duplex pipe.
+        /// Connect to a remote IP socket (IPv4 or IPv6) and return the connection as a duplex pipe.
         /// </summary>
-        public static async Task<IDuplexPipe> ConnectAsync(String             Host,
-                                                           Int32              Port,
+        public static async Task<IDuplexPipe> ConnectAsync(IPSocket           RemoteSocket,
                                                            CancellationToken  CancellationToken = default)
         {
 
@@ -61,7 +63,35 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
             try
             {
-                await socket.ConnectAsync(Host, Port, CancellationToken).ConfigureAwait(false);
+                await socket.ConnectAsync(RemoteSocket.IPAddress.ToDotNet(), RemoteSocket.Port.ToInt32(), CancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                socket.Dispose();
+                throw;
+            }
+
+            return AsDuplexPipe(socket);
+
+        }
+
+        #endregion
+
+        #region ConnectAsync(Host, Port, CancellationToken = default)
+
+        /// <summary>
+        /// Connect to a host name (or IP literal) and port and return the connection as a duplex pipe.
+        /// </summary>
+        public static async Task<IDuplexPipe> ConnectAsync(String             Host,
+                                                           IPPort             Port,
+                                                           CancellationToken  CancellationToken = default)
+        {
+
+            var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+
+            try
+            {
+                await socket.ConnectAsync(Host, Port.ToInt32(), CancellationToken).ConfigureAwait(false);
             }
             catch
             {
@@ -93,9 +123,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #region Properties
 
-        /// <summary>The local endpoint the listener is bound to (with the actual port when 0 was requested).</summary>
-        public IPEndPoint LocalEndPoint
-            => (IPEndPoint) socket.LocalEndPoint!;
+        /// <summary>The local socket the listener is bound to (with the actual port when 0 was requested).</summary>
+        public IPSocket LocalEndPoint
+            => IPSocket.FromIPEndPoint((IPEndPoint) socket.LocalEndPoint!);
 
         #endregion
 
@@ -112,20 +142,22 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         #region (static) Start(EndPoint, Backlog = 32)
 
         /// <summary>
-        /// Start listening on the given endpoint. An IPv6 endpoint enables dual-stack mode (IPv4 and IPv6).
-        /// Use port 0 to let the OS choose a free port (read it back from <see cref="LocalEndPoint"/>).
+        /// Start listening on the given IP socket. An IPv6 address enables dual-stack mode (IPv4 and IPv6).
+        /// Use <see cref="IPPort.Auto"/> (port 0) to let the OS choose a free port (read it back from
+        /// <see cref="LocalEndPoint"/>).
         /// </summary>
-        /// <param name="EndPoint">The endpoint to bind to.</param>
+        /// <param name="EndPoint">The IP socket to bind to.</param>
         /// <param name="Backlog">The listen backlog.</param>
-        public static SshTcpListener Start(IPEndPoint EndPoint, Int32 Backlog = 32)
+        public static SshTcpListener Start(IPSocket EndPoint, Int32 Backlog = 32)
         {
 
-            var socket = new Socket(EndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            var dotNetAddress  = EndPoint.IPAddress.ToDotNet();
+            var socket         = new Socket(dotNetAddress.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
 
-            if (EndPoint.AddressFamily == AddressFamily.InterNetworkV6)
+            if (dotNetAddress.AddressFamily == AddressFamily.InterNetworkV6)
                 socket.DualMode = true;   // accept IPv4-mapped connections too
 
-            socket.Bind(EndPoint);
+            socket.Bind(new IPEndPoint(dotNetAddress, EndPoint.Port.ToInt32()));
             socket.Listen(Backlog);
 
             return new SshTcpListener(socket);
