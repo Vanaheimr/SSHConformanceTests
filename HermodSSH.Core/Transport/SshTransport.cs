@@ -54,6 +54,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         private readonly String[]?               macs;
         private readonly String[]?               keyExchanges;
         private readonly String[]?               hostKeyAlgorithms;
+        private readonly String[]                serverSignatureAlgorithms;
+
+        private readonly Dictionary<String, String>  peerExtensions = [];
 
         private SshTransportCipher   sendCipher;
         private ISshMac?             sendMac;
@@ -90,6 +93,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>How many key exchanges have completed (1 after the handshake, +1 per rekey).</summary>
         public Int32                 KeyExchangeCount  { get; private set; }
 
+        /// <summary>The extensions received from the peer via SSH_MSG_EXT_INFO (RFC 8308), if any.</summary>
+        public IReadOnlyDictionary<String, String>  PeerExtensions  => peerExtensions;
+
+        /// <summary>
+        /// The peer's "server-sig-algs" list (the signature algorithms a server accepts for public-key
+        /// auth), parsed from a received EXT_INFO, or null if the peer never advertised it.
+        /// </summary>
+        public String[]?             PeerServerSignatureAlgorithms
+            => peerExtensions.TryGetValue(SshExtensionNames.ServerSigAlgs, out var value)
+                   ? value.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                   : null;
+
         #endregion
 
         #region Constructor(s)
@@ -103,19 +118,21 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                              String[]?               Ciphers,
                              String[]?               Macs,
                              String[]?               KeyExchanges,
-                             String[]?               HostKeyAlgorithms)
+                             String[]?               HostKeyAlgorithms,
+                             String[]?               ServerSignatureAlgorithms)
         {
 
-            this.pipe               = Pipe;
-            this.isServer           = IsServer;
-            this.vC                 = V_C;
-            this.vS                 = V_S;
-            this.hostKey            = HostKey;
-            this.verifyHostKey      = VerifyHostKey;
-            this.ciphers            = Ciphers;
-            this.macs               = Macs;
-            this.keyExchanges       = KeyExchanges;
-            this.hostKeyAlgorithms  = HostKeyAlgorithms;
+            this.pipe                       = Pipe;
+            this.isServer                   = IsServer;
+            this.vC                         = V_C;
+            this.vS                         = V_S;
+            this.hostKey                    = HostKey;
+            this.verifyHostKey              = VerifyHostKey;
+            this.ciphers                    = Ciphers;
+            this.macs                       = Macs;
+            this.keyExchanges               = KeyExchanges;
+            this.hostKeyAlgorithms          = HostKeyAlgorithms;
+            this.serverSignatureAlgorithms  = ServerSignatureAlgorithms ?? SshExtensionNames.DefaultServerSignatureAlgorithms;
 
             // Before the first NEWKEYS everything travels in the clear (cipher "none", no MAC).
             this.sendCipher         = NullTransportCipher.Instance;
@@ -147,7 +164,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var remote   = await SshVersionExchange.ReadAsync(Pipe.Input, CancellationToken).ConfigureAwait(false);
 
             var transport = new SshTransport(Pipe, IsServer: false, localId.ToWireBytes(), remote.WireBytes,
-                                             HostKey: null, VerifyHostKey, Ciphers, Macs, KeyExchanges, HostKeyAlgorithms);
+                                             HostKey: null, VerifyHostKey, Ciphers, Macs, KeyExchanges, HostKeyAlgorithms,
+                                             ServerSignatureAlgorithms: null);
 
             await transport.PerformKeyExchangeAsync(IsInitial: true, PeerKexInit: null, CancellationToken).ConfigureAwait(false);
 
@@ -165,11 +183,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// </summary>
         public static async ValueTask<SshTransport> ServerHandshakeAsync(IDuplexPipe               Pipe,
                                                                          ISshHostKey               HostKey,
-                                                                         SshIdentificationString?  LocalIdentification  = null,
-                                                                         String[]?                 Ciphers              = null,
-                                                                         String[]?                 Macs                 = null,
-                                                                         String[]?                 KeyExchanges         = null,
-                                                                         CancellationToken         CancellationToken    = default)
+                                                                         SshIdentificationString?  LocalIdentification        = null,
+                                                                         String[]?                 Ciphers                    = null,
+                                                                         String[]?                 Macs                       = null,
+                                                                         String[]?                 KeyExchanges               = null,
+                                                                         String[]?                 ServerSignatureAlgorithms  = null,
+                                                                         CancellationToken         CancellationToken          = default)
         {
 
             var localId  = LocalIdentification ?? SshIdentificationString.Default;
@@ -177,7 +196,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var remote   = await SshVersionExchange.ReadAsync(Pipe.Input, CancellationToken).ConfigureAwait(false);
 
             var transport = new SshTransport(Pipe, IsServer: true, remote.WireBytes, localId.ToWireBytes(),
-                                             HostKey, VerifyHostKey: null, Ciphers, Macs, KeyExchanges, HostKeyAlgorithms: null);
+                                             HostKey, VerifyHostKey: null, Ciphers, Macs, KeyExchanges, HostKeyAlgorithms: null,
+                                             ServerSignatureAlgorithms);
 
             await transport.PerformKeyExchangeAsync(IsInitial: true, PeerKexInit: null, CancellationToken).ConfigureAwait(false);
 
@@ -354,6 +374,38 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             exchangeHash   = h;
             serverHostKey  = kS;
             KeyExchangeCount++;
+
+            // RFC 8308 §3.1: when ext-info was negotiated, the server sends SSH_MSG_EXT_INFO
+            // (server-sig-algs) as the very next packet after its first NEWKEYS. Not repeated on rekeys.
+            if (IsInitial && isServer && negotiated.ExtensionInfo)
+            {
+                var extInfo = ExtInfoMessage.ForServerSigAlgs(serverSignatureAlgorithms);
+                await SendPacketAsync(extInfo.Encode(), CancellationToken).ConfigureAwait(false);
+            }
+
+        }
+
+        #endregion
+
+        #region TryHandleExtInfo(Payload)
+
+        /// <summary>
+        /// If <paramref name="Payload"/> is an SSH_MSG_EXT_INFO message, parse it and record the peer's
+        /// extensions (e.g. "server-sig-algs"), returning true; otherwise leave state untouched and
+        /// return false. A receive loop calls this on each packet so extension state stays transport-side.
+        /// </summary>
+        public Boolean TryHandleExtInfo(ReadOnlySpan<Byte> Payload)
+        {
+
+            if (Payload.Length < 1 || Payload[0] != (Byte) SshMessageNumber.ExtInfo)
+                return false;
+
+            var extInfo = ExtInfoMessage.Decode(Payload);
+
+            foreach (var extension in extInfo.Extensions)
+                peerExtensions[extension.Key] = extension.Value;
+
+            return true;
 
         }
 

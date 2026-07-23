@@ -49,7 +49,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var clientTask = SshTransport.ClientHandshakeAsync(clientPipe, Ciphers: Ciphers, CancellationToken: CancellationToken);
             var serverTask = SshTransport.ServerHandshakeAsync(serverPipe, hostKey, Ciphers: Ciphers, CancellationToken: CancellationToken);
 
-            return (await clientTask, await serverTask);
+            var client = await clientTask;
+            var server = await serverTask;
+
+            // The server sends EXT_INFO (server-sig-algs) right after the initial NEWKEYS; consume it on
+            // the client so the following traffic assertions see plain data packets.
+            if (client.Algorithms.ExtensionInfo)
+            {
+                var extInfo = await client.ReceivePacketAsync(CancellationToken);
+                Assert.That(client.TryHandleExtInfo(extInfo), Is.True, "The first server packet must be EXT_INFO.");
+            }
+
+            return (client, server);
 
         }
 

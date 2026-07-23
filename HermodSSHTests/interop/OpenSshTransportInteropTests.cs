@@ -194,6 +194,110 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
+        #region OurServer_SendsExtInfo_RealOpenSshClientReceivesServerSigAlgs
+
+        [Test]
+        [CancelAfter(30000)]
+        public async Task OurServer_SendsExtInfo_RealOpenSshClientReceivesServerSigAlgs(CancellationToken CancellationToken)
+        {
+
+            var sshClient = FindSshClient();
+            if (sshClient is null)
+                Assert.Ignore("No 'ssh' client found — skipping OpenSSH ext-info interop.");
+
+            var hostKey = HostKeyMatrixTests.MakeHostKey("ssh-ed25519");
+
+            using var listener = SshTcpListener.Start(new IPSocket(IPv4Address.Localhost, IPPort.Auto));
+            var port = listener.LocalEndPoint.Port.ToInt32();
+
+            // Our stateful transport completes the handshake and — because ext-info is negotiated —
+            // sends SSH_MSG_EXT_INFO(server-sig-algs) as the first packet after NEWKEYS, then reads the
+            // client's SERVICE_REQUEST. The real ssh client must log that it received the EXT_INFO.
+            var serverTask = Task.Run(async () =>
+            {
+                var pipe      = await listener.AcceptAsync(CancellationToken);
+                var transport = await SshTransport.ServerHandshakeAsync(pipe, hostKey, CancellationToken: CancellationToken);
+                var firstFromClient = await transport.ReceivePacketAsync(CancellationToken);
+                return (transport.Algorithms, firstFromClient);
+            }, CancellationToken);
+
+            var knownHosts = Path.GetTempFileName();
+            var emptyConf  = Path.GetTempFileName();
+
+            using var ssh = new Process { StartInfo = new ProcessStartInfo(sshClient!)
+            {
+                RedirectStandardError   = true,
+                RedirectStandardOutput  = true,
+                UseShellExecute         = false,
+                CreateNoWindow          = true
+            }};
+
+            foreach (var arg in new[]
+            {
+                "-F", emptyConf,
+                "-p", port.ToString(),
+                "-o", "StrictHostKeyChecking=no",
+                "-o", $"UserKnownHostsFile={knownHosts}",
+                "-o", "KexAlgorithms=curve25519-sha256",
+                "-o", "HostKeyAlgorithms=ssh-ed25519",
+                "-o", "Ciphers=chacha20-poly1305@openssh.com",
+                "-o", "PreferredAuthentications=none",
+                "-o", "PubkeyAuthentication=no",
+                "-o", "PasswordAuthentication=no",
+                "-o", "KbdInteractiveAuthentication=no",
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=10",
+                "-vv",
+                "hermod@127.0.0.1",
+                "exit"
+            })
+                ssh.StartInfo.ArgumentList.Add(arg);
+
+            String stderr = "";
+
+            try
+            {
+
+                ssh.Start();
+                var stderrTask = ssh.StandardError.ReadToEndAsync(CancellationToken);
+
+                var (algorithms, payload) = await serverTask;
+
+                try { if (!ssh.HasExited) ssh.Kill(entireProcessTree: true); } catch { }
+                try { stderr = await stderrTask; } catch { }
+
+                var reader   = new SshPacketReader(payload);
+                var message  = (SshMessageNumber) reader.ReadByte();
+
+                Assert.Multiple(() => {
+                    Assert.That(algorithms.ExtensionInfo, Is.True, "OpenSSH must negotiate ext-info with us.");
+                    Assert.That(message,                  Is.EqualTo(SshMessageNumber.ServiceRequest));
+                    // The proof: the real client logs receipt of our EXT_INFO and parses server-sig-algs.
+                    Assert.That(stderr, Does.Contain("SSH2_MSG_EXT_INFO received"),
+                                "The real OpenSSH client must report receiving our SSH_MSG_EXT_INFO.");
+                    Assert.That(stderr, Does.Contain("server-sig-algs"),
+                                "The client's ext-info parse must mention server-sig-algs.");
+                });
+
+            }
+            catch (Exception e)
+            {
+                try   { stderr = await ssh.StandardError.ReadToEndAsync(CancellationToken); }
+                catch { }
+                TestContext.Out.WriteLine("ssh -vv stderr:\n" + stderr);
+                throw new AssertionException("The OpenSSH ext-info interop failed. ssh -vv output:\n" + stderr, e);
+            }
+            finally
+            {
+                try { if (!ssh.HasExited) ssh.Kill(entireProcessTree: true); } catch { }
+                try { File.Delete(knownHosts); } catch { }
+                try { File.Delete(emptyConf);  } catch { }
+            }
+
+        }
+
+        #endregion
+
     }
 
 }
