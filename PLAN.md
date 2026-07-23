@@ -423,7 +423,7 @@ Both roles share one reusable rule engine:
 - Public API fully `Task`/`ValueTask` + `CancellationToken`; `IAsyncDisposable`; no sync-over-async; internal loops over `PipeReader`/`PipeWriter`
 - Channel flow control = real backpressure (window ↔ `PipeWriter` flush), no unbounded buffering
 - `Span<byte>`/`Memory<byte>` parsers, `ArrayPool`/`MemoryPool`, zero-copy where possible; wipe key material via `CryptographicOperations.ZeroMemory`, never pool buffers holding secrets
-- `TimeProvider` instead of `DateTime.UtcNow`/`Task.Delay` → timeouts/rekey testable with `FakeTimeProvider`
+- `TimeProvider` instead of `DateTime.UtcNow`/`Task.Delay` → timeouts/rekey testable with `FakeTimeProvider`; **`DateTimeOffset` everywhere** (`DateTime` never appears in public API or models — certificate validity, key windows, timestamps; third-party `DateTime` values are converted at the boundary)
 - Rekeying: after 1 GiB or 1 h (configurable), initiable from both sides, without blocking active channels
 - Observability: `ILogger` (Serilog-compatible like the sibling projects), `System.Diagnostics.Metrics` (handshakes, active sessions, bytes, auth failures), optional `ActivitySource`
 - Benchmarks (BenchmarkDotNet, separate project, not NUnit): handshake latency, throughput per cipher, SFTP throughput. Target: SFTP ≥ 100 MB/s loopback with AES-GCM

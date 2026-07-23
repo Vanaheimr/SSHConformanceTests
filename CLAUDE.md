@@ -54,6 +54,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
 - `net10.0`, `Nullable` + `ImplicitUsings` enabled, `LangVersion latest`
 - Everything async: `Task`/`ValueTask` + `CancellationToken` throughout, `IAsyncDisposable`, no sync-over-async
+- **`DateTimeOffset` instead of `DateTime` wherever possible** (public API, models, file parsers); current
+  time only via `TimeProvider.GetUtcNow()` (returns `DateTimeOffset`); where a third-party API forces
+  `DateTime` (e.g. BouncyCastle), convert at that boundary and keep it out of our types
 - Tests with NUnit 4.x (`[CancelAfter]` on async tests); categories `Unit` / `Loopback` / `Interop` / `Slow`
 - English for all code, XML docs, comments and commit messages
 - Dependencies: `libs/Hermod` + `libs/Styx` git submodules, referenced via the `/Dependencies/`
