@@ -70,7 +70,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #endregion
 
-        #region WritePacket(Output, Cipher, Payload)
+        #region WritePacket(Output, Cipher, Payload, SequenceNumber = 0, Mac = null)
 
         /// <summary>
         /// Frame and encrypt one packet with the given payload, writing it to <paramref name="Output"/>
@@ -79,13 +79,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <param name="Output">The destination buffer writer (e.g. a <see cref="PipeWriter"/>).</param>
         /// <param name="Cipher">The send cipher for the current direction.</param>
         /// <param name="Payload">The packet payload (the message).</param>
+        /// <param name="SequenceNumber">The outbound packet sequence number (used by the MAC).</param>
+        /// <param name="Mac">An optional encrypt-then-MAC (for CTR ciphers); null for AEAD/none.</param>
         public static void WritePacket(IBufferWriter<Byte>  Output,
                                        SshTransportCipher   Cipher,
-                                       ReadOnlySpan<Byte>   Payload)
+                                       ReadOnlySpan<Byte>   Payload,
+                                       UInt32               SequenceNumber  = 0,
+                                       ISshMac?             Mac             = null)
         {
 
             var paddingLength  = ComputePaddingLength(Payload.Length, Cipher.BlockSize, Cipher.LengthIncludedInPaddingAlignment);
             var packetLength   = 1 + Payload.Length + paddingLength;
+            var macLength      = Mac?.Length ?? 0;
 
             // Assemble the plaintext block: padding_length || payload || random padding.
             var plaintext = ArrayPool<Byte>.Shared.Rent(packetLength);
@@ -96,17 +101,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                 Payload.CopyTo(plaintext.AsSpan(1));
                 RandomNumberGenerator.Fill(plaintext.AsSpan(1 + Payload.Length, paddingLength));
 
-                var output = Output.GetSpan(4 + packetLength + Cipher.TagLength);
+                var output = Output.GetSpan(4 + packetLength + Cipher.TagLength + macLength);
 
                 BinaryPrimitives.WriteUInt32BigEndian(output, (UInt32) packetLength);
 
-                Cipher.Encrypt(
-                    output[..4],
-                    plaintext.AsSpan(0, packetLength),
-                    output.Slice(4, packetLength + Cipher.TagLength)
-                );
+                var cipherText = output.Slice(4, packetLength + Cipher.TagLength);
+                Cipher.Encrypt(output[..4], plaintext.AsSpan(0, packetLength), cipherText);
 
-                Output.Advance(4 + packetLength + Cipher.TagLength);
+                // Encrypt-then-MAC: MAC over sequence_number || packet_length || ciphertext.
+                Mac?.ComputeInto(SequenceNumber, output[..4], cipherText, output.Slice(4 + packetLength + Cipher.TagLength, macLength));
+
+                Output.Advance(4 + packetLength + Cipher.TagLength + macLength);
 
             }
             finally
@@ -119,20 +124,26 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #endregion
 
-        #region ReadPacketAsync(Input, Cipher, CancellationToken = default)
+        #region ReadPacketAsync(Input, Cipher, SequenceNumber = 0, Mac = null, CancellationToken = default)
 
         /// <summary>
         /// Read, decrypt and authenticate one packet, returning its payload.
         /// </summary>
         /// <param name="Input">The source pipe reader.</param>
         /// <param name="Cipher">The receive cipher for the current direction.</param>
+        /// <param name="SequenceNumber">The inbound packet sequence number (used by the MAC).</param>
+        /// <param name="Mac">An optional encrypt-then-MAC (for CTR ciphers); null for AEAD/none.</param>
         /// <param name="CancellationToken">An optional cancellation token.</param>
         public static async ValueTask<Byte[]> ReadPacketAsync(PipeReader          Input,
                                                               SshTransportCipher  Cipher,
-                                                              CancellationToken   CancellationToken = default)
+                                                              UInt32              SequenceNumber     = 0,
+                                                              ISshMac?            Mac                = null,
+                                                              CancellationToken   CancellationToken  = default)
         {
 
-            // 1. The 4-byte packet_length is always plaintext for the M1 ciphers (none, aes-gcm).
+            var macLength = Mac?.Length ?? 0;
+
+            // 1. The 4-byte packet_length is plaintext for all our ciphers (none, aes-gcm, aes-ctr+etm).
             var lengthBytes   = await ReadExactAsync(Input, 4, CancellationToken).ConfigureAwait(false);
             var packetLength  = BinaryPrimitives.ReadUInt32BigEndian(lengthBytes);
 
@@ -142,13 +153,23 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             if (!Cipher.LengthIncludedInPaddingAlignment && packetLength % (UInt32) Cipher.BlockSize != 0)
                 throw new SshWireException($"SSH packet_length {packetLength} is not a multiple of the {Cipher.BlockSize}-byte block size!");
 
-            // 2. The encrypted region (packet_length bytes) plus the authentication tag.
-            var body       = await ReadExactAsync(Input, (Int32) packetLength + Cipher.TagLength, CancellationToken).ConfigureAwait(false);
+            // 2. The encrypted region (packet_length bytes) plus the AEAD tag plus the MAC.
+            var body        = await ReadExactAsync(Input, (Int32) packetLength + Cipher.TagLength + macLength, CancellationToken).ConfigureAwait(false);
+            var cipherText  = body.AsSpan(0, (Int32) packetLength + Cipher.TagLength);
 
-            var plaintext  = new Byte[packetLength];
+            // 3. Encrypt-then-MAC: verify the MAC (constant-time) before decrypting.
+            if (Mac is not null)
+            {
+                Span<Byte> expected = stackalloc Byte[macLength];
+                Mac.ComputeInto(SequenceNumber, lengthBytes, cipherText, expected);
+                if (!CryptographicOperations.FixedTimeEquals(expected, body.AsSpan((Int32) packetLength + Cipher.TagLength)))
+                    throw new SshWireException("SSH packet MAC verification failed!");
+            }
 
-            if (!Cipher.Decrypt(lengthBytes, body, plaintext))
-                throw new SshWireException("SSH packet authentication failed (bad MAC/tag)!");
+            var plaintext = new Byte[packetLength];
+
+            if (!Cipher.Decrypt(lengthBytes, cipherText, plaintext))
+                throw new SshWireException("SSH packet authentication failed (bad AEAD tag)!");
 
             var paddingLength = plaintext[0];
             var payloadLength = (Int32) packetLength - paddingLength - 1;

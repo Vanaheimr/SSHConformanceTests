@@ -77,7 +77,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         [Test]
         [CancelAfter(30000)]
-        public async Task OurServer_CompletesTransport_WithRealOpenSshClient(CancellationToken CancellationToken)
+        [TestCase("aes256-gcm@openssh.com", "hmac-sha2-256",                "aes256-gcm@openssh.com")]
+        [TestCase("aes256-ctr",             "hmac-sha2-256-etm@openssh.com", "aes256-ctr")]
+        public async Task OurServer_CompletesTransport_WithRealOpenSshClient(String             SshCipher,
+                                                                             String             SshMac,
+                                                                             String             ExpectedCipher,
+                                                                             CancellationToken  CancellationToken)
         {
 
             var sshClient = FindSshClient();
@@ -95,7 +100,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             {
                 var pipe = await listener.AcceptAsync(CancellationToken);
                 using var context = await SshHandshake.ServerHandshakeAsync(pipe, hostKey, CancellationToken: CancellationToken);
-                var firstEncryptedPayload = await SshPacketFraming.ReadPacketAsync(pipe.Input, context.ReceiveCipher, CancellationToken);
+                // First post-NEWKEYS packet is sequence number 0 (strict-KEX). ReceiveMac is null for AEAD.
+                var firstEncryptedPayload = await SshPacketFraming.ReadPacketAsync(pipe.Input, context.ReceiveCipher, 0, context.ReceiveMac, CancellationToken: CancellationToken);
                 return (context.Algorithms, firstEncryptedPayload);
             }, CancellationToken);
 
@@ -118,8 +124,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 "-o", $"UserKnownHostsFile={knownHosts}",
                 "-o", "KexAlgorithms=curve25519-sha256",
                 "-o", "HostKeyAlgorithms=ssh-ed25519",
-                "-o", "Ciphers=aes256-gcm@openssh.com",
-                "-o", "MACs=hmac-sha2-256",
+                "-o", $"Ciphers={SshCipher}",
+                "-o", $"MACs={SshMac}",
                 "-o", "PreferredAuthentications=none",
                 "-o", "PubkeyAuthentication=no",
                 "-o", "PasswordAuthentication=no",
@@ -153,7 +159,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 Assert.Multiple(() => {
                     Assert.That(algorithms.KeyExchange,          Is.EqualTo(SshAlgorithmNames.Kex.Curve25519Sha256));
-                    Assert.That(algorithms.CipherClientToServer, Is.EqualTo(SshAlgorithmNames.Cipher.Aes256Gcm));
+                    Assert.That(algorithms.CipherClientToServer, Is.EqualTo(ExpectedCipher));
                     Assert.That(algorithms.StrictKex,            Is.True, "OpenSSH 9.6+ must negotiate strict-KEX with us.");
                     Assert.That(message,                         Is.EqualTo(SshMessageNumber.ServiceRequest),
                                 "The real OpenSSH client's first encrypted packet must decrypt to SSH_MSG_SERVICE_REQUEST.");

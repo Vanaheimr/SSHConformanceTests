@@ -49,6 +49,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         public static async ValueTask<SshTransportContext> ClientHandshakeAsync(IDuplexPipe               Pipe,
                                                                                 SshIdentificationString?  LocalIdentification  = null,
                                                                                 Func<Byte[], Boolean>?    VerifyHostKey        = null,
+                                                                                String[]?                 Ciphers              = null,
+                                                                                String[]?                 Macs                 = null,
                                                                                 CancellationToken         CancellationToken    = default)
         {
 
@@ -61,11 +63,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var vS       = remote.WireBytes;
 
             // 2. KEXINIT exchange + negotiation.
-            var localKexInit = KexInitMessage.CreateLocal(IsServer: false);
+            var localKexInit = KexInitMessage.CreateLocal(IsServer: false, Ciphers, Macs);
             var iC           = localKexInit.Encode();
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, iC, CancellationToken).ConfigureAwait(false);
 
-            var iS            = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken).ConfigureAwait(false);
+            var iS            = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken: CancellationToken).ConfigureAwait(false);
             var remoteKexInit = KexInitMessage.Decode(iS);
             var negotiated    = AlgorithmNegotiation.Negotiate(localKexInit, remoteKexInit, WeAreServer: false);
             EnsureSupported(negotiated);
@@ -76,7 +78,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, BuildEcdhInit(qC), CancellationToken).ConfigureAwait(false);
 
             // 4. ECDH reply: host key, server ephemeral, signature.
-            var reply = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken).ConfigureAwait(false);
+            var reply = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken: CancellationToken).ConfigureAwait(false);
             var (kS, qS, signatureBlob) = ParseEcdhReply(reply);
 
             // 5. Shared secret, exchange hash, signature verification.
@@ -97,10 +99,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var sessionId = h;
             await ExchangeNewKeysAsync(Pipe, CancellationToken).ConfigureAwait(false);
 
-            var sendCipher     = MakeAesGcm(kMpint, h, sessionId, Kdf.KeyLetter.EncryptionKeyClientToServer, Kdf.KeyLetter.InitialIVClientToServer);
-            var receiveCipher  = MakeAesGcm(kMpint, h, sessionId, Kdf.KeyLetter.EncryptionKeyServerToClient, Kdf.KeyLetter.InitialIVServerToClient);
+            var derive = MakeDeriver(kMpint, h, sessionId);
+            var (sendCipher,    sendMac)    = BuildDirection(negotiated.CipherClientToServer, negotiated.MacClientToServer, derive, Kdf.KeyLetter.EncryptionKeyClientToServer, Kdf.KeyLetter.InitialIVClientToServer, Kdf.KeyLetter.IntegrityKeyClientToServer);
+            var (receiveCipher, receiveMac) = BuildDirection(negotiated.CipherServerToClient, negotiated.MacServerToClient, derive, Kdf.KeyLetter.EncryptionKeyServerToClient, Kdf.KeyLetter.InitialIVServerToClient, Kdf.KeyLetter.IntegrityKeyServerToClient);
 
-            return new SshTransportContext(sessionId, h, negotiated, kS, sendCipher, receiveCipher);
+            return new SshTransportContext(sessionId, h, negotiated, kS, sendCipher, receiveCipher, sendMac, receiveMac);
 
         }
 
@@ -118,6 +121,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         public static async ValueTask<SshTransportContext> ServerHandshakeAsync(IDuplexPipe               Pipe,
                                                                                 Ed25519KeyPair            HostKey,
                                                                                 SshIdentificationString?  LocalIdentification  = null,
+                                                                                String[]?                 Ciphers              = null,
+                                                                                String[]?                 Macs                 = null,
                                                                                 CancellationToken         CancellationToken    = default)
         {
 
@@ -130,17 +135,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var vC       = remote.WireBytes;
 
             // 2. KEXINIT exchange + negotiation.
-            var localKexInit = KexInitMessage.CreateLocal(IsServer: true);
+            var localKexInit = KexInitMessage.CreateLocal(IsServer: true, Ciphers, Macs);
             var iS           = localKexInit.Encode();
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, iS, CancellationToken).ConfigureAwait(false);
 
-            var iC            = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken).ConfigureAwait(false);
+            var iC            = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken: CancellationToken).ConfigureAwait(false);
             var remoteKexInit = KexInitMessage.Decode(iC);
             var negotiated    = AlgorithmNegotiation.Negotiate(remoteKexInit, localKexInit, WeAreServer: true);
             EnsureSupported(negotiated);
 
             // 3. ECDH init: the client's ephemeral public key.
-            var initPayload = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken).ConfigureAwait(false);
+            var initPayload = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken: CancellationToken).ConfigureAwait(false);
             var qC          = ParseEcdhInit(initPayload);
 
             // 4. Compute the shared secret and the exchange hash, then sign it.
@@ -159,10 +164,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var sessionId = h;
             await ExchangeNewKeysAsync(Pipe, CancellationToken).ConfigureAwait(false);
 
-            var sendCipher     = MakeAesGcm(kMpint, h, sessionId, Kdf.KeyLetter.EncryptionKeyServerToClient, Kdf.KeyLetter.InitialIVServerToClient);
-            var receiveCipher  = MakeAesGcm(kMpint, h, sessionId, Kdf.KeyLetter.EncryptionKeyClientToServer, Kdf.KeyLetter.InitialIVClientToServer);
+            var derive = MakeDeriver(kMpint, h, sessionId);
+            var (sendCipher,    sendMac)    = BuildDirection(negotiated.CipherServerToClient, negotiated.MacServerToClient, derive, Kdf.KeyLetter.EncryptionKeyServerToClient, Kdf.KeyLetter.InitialIVServerToClient, Kdf.KeyLetter.IntegrityKeyServerToClient);
+            var (receiveCipher, receiveMac) = BuildDirection(negotiated.CipherClientToServer, negotiated.MacClientToServer, derive, Kdf.KeyLetter.EncryptionKeyClientToServer, Kdf.KeyLetter.InitialIVClientToServer, Kdf.KeyLetter.IntegrityKeyClientToServer);
 
-            return new SshTransportContext(sessionId, h, negotiated, kS, sendCipher, receiveCipher);
+            return new SshTransportContext(sessionId, h, negotiated, kS, sendCipher, receiveCipher, sendMac, receiveMac);
 
         }
 
@@ -171,19 +177,32 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #region (private) EnsureSupported(Negotiated)
 
-        // M1 only implements curve25519-sha256 + ssh-ed25519 + aes256-gcm.
+        // Current support: curve25519-sha256 + ssh-ed25519 + (aes*-gcm | aes*-ctr with an -etm MAC).
         private static void EnsureSupported(NegotiatedAlgorithms Negotiated)
         {
 
             if (Negotiated.KeyExchange is not (SshAlgorithmNames.Kex.Curve25519Sha256 or SshAlgorithmNames.Kex.Curve25519Sha256LibSsh))
-                throw new SshWireException($"Unsupported key exchange '{Negotiated.KeyExchange}' (M1 supports only curve25519-sha256).");
+                throw new SshWireException($"Unsupported key exchange '{Negotiated.KeyExchange}' (supported: curve25519-sha256).");
 
             if (Negotiated.HostKey != SshAlgorithmNames.HostKey.Ed25519)
-                throw new SshWireException($"Unsupported host key '{Negotiated.HostKey}' (M1 supports only ssh-ed25519).");
+                throw new SshWireException($"Unsupported host key '{Negotiated.HostKey}' (supported: ssh-ed25519).");
 
-            if (Negotiated.CipherClientToServer != SshAlgorithmNames.Cipher.Aes256Gcm ||
-                Negotiated.CipherServerToClient != SshAlgorithmNames.Cipher.Aes256Gcm)
-                throw new SshWireException("Unsupported cipher (M1 supports only aes256-gcm@openssh.com).");
+            EnsureCipherSupported(Negotiated.CipherClientToServer, Negotiated.MacClientToServer);
+            EnsureCipherSupported(Negotiated.CipherServerToClient, Negotiated.MacServerToClient);
+
+        }
+
+        private static void EnsureCipherSupported(String Cipher, String Mac)
+        {
+
+            var isGcm = Cipher is SshAlgorithmNames.Cipher.Aes256Gcm or SshAlgorithmNames.Cipher.Aes128Gcm;
+            var isCtr = Cipher is SshAlgorithmNames.Cipher.Aes256Ctr or SshAlgorithmNames.Cipher.Aes192Ctr or SshAlgorithmNames.Cipher.Aes128Ctr;
+
+            if (!isGcm && !isCtr)
+                throw new SshWireException($"Unsupported cipher '{Cipher}' (supported: aes*-gcm@openssh.com, aes*-ctr).");
+
+            if (isCtr && Mac is not (SshAlgorithmNames.Mac.HmacSha2_256Etm or SshAlgorithmNames.Mac.HmacSha2_512Etm))
+                throw new SshWireException($"The CTR cipher '{Cipher}' requires an encrypt-then-MAC ('{Mac}' is not supported yet).");
 
         }
 
@@ -196,7 +215,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, [ (Byte) SshMessageNumber.NewKeys ], CancellationToken).ConfigureAwait(false);
 
-            var newKeys = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken).ConfigureAwait(false);
+            var newKeys = await SshPacketFraming.ReadPacketAsync(Pipe.Input, NullTransportCipher.Instance, CancellationToken: CancellationToken).ConfigureAwait(false);
 
             if (newKeys.Length < 1 || newKeys[0] != (Byte) SshMessageNumber.NewKeys)
                 throw new SshWireException("Expected SSH_MSG_NEWKEYS (21) to complete the key exchange!");
@@ -205,21 +224,35 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #endregion
 
-        #region (private) MakeAesGcm(SharedSecretMPInt, H, SessionId, KeyLetter, IVLetter)
+        #region (private) MakeDeriver / BuildDirection / BuildMac
 
-        private static AesGcmTransportCipher MakeAesGcm(Byte[]  SharedSecretMPInt,
-                                                        Byte[]  H,
-                                                        Byte[]  SessionId,
-                                                        Byte    KeyLetter,
-                                                        Byte    IVLetter)
-        {
+        // A closure that derives 'length' key bytes for a given key-derivation letter (RFC 4253 §7.2).
+        private static Func<Byte, Int32, Byte[]> MakeDeriver(Byte[] SharedSecretMPInt, Byte[] H, Byte[] SessionId)
+            => (letter, length) => Kdf.Derive(SharedSecretMPInt, H, letter, SessionId, length);
 
-            var key  = Kdf.Derive(SharedSecretMPInt, H, KeyLetter, SessionId, 32);
-            var iv   = Kdf.Derive(SharedSecretMPInt, H, IVLetter,  SessionId, AesGcmTransportCipher.NonceLength);
+        // Build the cipher (and, for CTR, the encrypt-then-MAC) for one direction from the negotiated names.
+        private static (SshTransportCipher Cipher, ISshMac? Mac) BuildDirection(String                    CipherName,
+                                                                                String                    MacName,
+                                                                                Func<Byte, Int32, Byte[]> Derive,
+                                                                                Byte                      KeyLetter,
+                                                                                Byte                      IVLetter,
+                                                                                Byte                      MacLetter)
 
-            return new AesGcmTransportCipher(key, iv);
+            => CipherName switch {
+                   SshAlgorithmNames.Cipher.Aes256Gcm => (new AesGcmTransportCipher(Derive(KeyLetter, 32), Derive(IVLetter, AesGcmTransportCipher.NonceLength)), null),
+                   SshAlgorithmNames.Cipher.Aes128Gcm => (new AesGcmTransportCipher(Derive(KeyLetter, 16), Derive(IVLetter, AesGcmTransportCipher.NonceLength)), null),
+                   SshAlgorithmNames.Cipher.Aes256Ctr => (new AesCtrTransportCipher(Derive(KeyLetter, 32), Derive(IVLetter, AesCtrTransportCipher.CounterLength)), BuildMac(MacName, Derive, MacLetter)),
+                   SshAlgorithmNames.Cipher.Aes192Ctr => (new AesCtrTransportCipher(Derive(KeyLetter, 24), Derive(IVLetter, AesCtrTransportCipher.CounterLength)), BuildMac(MacName, Derive, MacLetter)),
+                   SshAlgorithmNames.Cipher.Aes128Ctr => (new AesCtrTransportCipher(Derive(KeyLetter, 16), Derive(IVLetter, AesCtrTransportCipher.CounterLength)), BuildMac(MacName, Derive, MacLetter)),
+                   _                                  => throw new SshWireException($"Unsupported cipher '{CipherName}'.")
+               };
 
-        }
+        private static ISshMac BuildMac(String MacName, Func<Byte, Int32, Byte[]> Derive, Byte MacLetter)
+            => MacName switch {
+                   SshAlgorithmNames.Mac.HmacSha2_256Etm => HmacSha2Mac.Sha256(Derive(MacLetter, 32)),
+                   SshAlgorithmNames.Mac.HmacSha2_512Etm => HmacSha2Mac.Sha512(Derive(MacLetter, 64)),
+                   _                                     => throw new SshWireException($"Unsupported MAC '{MacName}'.")
+               };
 
         #endregion
 

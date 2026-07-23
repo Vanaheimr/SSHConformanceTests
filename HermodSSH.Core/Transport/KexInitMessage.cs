@@ -93,14 +93,39 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #region (static) CreateLocal(IsServer)
 
+        /// <summary>The default cipher preference list (most preferred first).</summary>
+        public static readonly String[] DefaultCiphers =
+        [
+            SshAlgorithmNames.Cipher.Aes256Gcm,
+            SshAlgorithmNames.Cipher.Aes128Gcm,
+            SshAlgorithmNames.Cipher.Aes256Ctr,
+            SshAlgorithmNames.Cipher.Aes128Ctr
+        ];
+
+        /// <summary>The default MAC preference list (encrypt-then-MAC; ignored when an AEAD cipher wins).</summary>
+        public static readonly String[] DefaultMacs =
+        [
+            SshAlgorithmNames.Mac.HmacSha2_256Etm,
+            SshAlgorithmNames.Mac.HmacSha2_512Etm
+        ];
+
+
         /// <summary>
-        /// Build our own KEXINIT with the M1 algorithm portfolio (curve25519-sha256, ssh-ed25519,
-        /// aes256-gcm) plus the strict-KEX and ext-info markers for our role.
+        /// Build our own KEXINIT with the modern algorithm portfolio (curve25519-sha256, ssh-ed25519,
+        /// AES-GCM / AES-CTR + HMAC-SHA2-ETM) plus the strict-KEX and ext-info markers for our role.
         /// </summary>
         /// <param name="IsServer">Whether we are the server (selects the -s markers) or client (-c).</param>
-        public static KexInitMessage CreateLocal(Boolean IsServer)
+        /// <param name="Ciphers">Optional cipher preference override (both directions).</param>
+        /// <param name="Macs">Optional MAC preference override (both directions).</param>
+        public static KexInitMessage CreateLocal(Boolean    IsServer,
+                                                 String[]?  Ciphers  = null,
+                                                 String[]?  Macs     = null)
+        {
 
-            => new (
+            var ciphers = Ciphers ?? DefaultCiphers;
+            var macs    = Macs    ?? DefaultMacs;
+
+            return new (
                    Cookie:                    RandomNumberGenerator.GetBytes(16),
                    KexAlgorithms:             [
                                                   SshAlgorithmNames.Kex.Curve25519Sha256,
@@ -109,15 +134,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                                   IsServer ? SshAlgorithmNames.Kex.StrictKexServer : SshAlgorithmNames.Kex.StrictKexClient
                                               ],
                    ServerHostKeyAlgorithms:   [ SshAlgorithmNames.HostKey.Ed25519 ],
-                   EncryptionClientToServer:  [ SshAlgorithmNames.Cipher.Aes256Gcm ],
-                   EncryptionServerToClient:  [ SshAlgorithmNames.Cipher.Aes256Gcm ],
-                   MacClientToServer:         [ SshAlgorithmNames.Mac.HmacSha2_256 ],
-                   MacServerToClient:         [ SshAlgorithmNames.Mac.HmacSha2_256 ],
+                   EncryptionClientToServer:  ciphers,
+                   EncryptionServerToClient:  ciphers,
+                   MacClientToServer:         macs,
+                   MacServerToClient:         macs,
                    CompressionClientToServer: [ SshAlgorithmNames.Compression.None ],
                    CompressionServerToClient: [ SshAlgorithmNames.Compression.None ],
                    LanguagesClientToServer:   [],
                    LanguagesServerToClient:   []
                );
+
+        }
 
         #endregion
 

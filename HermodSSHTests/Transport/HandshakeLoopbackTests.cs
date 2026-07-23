@@ -72,12 +72,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var clientToServer = "hello from the client"u8.ToArray();
             SshPacketFraming.WritePacket(clientPipe.Output, client.SendCipher, clientToServer);
             await clientPipe.Output.FlushAsync(CancellationToken);
-            var receivedByServer = await SshPacketFraming.ReadPacketAsync(serverPipe.Input, server.ReceiveCipher, CancellationToken);
+            var receivedByServer = await SshPacketFraming.ReadPacketAsync(serverPipe.Input, server.ReceiveCipher, CancellationToken: CancellationToken);
 
             var serverToClient = "hello from the server"u8.ToArray();
             SshPacketFraming.WritePacket(serverPipe.Output, server.SendCipher, serverToClient);
             await serverPipe.Output.FlushAsync(CancellationToken);
-            var receivedByClient = await SshPacketFraming.ReadPacketAsync(clientPipe.Input, client.ReceiveCipher, CancellationToken);
+            var receivedByClient = await SshPacketFraming.ReadPacketAsync(clientPipe.Input, client.ReceiveCipher, CancellationToken: CancellationToken);
 
             Assert.Multiple(() => {
                 Assert.That(receivedByServer, Is.EqualTo(clientToServer));

@@ -46,6 +46,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>The cipher protecting inbound packets.</summary>
         public SshTransportCipher    ReceiveCipher    { get; }
 
+        /// <summary>The encrypt-then-MAC for outbound packets, or null for AEAD ciphers.</summary>
+        public ISshMac?              SendMac          { get; }
+
+        /// <summary>The encrypt-then-MAC for inbound packets, or null for AEAD ciphers.</summary>
+        public ISshMac?              ReceiveMac       { get; }
+
         #endregion
 
         #region Constructor(s)
@@ -56,7 +62,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                    NegotiatedAlgorithms  Algorithms,
                                    Byte[]                ServerHostKey,
                                    SshTransportCipher    SendCipher,
-                                   SshTransportCipher    ReceiveCipher)
+                                   SshTransportCipher    ReceiveCipher,
+                                   ISshMac?              SendMac        = null,
+                                   ISshMac?              ReceiveMac     = null)
         {
             this.SessionId      = SessionId;
             this.ExchangeHash   = ExchangeHash;
@@ -64,6 +72,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             this.ServerHostKey  = ServerHostKey;
             this.SendCipher     = SendCipher;
             this.ReceiveCipher  = ReceiveCipher;
+            this.SendMac        = SendMac;
+            this.ReceiveMac     = ReceiveMac;
         }
 
         #endregion
@@ -71,11 +81,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #region Dispose()
 
-        /// <summary>Dispose the directional ciphers, wiping their key material.</summary>
+        /// <summary>Dispose the directional ciphers and MACs, wiping their key material.</summary>
         public void Dispose()
         {
             SendCipher.   Dispose();
             ReceiveCipher.Dispose();
+            SendMac?.     Dispose();
+            ReceiveMac?.  Dispose();
         }
 
         #endregion

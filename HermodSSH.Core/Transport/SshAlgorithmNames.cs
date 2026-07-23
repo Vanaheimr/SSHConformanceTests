@@ -53,11 +53,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         {
             public const String Aes256Gcm                = "aes256-gcm@openssh.com";
             public const String Aes128Gcm                = "aes128-gcm@openssh.com";
+            public const String Aes256Ctr                = "aes256-ctr";
+            public const String Aes192Ctr                = "aes192-ctr";
+            public const String Aes128Ctr                = "aes128-ctr";
         }
 
         /// <summary>MAC algorithm names (ignored when an AEAD cipher is selected).</summary>
         public static class Mac
         {
+            public const String HmacSha2_256Etm          = "hmac-sha2-256-etm@openssh.com";
+            public const String HmacSha2_512Etm          = "hmac-sha2-512-etm@openssh.com";
             public const String HmacSha2_256             = "hmac-sha2-256";
             public const String HmacSha2_512             = "hmac-sha2-512";
         }
