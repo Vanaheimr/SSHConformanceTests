@@ -23,6 +23,7 @@ submodules, conventions in `CLAUDE.md`) — implementation ⬜, next up: M0 (sol
 - Public-key authentication (Ed25519, ECDSA, RSA/rsa-sha2) — **essential**
 - OpenSSH certificates (`*-cert-v01@openssh.com`) for user **and** host auth, including a built-in mini-CA (issue certificates) — **essential**
 - Flexible client-side host key trust: explicit fingerprint pinning via options, known_hosts, host certificates, SSHFP DNS lookups (RFC 4255, DNSSEC-gated, pluggable resolver → Hermod DNS)
+- Server-side least-privilege authorization: per-account session permissions with ready-made SFTP profiles — upload-only (device log collection) and download-only (firmware distribution) — **essential**
 - Interoperability with OpenSSH (≥ 9.x, incl. Windows OpenSSH) and other major implementations as a hard acceptance criterion (full program in §11)
 - Hardening: strict KEX (Terrapin mitigation), DoS limits, constant-time comparisons, key zeroization
 - Fully `async`/`await`, `CancellationToken`, `IAsyncDisposable`, System.IO.Pipelines, Span/Memory
@@ -252,7 +253,12 @@ await using var server = new SshServer(new SshServerOptions {
     Authenticator = SshUserAuthenticator.Create(auth => auth
         .TrustUserCA(caPublicKey)                          // OpenSSH certificates
         .WithAuthorizedKeys(user => LoadAuthorizedKeys(user))
-        .WithPassword((user, pw, ct) => CheckPasswordAsync(user, pw, ct))),
+        .WithPassword((user, pw, ct) => CheckPasswordAsync(user, pw, ct))
+        .WithAccessProfile(user => user.Name switch {      // authorization: least privilege per account
+            "logdrop"  => SshAccessProfile.SftpUploadOnly  ("D:\\logs\\{username}", allowOverwrite: false),
+            "firmware" => SshAccessProfile.SftpDownloadOnly("D:\\firmware"),
+            _          => SshAccessProfile.Default
+        })),
     SftpFileSystem = new LocalSftpFileSystem(root: "C:\\SftpRoot", readOnly: false),
     ExecHandler    = HandleExecAsync
 });
@@ -298,6 +304,7 @@ Pluggable backends behind `ISshUserAuthenticator`; policy: allowed methods, meth
 
 - `authorized_keys` parser incl. options: `from=`, `command=`, `environment=`, `no-*`/`restrict`, `expiry-time=`, **`cert-authority`**, **`principals=`**
 - `TrustedUserCAKeys` equivalent + `AuthorizedPrincipals` mechanism
+- **Authorization result:** successful authentication yields an `SshAccessProfile` (via `WithAccessProfile`) attached to the session; effective rights = intersection of server profile ∧ `authorized_keys` options ∧ certificate critical options/extensions — the most restrictive source always wins (details in §7)
 
 ### Certificate validation (server, user cert) — mandatory check order
 1. Parse the format (`PROTOCOL.certkeys`: nonce, pubkey, serial, type, key id, principals, validity, critical options, extensions, signature key, signature)
@@ -332,6 +339,34 @@ Pluggable backends behind `ISshUserAuthenticator`; policy: allowed methods, meth
 - Request dispatcher with parallel processing but correct ordering guarantees per handle
 - **Path canonicalization & traversal protection** (`SSH_FXP_REALPATH`, `..`, symlinks, Windows specifics: ADS, reserved names, `\` vs `/`) — dedicated negative test suite
 - Version negotiation: we are v3; peers requesting v4–v6 must be answered correctly with v3 (see interop §11.3)
+
+### Access profiles (server-side least privilege)
+
+Authorization is a first-class server concept: authentication yields an `SshAccessProfile` per session
+(§6), and everything the session attempts is checked against it — **default-deny**, most restrictive
+source wins (server profile ∧ authorized_keys options ∧ certificate constraints).
+
+- **`SshAccessProfile`** — session-level rights: shell / exec / PTY / port & agent forwarding / subsystems,
+  optional forced command. The `SftpOnly…` presets deny everything except the SFTP subsystem — the
+  machine-account pattern for devices.
+- **`SftpPermissions`** — operation-level rights as `[Flags] SftpOperations` (Read, Write, Create, Overwrite,
+  Delete, Rename, List, Stat, SetAttrs, Mkdir, Rmdir, Symlink, …) plus a **per-profile root jail** with
+  `{username}` templating (e.g. `D:\logs\{username}` → per-device drop directories).
+- **Ready-made profiles** (the two driving use cases):
+  - `SshAccessProfile.SftpUploadOnly(root, allowOverwrite: false)` — **log upload**: allows `REALPATH`,
+    `OPEN(CREATE|WRITE)`, `WRITE`, `CLOSE` (+ optional `MKDIR`, `STAT`, tolerated `SETSTAT` on the session's
+    own handles); no reads, no directory listings (uploaders cannot see each other's files), no
+    delete/rename; overwriting existing files is optional (default off → `SSH_FX_FAILURE` on collision)
+  - `SshAccessProfile.SftpDownloadOnly(root)` — **firmware distribution**: allows `OPEN(READ)`, `READ`,
+    `CLOSE`, `OPENDIR`/`READDIR`, `STAT`, `REALPATH`; every mutating operation denied
+  - `SshAccessProfile.SftpReadWrite(root)` and `.Default` (full session per server options)
+- **Enforcement point:** one central gate in the SFTP request dispatcher — every packet type (incl.
+  extensions: `copy-data` = Read+Write, `fsync` = Write, `posix-rename` = Rename, `statvfs` = Stat,
+  `limits` = always allowed) maps to required `SftpOperations`; denied requests answer
+  `SSH_FX_PERMISSION_DENIED` and leave the session and all other handles fully intact.
+- **Client-reality check** (pinned by interop tests): the standard `sftp put` sequence
+  (`REALPATH → OPEN → WRITE → CLOSE [→ SETSTAT]`) must succeed under upload-only; common clients must see a
+  clean "Permission denied" on forbidden operations — never hangs or dropped connections.
 
 ---
 
@@ -372,6 +407,7 @@ Async tests with `[CancelAfter(…)]` + `CancellationToken` parameter, `Assert.T
 - Keys/formats: openssh-key-v1 (plain + bcrypt_pbkdf-encrypted), PKCS#8/PEM, RFC 4716, authorized_keys (all options), known_hosts (hashed, cert-authority, revoked, wildcards, ports)
 - **Certificate suite** (focus area): valid / expired / not-yet-valid / wrong principal / foreign CA / tampered signature / unknown critical option ⇒ reject / unknown extension ⇒ accept / `source-address` violation / user cert used as host cert (and vice versa) / CA key is itself a cert / revoked — each from both client and server perspective
 - SFTP: packet round-trips, attrs encoding, path canonicalization incl. traversal attacks
+- SFTP access profiles: table-driven permission matrix — every SFTP packet type (incl. extensions) × profile (upload-only, download-only, read-write, custom) → expected allow/deny; per-profile root jails against traversal; intersection logic (profile ∧ authorized_keys options ∧ cert constraints)
 
 ### 10.2 Loopback integration tests (no networking)
 Our client ↔ our server over an in-memory `IDuplexPipe`:
@@ -380,6 +416,7 @@ Our client ↔ our server over an in-memory `IDuplexPipe`:
 - Exec semantics against an in-process command handler: exit-status vs exit-signal, stderr separation, stdin piping, binary-safe round-trips, output larger than the channel window, cancellation tears down the handler, parallel exec channels on one session
 - Rekey mid-transfer (initiated from both sides), large transfers (> 1 GiB trigger via FakeTimeProvider/byte counters), cancellation at every point, abrupt disconnects, parallel channels
 - SFTP round-trips on temp directories + in-memory FS, aborts mid-transfer, resume
+- Access profiles end-to-end: an upload-only session can create + write, but READ/READDIR/REMOVE/RENAME return `SSH_FX_PERMISSION_DENIED`; download-only as the mirror image; denied operations leave the session and open handles healthy
 - Robustness: corrupted/truncated/oversized packets, wrong MAC, messages in the wrong state, Terrapin scenario (injected messages before NEWKEYS ⇒ abort)
 
 ### 10.3 Definition of Done per feature
@@ -469,7 +506,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
    - Windows sshd as exec target (cmd.exe/PowerShell semantics, different quoting) — smoke level
 9. **Known global/channel-request quirks:** `winadj@putty.projects.tartarus.org` (must answer CHANNEL_FAILURE, not die), `no-more-sessions@openssh.com`, `hostkeys-00@openssh.com` after auth, `keepalive@openssh.com` — respond correctly to unknown requests with/without `want_reply`
 10. **Rekey:** forced rekeys (`RekeyLimit 512K` on the peer / byte trigger on ours) mid-transfer, both directions
-11. **SFTP:** against OpenSSH `sftp`/`sftp-server`, `psftp`, WinSCP, curl, AsyncSSH (which will ask for v4–v6 → must settle on v3 correctly); extensions (`limits@`, `posix-rename@`, `statvfs@`, `fsync@`, `copy-data`); large files, thousands of small files, weird filenames (UTF-8, spaces, quotes, newlines), resume, abort mid-transfer
+11. **SFTP:** against OpenSSH `sftp`/`sftp-server`, `psftp`, WinSCP, curl, AsyncSSH (which will ask for v4–v6 → must settle on v3 correctly); extensions (`limits@`, `posix-rename@`, `statvfs@`, `fsync@`, `copy-data`); large files, thousands of small files, weird filenames (UTF-8, spaces, quotes, newlines), resume, abort mid-transfer; **access profiles against real clients**: upload-only accepts `put` from the `sftp` CLI while `get`/`ls`/`rm` are cleanly denied, download-only serves `get`/curl while uploads are denied, WinSCP/`psftp` handle denials gracefully
 12. **Disconnect semantics:** clean disconnect codes both ways; behavior on abrupt TCP resets
 13. **Keepalives/timeouts:** `ServerAliveInterval`-style traffic must not confuse us
 
@@ -514,7 +551,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 | **M4** | ⬜ | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716), authorized_keys/known_hosts, server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips | L |
 | **M5** | ⬜ | **Certificates**: parser/validator (check chain from §6), `CertificateBuilder` (mini-CA), client cert auth, server CA trust + principals + critical options, host certificates, revocation list | full §11.4 cert program vs OpenSSH (`ssh-keygen -L` validates our certs) + AsyncSSH as second validator; full negative suite | L |
 | **M6** | ⬜ | Connection layer: channels + flow control, `exec`/`shell`/`pty-req`/`env`/`exit-status`/`window-change`, subsystem dispatch, keepalives; **`SshCommand` API** (capture + streaming, stdin, env, PTY toggle, exit-status/exit-signal, `SshCommandLine.Quote`) | remote-exec E2E suite (§11.3 #8) green vs WSL/container sshds; `ssh` CLI and `plink` execute against our server (incl. winadj quirk pinned) | L |
-| **M7** | ⬜ | **SFTP** v3 client + server + extensions, pipelining, `ISftpFileSystem` (local with root jail, in-memory) | `sftp` CLI + `psftp` + curl against our server; our client vs `sftp-server` across the OpenSSH version spread; v4–v6 downgrade vs AsyncSSH; throughput benchmark; traversal suite green | L |
+| **M7** | ⬜ | **SFTP** v3 client + server + extensions, pipelining, `ISftpFileSystem` (local with root jail, in-memory); **access profiles** (`SshAccessProfile`/`SftpPermissions`, upload-only & download-only presets, central default-deny gate) | `sftp` CLI + `psftp` + curl against our server; our client vs `sftp-server` across the OpenSSH version spread; v4–v6 downgrade vs AsyncSSH; profile permission matrix green incl. real-client denial behavior; throughput benchmark; traversal suite green | L |
 | **M8** | ⬜ | Forwarding (`direct-tcpip`, `tcpip-forward`), ssh-agent client, **SSHFP DNS** (`ISshfpResolver` + Hermod-DNS adapter, `SshfpTrust` modes, zone-record generator), `hostkeys-00@openssh.com` (optional) | loopback + interop proof (OpenSSH agent on Windows pipe and WSL socket); SSHFP generator matches `ssh-keygen -r`; resolver E2E with DNSSEC on/off | M |
 | **M9** | ⬜ | Hardening + full interop program: DoS limits, robustness/fuzz-light suite, timing review, security review checklist; Tier 2 matrix automated nightly, quirk registry + interop matrix report generator | all gates green; nightly matrix job runs; `docs/INTEROP-MATRIX.md` generated | M–L |
 | **M10** | ⬜ | Polish: complete XML docs, README + samples, demo CLI (`exec` = log in / run command / capture output / log out, `sftp` transfers, `serve` = demo server mapping exec to local processes), optional NuGet packaging, BenchmarkDotNet baseline | release v1 | S–M |
