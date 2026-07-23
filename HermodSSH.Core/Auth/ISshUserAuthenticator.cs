@@ -49,6 +49,25 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         ValueTask<Boolean> AuthorizePublicKeyAsync(SshPublicKeyAuthRequest  Request,
                                                    CancellationToken        CancellationToken = default);
 
+        /// <summary>Whether the given password authenticates the user (RFC 4252 §8). Default: no.</summary>
+        ValueTask<Boolean> AuthorizePasswordAsync(String             Username,
+                                                  String             Password,
+                                                  CancellationToken  CancellationToken = default)
+            => ValueTask.FromResult(false);
+
+        /// <summary>The keyboard-interactive factor for the user (e.g. a TOTP prompt), or null. Default: none.</summary>
+        ISshKeyboardInteractiveFactor? GetKeyboardInteractive(String Username)
+            => null;
+
+        /// <summary>
+        /// The methods still required for <paramref name="Username"/> given the methods already completed —
+        /// this is what drives multi-factor chains via partial success. An empty result means the user is
+        /// fully authenticated. Default: any single successful method completes authentication.
+        /// </summary>
+        IReadOnlyList<String> RemainingMethods(String                Username,
+                                               IReadOnlySet<String>  CompletedMethods)
+            => [];
+
     }
 
 

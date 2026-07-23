@@ -7,7 +7,7 @@ Interoperability with OpenSSH and a broad set of third-party implementations is 
 hard acceptance criterion (see §11).
 
 **Status legend:** ✅ done · 🔶 partial · ⬜ open — markers are kept current as implementation proceeds.
-**Current state (2026-07-23):** **M0 ✅**, **M1 ✅**, **M2 ✅**, **M3 ✅ (post-quantum hybrid KEX, OpenSSH-validated)**. Core/Client/Server
+**Current state (2026-07-24):** **M0 ✅**, **M1 ✅**, **M2 ✅**, **M3 ✅**, **M4 ✅ (auth + keys, OpenSSH-validated)**. Core/Client/Server
 split (net10.0, GraphDefined conventions, BouncyCastle via submodules). The **modern transport works
 end-to-end and interops with real OpenSSH**: version exchange → KEXINIT negotiation → curve25519-sha256 →
 ssh-ed25519 host-key signature → KDF → NEWKEYS → aes256-gcm, both roles, over an in-memory `IDuplexPipe`
@@ -29,7 +29,15 @@ via `TryHandleExtInfo`). Full cipher, KEX **and** host-key matrices green;
 **OpenSSH-validated** across chacha20-poly1305/gcm/ctr-etm × curve25519/nistp256/nistp521/**group14/group16** ×
 ed25519/ecdsa-nistp256/rsa-sha2-512, plus real `ssh` receiving our EXT_INFO / server-sig-algs. **125 tests
 green.** (Non-ETM E&M HMACs intentionally still omitted — EtM only.)
-**M4 🔶 in progress (auth + keys):** **public-key authentication** landed (RFC 4252): the `ssh-userauth`
+**M4 ✅ complete (auth + keys):** on top of everything below, **password** (RFC 4252 §8) and
+**keyboard-interactive** (RFC 4256) authentication, **method chaining via partial success**, and
+**TOTP 2FA** (`publickey,keyboard-interactive`) with a **standard RFC 6238** validator (RFC 6238 test
+vectors green; base32 secret, ±1-step skew, single-use replay cache, `otpauth://` enrolment URI) —
+composed through `SshAuthenticationPolicy` (`WithPublicKey`/`WithPassword`/`WithSecondFactor`). A **typed
+audit stream** (`SshAuditEvent` records + `ISshAuditSink`) emits banner/auth-method/success/failure events.
+(Note: Hermod's `TOTPGenerator` is a different e-mobility construction, so TOTP uses the standard RFCs, not
+that type.) **179 tests green.**
+**M4 (public-key foundation):** **public-key authentication** landed (RFC 4252): the `ssh-userauth`
 service request/accept, the `publickey` method with the **query-then-sign** flow, banner and
 success/failure handling — driven by `UserAuthentication` over `SshTransport`, with a pluggable
 `ISshUserAuthenticator` (server) and `SshSignature.Verify` reused for the client-signature check. The
@@ -419,15 +427,14 @@ policy is `publickey,keyboard-interactive`: a valid key/cert gets *partial* succ
 
 - **`WithSecondFactor(user => …)`** attaches an `ISshSecondFactor` requirement per account (or per access
   profile — e.g. only the `admin` profile needs it); accounts without it keep single-factor publickey
-- **`ISshSecondFactor` / `ITotpValidator`** — pluggable; two built-in providers:
-  1. **RFC 6238 standard TOTP** — base32 shared secret, 6/8 digits, HMAC-SHA1/256/512, 30 s step,
-     ±1 step skew tolerance; compatible with Google Authenticator / Authy / YubiKey OATH / KeePassXC.
-     Enrollment helper emits an `otpauth://totp/HermodSSH:user?secret=…&issuer=…` URI + QR for provisioning
-  2. **Hermod session-bound TOTP** — reuses `libs/Hermod`'s `TOTPGenerator`, passing the **SSH session
-     identifier** (exchange hash H of the first KEX) as binding material (the slot Hermod uses for
-     TLS-exporter binding). A code is then valid *only inside the session it was generated for* →
-     phishing/relay-resistant; ideal for closed GraphDefined device fleets that share the library
-- **Hardening:** replay cache (a code is single-use within its window), attempt rate-limiting shared with
+- **`ISshKeyboardInteractiveFactor` / `Totp`** — pluggable; the built-in provider is **standard RFC 6238
+  TOTP** ✅ — base32 shared secret, 6/8 digits, HMAC-SHA1/256/512, 30 s step, ±1 step skew tolerance;
+  compatible with Google Authenticator / Authy / YubiKey OATH / KeePassXC. `Totp.ProvisioningUri(...)` emits
+  the `otpauth://totp/HermodSSH:user?secret=…&issuer=…` URI for QR provisioning. `TotpKeyboardInteractive`
+  adapts it to the keyboard-interactive factor. (An SSH-session-bound variant could be added later as a
+  standard HMAC-over-*H* construction — **not** via Hermod's `TOTPGenerator`, which is a separate e-mobility
+  algorithm with a different alphabet.)
+- **Hardening:** replay cache (a code is single-use within its window) ✅, attempt rate-limiting shared with
   `MaxAuthTries`, all comparisons `FixedTimeEquals`, clock via `TimeProvider` (skew + tests deterministic),
   secrets zeroized; the prompt/response text is excluded from session recording (§7)
 - Interop: real OpenSSH `ssh` renders our keyboard-interactive prompt and submits the code; our client can
@@ -839,7 +846,7 @@ Feature columns reflect status at planning time (July 2026) — **re-verify when
 | **M1** | ✅ | Minimal modern transport: version exchange, KEXINIT negotiation, `curve25519-sha256` + `ssh-ed25519` + `aes256-gcm@openssh.com`, NEWKEYS, KDF, **strict KEX from day one**, **dual-stack IPv6 listener** (`SshTcp`/`SshTcpListener`), OpenSSH interop test — loopback both roles ✅, TCP IPv4 + `::1` ✅, real OpenSSH client ↔ our server decrypts `SERVICE_REQUEST` ✅ (KEX+KDF+GCM match byte-for-byte). Residual interop breadth (our client ↔ real `sshd`; full WSL harness) tracked in the interop program | loopback handshake green (IPv4 + `::1`); handshake vs OpenSSH ✅ (server role) | L |
 | **M2** | ✅ | Transport complete: rekeying, `chacha20-poly1305@openssh.com`, AES-CTR + EtM HMACs, `ecdh-nistp*`, `group14/16`, `rsa-sha2`, `ecdsa`, ext-info/`server-sig-algs` — **all done ✅**: chacha20-poly1305 (default), AES-CTR + HMAC-SHA2-ETM, ecdh-sha2-nistp256/384/521, diffie-hellman-group14-sha256/group16-sha512, ecdsa/rsa-sha2 host keys, rekeying (`SshTransport` + `RekeyAsync`, strict-KEX seq reset, stable session id), ext-info/server-sig-algs (`ExtInfoMessage`, server emits EXT_INFO after NEWKEYS). Cipher + KEX + host-key matrices green; OpenSSH interop across chacha20/gcm/ctr-etm × curve25519/nistp256/nistp521/group14/group16 × ed25519/ecdsa-nistp256/rsa-sha2-512, rekey loopback (both roles × 3 cipher families + peer-initiated), real `ssh` receives our EXT_INFO/server-sig-algs. (Non-ETM E&M HMACs intentionally omitted.) | full loopback matrix green; cipher/MAC sub-matrix vs OpenSSH ✅ | M–L |
 | **M3** | ✅ | **PQ hybrid**: `mlkem768x25519-sha256` (BCL `MLKem`) + `sntrup761x25519-sha512` (+`@openssh.com`, BC sntrup761); `SshKeyExchange` generalised to client/server model for the asymmetric KEM flow, `SshKem` abstraction, **K-as-string encoding** (the interop trap). OpenSSH-validated: real `ssh` 10.2p1 completes both hybrids with our server through NEWKEYS (BC sntrup761 matches byte-for-byte); interop auto-picks a PQ-capable ssh (skips on Win-bundled 9.5). Loopback + unit + interop green | automated interop vs OpenSSH ≥ 9.9 (server role ✅; client role + TinySSH sntrup761 grow with the interop program) | M |
-| **M4** | 🔶 | **Auth + keys**: publickey flow both sides (all key types), key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM, RFC 4716) + **`SshKeyGenerator`** (all key types, first-run host-key generation), authorized_keys/known_hosts (incl. **notBefore/notAfter validity windows** on authorized keys), server auth pipeline, password/keyboard-interactive, host key policies (explicit fingerprint pinning via `SshClientOptions`, known_hosts, TOFU chain), **TOTP 2FA** (`publickey,keyboard-interactive`, RFC 6238 + Hermod session-bound, replay cache), **auth banner**, **typed audit stream** (core `SshAuditEvent` model + `ISshAuditSink`, auth/transport events) | interop auth both roles with ssh-keygen material; Dropbear + Paramiko/AsyncSSH auth round-trips; RFC 6238 vectors green + real `ssh` completes a TOTP login and shows our banner; audit events assert correct in loopback | L |
+| **M4** | ✅ | **Auth + keys**: publickey (query-then-sign, server-sig-algs), **password**, **keyboard-interactive**, **TOTP 2FA** (`publickey,keyboard-interactive`, standard **RFC 6238**, replay cache, `otpauth://`), method chaining via partial success, **auth banner**, **typed audit stream** (`SshAuditEvent` + `ISshAuditSink`); key formats (openssh-key-v1 incl. bcrypt_pbkdf, PKCS#8/PEM RSA/ECDSA, RFC 4716) + **`SshKeyGenerator`** (+ first-run host key), authorized_keys/known_hosts (incl. **notBefore/notAfter validity windows**), host-key policy chain (fingerprint pinning, known_hosts, TOFU). OpenSSH-validated: real `ssh` auths with ssh-keygen ed25519/ecdsa/rsa keys; ssh-keygen reads our keys & we read its bcrypt-encrypted keys. **179 tests green.** (Remaining for later: our client ↔ real `sshd`, ssh-agent, Ed25519-PKCS#8, cert auth → M5.) | done ✅ (loopback + ssh-keygen/ssh interop) | L |
 | **M5** | ⬜ | **Certificates**: parser/validator (check chain from §6), `CertificateBuilder` (mini-CA), client cert auth, server CA trust + principals + critical options, host certificates, revocation list | full §11.4 cert program vs OpenSSH (`ssh-keygen -L` validates our certs) + AsyncSSH as second validator; full negative suite | L |
 | **M6** | ⬜ | Connection layer: channels + flow control, `exec`/`shell`/`pty-req`/`env`/`exit-status`/`window-change`, subsystem dispatch, keepalives, **`SSH_MSG_PING`/`PONG` (`ping@openssh.com`)**; **`SshCommand` API** (capture + streaming, stdin, env, PTY toggle, exit-status/exit-signal, `SshCommandLine.Quote`); **session recording** for PTY/exec (asciicast v2 + sidecar, redaction), **keepalive/dead-peer + idle timeouts** (`ClientAlive*`/`ServerAlive*`, both roles) | remote-exec E2E suite (§11.3 #8) green vs WSL/container sshds; `ssh` CLI and `plink` execute against our server (incl. winadj quirk pinned); asciicast validates with `asciinema play`; PING chaff from OpenSSH ≥ 9.5 tolerated; dead-peer/idle timeouts fire correctly under FakeTimeProvider | L |
 | **M7** | ⬜ | **SFTP** v3 client + server + extensions, pipelining, `ISftpFileSystem` (local with root jail, in-memory); **access profiles** (`SshAccessProfile`/`SftpPermissions`, upload-only & download-only presets, central default-deny gate), **quotas & bandwidth limits** (`SftpQuota`: size caps, tree quota, token-bucket throttling) | `sftp` CLI + `psftp` + curl against our server; our client vs `sftp-server` across the OpenSSH version spread; v4–v6 downgrade vs AsyncSSH; profile permission matrix green incl. real-client denial behavior; **quota/bandwidth tests green** (caps enforced, throttle rate accurate, partial uploads cleaned up); **SFTP session transcripts** (structured op log, tied to recording); throughput benchmark; traversal suite green | L |

@@ -43,6 +43,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>The <c>publickey</c> authentication method (RFC 4252 §7).</summary>
         public const String PublicKeyMethod     = "publickey";
 
+        /// <summary>The <c>password</c> authentication method (RFC 4252 §8).</summary>
+        public const String PasswordMethod       = "password";
+
+        /// <summary>The <c>keyboard-interactive</c> authentication method (RFC 4256) — carries TOTP prompts.</summary>
+        public const String KeyboardInteractiveMethod = "keyboard-interactive";
+
         /// <summary>The <c>none</c> method — used only to probe which methods the server will accept.</summary>
         public const String NoneMethod          = "none";
 
@@ -64,18 +70,26 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                                                              ISshUserAuthenticator  Authenticator,
                                                                              String?                Banner             = null,
                                                                              Int32                  MaxAuthTries       = 6,
+                                                                             ISshAuditSink?         AuditSink          = null,
+                                                                             TimeProvider?          TimeProvider       = null,
                                                                              CancellationToken      CancellationToken  = default)
         {
+
+            var clock = TimeProvider ?? System.TimeProvider.System;
 
             // 1. Wait for SERVICE_REQUEST("ssh-userauth") — skipping a client-sent EXT_INFO.
             await ExpectServiceRequestAsync(Transport, CancellationToken).ConfigureAwait(false);
             await Transport.SendPacketAsync(BuildServiceAccept(AuthService), CancellationToken).ConfigureAwait(false);
 
             if (Banner is not null)
+            {
                 await Transport.SendPacketAsync(BuildBanner(Banner), CancellationToken).ConfigureAwait(false);
+                await EmitAsync(AuditSink, new BannerSentEvent(clock.GetUtcNow()), CancellationToken).ConfigureAwait(false);
+            }
 
-            // 2. Process authentication requests.
-            var failedAttempts = 0;
+            // 2. Process authentication requests, tracking the methods completed for a multi-factor chain.
+            var failedAttempts   = 0;
+            var completedMethods = new HashSet<String>(StringComparer.Ordinal);
 
             while (true)
             {
@@ -83,47 +97,100 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                 var payload  = await Transport.ReceivePacketAsync(CancellationToken).ConfigureAwait(false);
                 var request  = ParseAuthRequest(payload);   // fully parse before any await (ref struct)
 
-                if (request.Method == PublicKeyMethod)
+                var (succeeded, isQueryOnly) = request.Method switch {
+                    PublicKeyMethod            => await EvaluatePublicKeyAsync(Transport, Authenticator, request, CancellationToken).ConfigureAwait(false),
+                    PasswordMethod             => (await Authenticator.AuthorizePasswordAsync(request.Username, request.Password, CancellationToken).ConfigureAwait(false), false),
+                    KeyboardInteractiveMethod  => (await EvaluateKeyboardInteractiveAsync(Transport, Authenticator, request.Username, CancellationToken).ConfigureAwait(false), false),
+                    _                          => (false, false)
+                };
+
+                if (isQueryOnly)
+                    continue;   // a publickey probe answered with PK_OK — no attempt consumed
+
+                if (succeeded)
                 {
 
-                    var authorized = await Authenticator.AuthorizePublicKeyAsync(
-                                             new SshPublicKeyAuthRequest(request.Username, request.Algorithm, request.PublicKeyBlob),
-                                             CancellationToken).ConfigureAwait(false);
+                    completedMethods.Add(request.Method);
+                    await EmitAsync(AuditSink, new AuthMethodSucceededEvent(clock.GetUtcNow(), request.Username, request.Method), CancellationToken).ConfigureAwait(false);
 
-                    if (!request.HasSignature)
-                    {
-                        // Query: tell the client whether this key would be acceptable, so it only signs then.
-                        if (authorized)
-                        {
-                            await Transport.SendPacketAsync(BuildPublicKeyOk(request.Algorithm, request.PublicKeyBlob), CancellationToken).ConfigureAwait(false);
-                            continue;   // no failed attempt — the client will follow up with a signature
-                        }
-                    }
-                    else
-                    {
-                        var signedData = BuildPublicKeySignedData(Transport.SessionId, request.Username, request.Algorithm, request.PublicKeyBlob);
+                    var remaining = Authenticator.RemainingMethods(request.Username, completedMethods);
 
-                        if (authorized && SshSignature.Verify(request.PublicKeyBlob, signedData, request.Signature))
-                        {
-                            await Transport.SendPacketAsync(new Byte[] { (Byte) SshMessageNumber.UserAuthSuccess }, CancellationToken).ConfigureAwait(false);
-                            return new SshAuthResult(request.Username, PublicKeyMethod);
-                        }
+                    if (remaining.Count == 0)
+                    {
+                        await Transport.SendPacketAsync(new Byte[] { (Byte) SshMessageNumber.UserAuthSuccess }, CancellationToken).ConfigureAwait(false);
+                        await EmitAsync(AuditSink, new AuthenticationSucceededEvent(clock.GetUtcNow(), request.Username, [.. completedMethods]), CancellationToken).ConfigureAwait(false);
+                        return new SshAuthResult(request.Username, request.Method);
                     }
+
+                    // A factor succeeded but more are required — partial success (RFC 4252).
+                    await Transport.SendPacketAsync(BuildFailure(remaining, PartialSuccess: true), CancellationToken).ConfigureAwait(false);
+                    continue;
 
                 }
 
-                // Anything else (none, unknown method, unauthorized key, bad signature) is a failure.
-                await Transport.SendPacketAsync(BuildFailure(Authenticator.OfferedMethods), CancellationToken).ConfigureAwait(false);
+                if (request.Method != NoneMethod)
+                    await EmitAsync(AuditSink, new AuthMethodFailedEvent(clock.GetUtcNow(), request.Username, request.Method, "rejected"), CancellationToken).ConfigureAwait(false);
 
-                // "none" and query probes don't burn the budget; a real failed attempt does.
+                await Transport.SendPacketAsync(BuildFailure(Authenticator.OfferedMethods, PartialSuccess: false), CancellationToken).ConfigureAwait(false);
+
+                // "none" probes don't burn the budget; a real failed attempt does.
                 if (request.Method != NoneMethod)
                 {
                     failedAttempts++;
                     if (failedAttempts >= MaxAuthTries)
+                    {
+                        await EmitAsync(AuditSink, new AuthenticationFailedEvent(clock.GetUtcNow(), request.Username, failedAttempts), CancellationToken).ConfigureAwait(false);
                         throw new SshAuthenticationException($"Authentication failed after {failedAttempts} attempts.");
+                    }
                 }
 
             }
+
+        }
+
+        private static ValueTask EmitAsync(ISshAuditSink? Sink, SshAuditEvent Event, CancellationToken CancellationToken)
+            => Sink?.WriteAsync(Event, CancellationToken) ?? ValueTask.CompletedTask;
+
+        #endregion
+
+        #region (private) server method evaluation
+
+        // Returns (succeeded, isQueryOnly). A publickey query (no signature) is answered with PK_OK here.
+        private static async ValueTask<(Boolean Succeeded, Boolean QueryOnly)> EvaluatePublicKeyAsync(SshTransport Transport, ISshUserAuthenticator Authenticator, AuthRequest Request, CancellationToken CancellationToken)
+        {
+
+            var authorized = await Authenticator.AuthorizePublicKeyAsync(
+                                     new SshPublicKeyAuthRequest(Request.Username, Request.Algorithm, Request.PublicKeyBlob),
+                                     CancellationToken).ConfigureAwait(false);
+
+            if (!Request.HasSignature)
+            {
+                if (authorized)
+                {
+                    await Transport.SendPacketAsync(BuildPublicKeyOk(Request.Algorithm, Request.PublicKeyBlob), CancellationToken).ConfigureAwait(false);
+                    return (false, true);
+                }
+                return (false, false);
+            }
+
+            var signedData = BuildPublicKeySignedData(Transport.SessionId, Request.Username, Request.Algorithm, Request.PublicKeyBlob);
+            return (authorized && SshSignature.Verify(Request.PublicKeyBlob, signedData, Request.Signature), false);
+
+        }
+
+        private static async ValueTask<Boolean> EvaluateKeyboardInteractiveAsync(SshTransport Transport, ISshUserAuthenticator Authenticator, String Username, CancellationToken CancellationToken)
+        {
+
+            var factor = Authenticator.GetKeyboardInteractive(Username);
+            if (factor is null)
+                return false;
+
+            await Transport.SendPacketAsync(BuildInfoRequest(factor), CancellationToken).ConfigureAwait(false);
+
+            var responsePayload = await Transport.ReceivePacketAsync(CancellationToken).ConfigureAwait(false);
+            var responses       = ParseInfoResponse(responsePayload);
+
+            return await factor.ValidateAsync(responses, CancellationToken).ConfigureAwait(false);
 
         }
 
@@ -152,30 +219,87 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                                                                 Action<String, String>?  BannerCallback  = null,
                                                                                 CancellationToken        CancellationToken = default)
         {
+            await EnsureAuthServiceAsync(Transport, BannerCallback, CancellationToken).ConfigureAwait(false);
+            return await TryPublicKeyAsync(Transport, Username, Key, Algorithm, BannerCallback, CancellationToken).ConfigureAwait(false) == AttemptOutcome.Success;
+        }
 
-            // 1. Request the authentication service and wait for its acceptance.
-            await Transport.SendPacketAsync(BuildServiceRequest(AuthService), CancellationToken).ConfigureAwait(false);
-            await ExpectServiceAcceptAsync(Transport, BannerCallback, CancellationToken).ConfigureAwait(false);
+        #endregion
 
-            var algorithm      = Algorithm ?? ChooseAlgorithm(Key, Transport.PeerServerSignatureAlgorithms);
-            var publicKeyBlob  = Key.PublicKeyBlob;
+        #region ClientPasswordAuthenticateAsync(Transport, Username, Password, …)
 
-            // 2. Query: offer the key without a signature; the server replies PK_OK if it would accept it.
-            await Transport.SendPacketAsync(BuildPublicKeyRequest(Username, algorithm, publicKeyBlob, Signature: null), CancellationToken).ConfigureAwait(false);
+        /// <summary>Run the client side of <c>password</c> authentication (RFC 4252 §8).</summary>
+        public static async ValueTask<Boolean> ClientPasswordAuthenticateAsync(SshTransport             Transport,
+                                                                               String                   Username,
+                                                                               String                   Password,
+                                                                               Action<String, String>?  BannerCallback  = null,
+                                                                               CancellationToken        CancellationToken = default)
+        {
+            await EnsureAuthServiceAsync(Transport, BannerCallback, CancellationToken).ConfigureAwait(false);
+            return await TryPasswordAsync(Transport, Username, Password, BannerCallback, CancellationToken).ConfigureAwait(false) == AttemptOutcome.Success;
+        }
 
-            var queryReply = await ReadAuthReplyAsync(Transport, BannerCallback, CancellationToken).ConfigureAwait(false);
-            if (queryReply == (Byte) SshMessageNumber.UserAuthFailure)
-                return false;
-            if (queryReply != (Byte) SshMessageNumber.UserAuth60)
-                throw new SshWireException($"Expected SSH_MSG_USERAUTH_PK_OK (60), but found message number {queryReply}.");
+        #endregion
 
-            // 3. Sign the session-bound request and send it for real.
-            var signedData  = BuildPublicKeySignedData(Transport.SessionId, Username, algorithm, publicKeyBlob);
-            var signature   = Key.Sign(algorithm, signedData);
-            await Transport.SendPacketAsync(BuildPublicKeyRequest(Username, algorithm, publicKeyBlob, signature), CancellationToken).ConfigureAwait(false);
+        #region ClientKeyboardInteractiveAuthenticateAsync(Transport, Username, Responder, …)
 
-            var reply = await ReadAuthReplyAsync(Transport, BannerCallback, CancellationToken).ConfigureAwait(false);
-            return reply == (Byte) SshMessageNumber.UserAuthSuccess;
+        /// <summary>
+        /// Run the client side of <c>keyboard-interactive</c> authentication (RFC 4256): the
+        /// <paramref name="Responder"/> answers each challenge (e.g. supplies a TOTP code).
+        /// </summary>
+        public static async ValueTask<Boolean> ClientKeyboardInteractiveAuthenticateAsync(SshTransport                                                                Transport,
+                                                                                          String                                                                      Username,
+                                                                                          Func<SshKeyboardInteractiveChallenge, CancellationToken, ValueTask<String[]>>  Responder,
+                                                                                          Action<String, String>?                                                     BannerCallback  = null,
+                                                                                          CancellationToken                                                           CancellationToken = default)
+        {
+            await EnsureAuthServiceAsync(Transport, BannerCallback, CancellationToken).ConfigureAwait(false);
+            return await TryKeyboardInteractiveAsync(Transport, Username, Responder, BannerCallback, CancellationToken).ConfigureAwait(false) == AttemptOutcome.Success;
+        }
+
+        #endregion
+
+        #region ClientAuthenticateAsync(Transport, Username, Keys?, Password?, KeyboardInteractive?, …)
+
+        /// <summary>
+        /// Drive client authentication across methods, handling multi-factor chains via partial success:
+        /// try each public key (query-then-sign), and when the server signals partial success (2FA) or when
+        /// no key succeeds, continue with keyboard-interactive and/or password as available.
+        /// </summary>
+        public static async ValueTask<Boolean> ClientAuthenticateAsync(SshTransport                                                                  Transport,
+                                                                       String                                                                        Username,
+                                                                       IEnumerable<ISshHostKey>?                                                     Keys                 = null,
+                                                                       String?                                                                       Password             = null,
+                                                                       Func<SshKeyboardInteractiveChallenge, CancellationToken, ValueTask<String[]>>?  KeyboardInteractive  = null,
+                                                                       Action<String, String>?                                                       BannerCallback       = null,
+                                                                       CancellationToken                                                             CancellationToken     = default)
+        {
+
+            await EnsureAuthServiceAsync(Transport, BannerCallback, CancellationToken).ConfigureAwait(false);
+
+            var partial = false;
+
+            // Phase 1: public keys (query-then-sign).
+            foreach (var key in Keys ?? [])
+            {
+                var outcome = await TryPublicKeyAsync(Transport, Username, key, null, BannerCallback, CancellationToken).ConfigureAwait(false);
+                if (outcome == AttemptOutcome.Success)         return true;
+                if (outcome == AttemptOutcome.PartialSuccess) { partial = true; break; }
+            }
+
+            // Phase 2: a second factor after partial success (2FA), or a fallback method otherwise.
+            if (KeyboardInteractive is not null)
+            {
+                var outcome = await TryKeyboardInteractiveAsync(Transport, Username, KeyboardInteractive, BannerCallback, CancellationToken).ConfigureAwait(false);
+                if (outcome == AttemptOutcome.Success) return true;
+            }
+
+            if (!partial && Password is not null)
+            {
+                var outcome = await TryPasswordAsync(Transport, Username, Password, BannerCallback, CancellationToken).ConfigureAwait(false);
+                if (outcome == AttemptOutcome.Success) return true;
+            }
+
+            return false;
 
         }
 
@@ -207,8 +331,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             }
         }
 
-        private static async ValueTask ExpectServiceAcceptAsync(SshTransport Transport, Action<String, String>? BannerCallback, CancellationToken CancellationToken)
+        // The client sends SERVICE_REQUEST and waits for SERVICE_ACCEPT (surfacing banners / ext-info).
+        private static async ValueTask EnsureAuthServiceAsync(SshTransport Transport, Action<String, String>? BannerCallback, CancellationToken CancellationToken)
         {
+
+            await Transport.SendPacketAsync(BuildServiceRequest(AuthService), CancellationToken).ConfigureAwait(false);
+
             while (true)
             {
 
@@ -232,10 +360,90 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                 throw new SshWireException($"Expected SSH_MSG_SERVICE_ACCEPT (6), but found message number {(Byte) message}.");
 
             }
+
         }
 
-        // Read the next authentication reply, transparently surfacing any banner messages.
-        private static async ValueTask<Byte> ReadAuthReplyAsync(SshTransport Transport, Action<String, String>? BannerCallback, CancellationToken CancellationToken)
+        #endregion
+
+        #region (private) client method attempts
+
+        private enum AttemptOutcome { Success, PartialSuccess, Failure }
+
+        private static async ValueTask<AttemptOutcome> TryPublicKeyAsync(SshTransport Transport, String Username, ISshHostKey Key, String? Algorithm, Action<String, String>? BannerCallback, CancellationToken CancellationToken)
+        {
+
+            var algorithm      = Algorithm ?? ChooseAlgorithm(Key, Transport.PeerServerSignatureAlgorithms);
+            var publicKeyBlob  = Key.PublicKeyBlob;
+
+            // Query: offer the key unsigned; the server answers PK_OK (would accept) or FAILURE.
+            await Transport.SendPacketAsync(BuildPublicKeyRequest(Username, algorithm, publicKeyBlob, Signature: null), CancellationToken).ConfigureAwait(false);
+
+            var (queryReply, _) = await ReadReplyAsync(Transport, BannerCallback, CancellationToken).ConfigureAwait(false);
+            if (queryReply == (Byte) SshMessageNumber.UserAuthFailure)
+                return AttemptOutcome.Failure;
+            if (queryReply != (Byte) SshMessageNumber.UserAuth60)
+                throw new SshWireException($"Expected SSH_MSG_USERAUTH_PK_OK (60), but found message number {queryReply}.");
+
+            // Sign the session-bound request and send it for real.
+            var signedData = BuildPublicKeySignedData(Transport.SessionId, Username, algorithm, publicKeyBlob);
+            var signature  = Key.Sign(algorithm, signedData);
+            await Transport.SendPacketAsync(BuildPublicKeyRequest(Username, algorithm, publicKeyBlob, signature), CancellationToken).ConfigureAwait(false);
+
+            return await ReadOutcomeAsync(Transport, BannerCallback, CancellationToken).ConfigureAwait(false);
+
+        }
+
+        private static async ValueTask<AttemptOutcome> TryPasswordAsync(SshTransport Transport, String Username, String Password, Action<String, String>? BannerCallback, CancellationToken CancellationToken)
+        {
+            await Transport.SendPacketAsync(BuildPasswordRequest(Username, Password), CancellationToken).ConfigureAwait(false);
+            return await ReadOutcomeAsync(Transport, BannerCallback, CancellationToken).ConfigureAwait(false);
+        }
+
+        private static async ValueTask<AttemptOutcome> TryKeyboardInteractiveAsync(SshTransport Transport, String Username, Func<SshKeyboardInteractiveChallenge, CancellationToken, ValueTask<String[]>> Responder, Action<String, String>? BannerCallback, CancellationToken CancellationToken)
+        {
+
+            await Transport.SendPacketAsync(BuildKeyboardInteractiveRequest(Username), CancellationToken).ConfigureAwait(false);
+
+            while (true)
+            {
+
+                var payload = await Transport.ReceivePacketAsync(CancellationToken).ConfigureAwait(false);
+                var message = payload.Length > 0 ? payload[0] : (Byte) 0;
+
+                if (message == (Byte) SshMessageNumber.UserAuthBanner)
+                    continue;
+
+                if (message == (Byte) SshMessageNumber.UserAuth60)   // INFO_REQUEST
+                {
+                    var challenge  = ParseInfoRequest(payload);
+                    var responses  = await Responder(challenge, CancellationToken).ConfigureAwait(false);
+                    await Transport.SendPacketAsync(BuildInfoResponse(responses), CancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (message == (Byte) SshMessageNumber.UserAuthSuccess) return AttemptOutcome.Success;
+                if (message == (Byte) SshMessageNumber.UserAuthFailure) return ParsePartialSuccess(payload) ? AttemptOutcome.PartialSuccess : AttemptOutcome.Failure;
+
+                throw new SshWireException($"Unexpected message {message} during keyboard-interactive authentication.");
+
+            }
+
+        }
+
+        // Read the next SUCCESS / FAILURE outcome (surfacing banners), distinguishing partial success.
+        private static async ValueTask<AttemptOutcome> ReadOutcomeAsync(SshTransport Transport, Action<String, String>? BannerCallback, CancellationToken CancellationToken)
+        {
+
+            var (message, payload) = await ReadReplyAsync(Transport, BannerCallback, CancellationToken).ConfigureAwait(false);
+
+            return message == (Byte) SshMessageNumber.UserAuthSuccess ? AttemptOutcome.Success
+                 : message == (Byte) SshMessageNumber.UserAuthFailure ? (ParsePartialSuccess(payload) ? AttemptOutcome.PartialSuccess : AttemptOutcome.Failure)
+                 : throw new SshWireException($"Expected SSH_MSG_USERAUTH_SUCCESS/FAILURE, but found message number {message}.");
+
+        }
+
+        // Read the next reply, surfacing banners, returning both the message number and the raw payload.
+        private static async ValueTask<(Byte Message, Byte[] Payload)> ReadReplyAsync(SshTransport Transport, Action<String, String>? BannerCallback, CancellationToken CancellationToken)
         {
             while (true)
             {
@@ -250,9 +458,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                     continue;
                 }
 
-                return message;
+                return (message, payload);
 
             }
+        }
+
+        private static Boolean ParsePartialSuccess(ReadOnlySpan<Byte> FailurePayload)
+        {
+            var reader = new SshPacketReader(FailurePayload);
+            reader.ReadByte();          // SSH_MSG_USERAUTH_FAILURE
+            reader.ReadNameList();      // remaining methods
+            return reader.ReadBoolean();
         }
 
         private static void HandleBanner(ref SshPacketReader Reader, Action<String, String>? BannerCallback)
@@ -284,7 +500,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                                    Boolean  HasSignature,
                                                    String   Algorithm,
                                                    Byte[]   PublicKeyBlob,
-                                                   Byte[]   Signature);
+                                                   Byte[]   Signature,
+                                                   String   Password);
 
         // Fully parse a USERAUTH_REQUEST synchronously — the ref-struct reader must not cross an await.
         private static AuthRequest ParseAuthRequest(ReadOnlySpan<Byte> Payload)
@@ -299,15 +516,23 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             _             = reader.ReadString();   // service name ("ssh-connection")
             var method    = reader.ReadString();
 
-            if (method != PublicKeyMethod)
-                return new AuthRequest(username, method, false, "", [], []);
+            if (method == PublicKeyMethod)
+            {
+                var hasSignature   = reader.ReadBoolean();
+                var algorithm      = reader.ReadString();
+                var publicKeyBlob  = reader.ReadBinaryString();
+                var signature      = hasSignature ? reader.ReadBinaryString() : [];
+                return new AuthRequest(username, method, hasSignature, algorithm, publicKeyBlob, signature, "");
+            }
 
-            var hasSignature   = reader.ReadBoolean();
-            var algorithm      = reader.ReadString();
-            var publicKeyBlob  = reader.ReadBinaryString();
-            var signature      = hasSignature ? reader.ReadBinaryString() : [];
+            if (method == PasswordMethod)
+            {
+                _             = reader.ReadBoolean();   // change-password flag (unsupported)
+                var pw        = reader.ReadString();
+                return new AuthRequest(username, method, false, "", [], [], pw);
+            }
 
-            return new AuthRequest(username, method, hasSignature, algorithm, publicKeyBlob, signature);
+            return new AuthRequest(username, method, false, "", [], [], "");
 
         }
 
@@ -343,14 +568,56 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             return abw.WrittenSpan.ToArray();
         }
 
-        private static Byte[] BuildFailure(IReadOnlyList<String> Methods)
+        private static Byte[] BuildFailure(IReadOnlyList<String> Methods, Boolean PartialSuccess)
         {
             var abw     = new ArrayBufferWriter<Byte>();
             var writer  = new SshPacketWriter(abw);
             writer.WriteByte((Byte) SshMessageNumber.UserAuthFailure);
             writer.WriteNameList(Methods);
-            writer.WriteBoolean(false);   // partial success
+            writer.WriteBoolean(PartialSuccess);
             return abw.WrittenSpan.ToArray();
+        }
+
+        private static Byte[] BuildInfoRequest(ISshKeyboardInteractiveFactor Factor)
+        {
+
+            var abw     = new ArrayBufferWriter<Byte>();
+            var writer  = new SshPacketWriter(abw);
+
+            writer.WriteByte((Byte) SshMessageNumber.UserAuth60);   // SSH_MSG_USERAUTH_INFO_REQUEST
+            writer.WriteString(Factor.Name);
+            writer.WriteString(Factor.Instruction);
+            writer.WriteString("");                                 // language tag
+            writer.WriteUInt32((UInt32) Factor.Prompts.Count);
+
+            foreach (var prompt in Factor.Prompts)
+            {
+                writer.WriteString(prompt.Text);
+                writer.WriteBoolean(prompt.Echo);
+            }
+
+            return abw.WrittenSpan.ToArray();
+
+        }
+
+        private static String[] ParseInfoResponse(ReadOnlySpan<Byte> Payload)
+        {
+
+            var reader = new SshPacketReader(Payload);
+
+            if (reader.ReadByte() != (Byte) SshMessageNumber.UserAuthInfoResponse)
+                throw new SshWireException("Expected SSH_MSG_USERAUTH_INFO_RESPONSE (61).");
+
+            var count      = reader.ReadUInt32();
+            if (count > 64)
+                throw new SshWireException("Implausible keyboard-interactive response count.");
+
+            var responses  = new String[count];
+            for (var i = 0U; i < count; i++)
+                responses[i] = reader.ReadString();
+
+            return responses;
+
         }
 
         private static Byte[] BuildPublicKeyOk(String Algorithm, ReadOnlySpan<Byte> PublicKeyBlob)
@@ -381,6 +648,69 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                 writer.WriteBinaryString(Signature);
 
             return abw.WrittenSpan.ToArray();
+
+        }
+
+        private static Byte[] BuildPasswordRequest(String Username, String Password)
+        {
+            var abw     = new ArrayBufferWriter<Byte>();
+            var writer  = new SshPacketWriter(abw);
+            writer.WriteByte((Byte) SshMessageNumber.UserAuthRequest);
+            writer.WriteString(Username);
+            writer.WriteString(ConnectionService);
+            writer.WriteString(PasswordMethod);
+            writer.WriteBoolean(false);        // not a password change
+            writer.WriteString(Password);
+            return abw.WrittenSpan.ToArray();
+        }
+
+        private static Byte[] BuildKeyboardInteractiveRequest(String Username)
+        {
+            var abw     = new ArrayBufferWriter<Byte>();
+            var writer  = new SshPacketWriter(abw);
+            writer.WriteByte((Byte) SshMessageNumber.UserAuthRequest);
+            writer.WriteString(Username);
+            writer.WriteString(ConnectionService);
+            writer.WriteString(KeyboardInteractiveMethod);
+            writer.WriteString("");            // language tag
+            writer.WriteString("");            // submethods
+            return abw.WrittenSpan.ToArray();
+        }
+
+        private static Byte[] BuildInfoResponse(IReadOnlyList<String> Responses)
+        {
+            var abw     = new ArrayBufferWriter<Byte>();
+            var writer  = new SshPacketWriter(abw);
+            writer.WriteByte((Byte) SshMessageNumber.UserAuthInfoResponse);
+            writer.WriteUInt32((UInt32) Responses.Count);
+            foreach (var response in Responses)
+                writer.WriteString(response);
+            return abw.WrittenSpan.ToArray();
+        }
+
+        private static SshKeyboardInteractiveChallenge ParseInfoRequest(ReadOnlySpan<Byte> Payload)
+        {
+
+            var reader = new SshPacketReader(Payload);
+            reader.ReadByte();                 // SSH_MSG_USERAUTH_INFO_REQUEST
+
+            var name         = reader.ReadString();
+            var instruction  = reader.ReadString();
+            _                = reader.ReadString();   // language tag
+            var count        = reader.ReadUInt32();
+
+            if (count > 64)
+                throw new SshWireException("Implausible keyboard-interactive prompt count.");
+
+            var prompts = new List<SshPrompt>((Int32) count);
+            for (var i = 0U; i < count; i++)
+            {
+                var text = reader.ReadString();
+                var echo = reader.ReadBoolean();
+                prompts.Add(new SshPrompt(text, echo));
+            }
+
+            return new SshKeyboardInteractiveChallenge(name, instruction, prompts);
 
         }
 
