@@ -19,6 +19,7 @@
 
 using System.Buffers;
 using System.IO.Pipelines;
+using System.Security.Cryptography;
 
 #endregion
 
@@ -51,6 +52,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                                                                 Func<Byte[], Boolean>?    VerifyHostKey        = null,
                                                                                 String[]?                 Ciphers              = null,
                                                                                 String[]?                 Macs                 = null,
+                                                                                String[]?                 KeyExchanges         = null,
                                                                                 CancellationToken         CancellationToken    = default)
         {
 
@@ -63,7 +65,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var vS       = remote.WireBytes;
 
             // 2. KEXINIT exchange + negotiation.
-            var localKexInit = KexInitMessage.CreateLocal(IsServer: false, Ciphers, Macs);
+            var localKexInit = KexInitMessage.CreateLocal(IsServer: false, Ciphers, Macs, KeyExchanges);
             var iC           = localKexInit.Encode();
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, iC, CancellationToken).ConfigureAwait(false);
 
@@ -73,8 +75,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             EnsureSupported(negotiated);
 
             // 3. ECDH init: send our ephemeral public key.
-            var ephemeral = X25519KeyPair.Generate();
-            var qC        = ephemeral.PublicKey;
+            using var kex = SshKeyExchange.Create(negotiated.KeyExchange);
+            var qC        = kex.PublicKey;
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, BuildEcdhInit(qC), CancellationToken).ConfigureAwait(false);
 
             // 4. ECDH reply: host key, server ephemeral, signature.
@@ -82,9 +84,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var (kS, qS, signatureBlob) = ParseEcdhReply(reply);
 
             // 5. Shared secret, exchange hash, signature verification.
-            var rawSecret  = ephemeral.Agree(qS);
+            var rawSecret  = kex.Agree(qS);
             var kMpint     = ExchangeHash.EncodeSharedSecretMPInt(rawSecret);
-            var h          = ExchangeHash.ComputeSha256(vC, vS, iC, iS, kS, qC, qS, kMpint);
+            var h          = ExchangeHash.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kMpint);
 
             var hostPublicKey  = SshEd25519.ParsePublicKeyBlob(kS);
             var signature      = SshEd25519.ParseSignatureBlob(signatureBlob);
@@ -99,7 +101,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var sessionId = h;
             await ExchangeNewKeysAsync(Pipe, CancellationToken).ConfigureAwait(false);
 
-            var derive = MakeDeriver(kMpint, h, sessionId);
+            var derive = MakeDeriver(kex.HashAlgorithm, kMpint, h, sessionId);
             var (sendCipher,    sendMac)    = BuildDirection(negotiated.CipherClientToServer, negotiated.MacClientToServer, derive, Kdf.KeyLetter.EncryptionKeyClientToServer, Kdf.KeyLetter.InitialIVClientToServer, Kdf.KeyLetter.IntegrityKeyClientToServer);
             var (receiveCipher, receiveMac) = BuildDirection(negotiated.CipherServerToClient, negotiated.MacServerToClient, derive, Kdf.KeyLetter.EncryptionKeyServerToClient, Kdf.KeyLetter.InitialIVServerToClient, Kdf.KeyLetter.IntegrityKeyServerToClient);
 
@@ -123,6 +125,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                                                                 SshIdentificationString?  LocalIdentification  = null,
                                                                                 String[]?                 Ciphers              = null,
                                                                                 String[]?                 Macs                 = null,
+                                                                                String[]?                 KeyExchanges         = null,
                                                                                 CancellationToken         CancellationToken    = default)
         {
 
@@ -135,7 +138,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var vC       = remote.WireBytes;
 
             // 2. KEXINIT exchange + negotiation.
-            var localKexInit = KexInitMessage.CreateLocal(IsServer: true, Ciphers, Macs);
+            var localKexInit = KexInitMessage.CreateLocal(IsServer: true, Ciphers, Macs, KeyExchanges);
             var iS           = localKexInit.Encode();
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, iS, CancellationToken).ConfigureAwait(false);
 
@@ -149,13 +152,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var qC          = ParseEcdhInit(initPayload);
 
             // 4. Compute the shared secret and the exchange hash, then sign it.
-            var ephemeral  = X25519KeyPair.Generate();
-            var qS         = ephemeral.PublicKey;
-            var rawSecret  = ephemeral.Agree(qC);
+            using var kex  = SshKeyExchange.Create(negotiated.KeyExchange);
+            var qS         = kex.PublicKey;
+            var rawSecret  = kex.Agree(qC);
             var kMpint     = ExchangeHash.EncodeSharedSecretMPInt(rawSecret);
 
             var kS         = SshEd25519.EncodePublicKeyBlob(HostKey.PublicKey);
-            var h          = ExchangeHash.ComputeSha256(vC, vS, iC, iS, kS, qC, qS, kMpint);
+            var h          = ExchangeHash.Compute(kex.HashAlgorithm, vC, vS, iC, iS, kS, qC, qS, kMpint);
             var signature  = SshEd25519.EncodeSignatureBlob(HostKey.Sign(h));
 
             await WritePacketAsync(Pipe.Output, NullTransportCipher.Instance, BuildEcdhReply(kS, qS, signature), CancellationToken).ConfigureAwait(false);
@@ -164,7 +167,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var sessionId = h;
             await ExchangeNewKeysAsync(Pipe, CancellationToken).ConfigureAwait(false);
 
-            var derive = MakeDeriver(kMpint, h, sessionId);
+            var derive = MakeDeriver(kex.HashAlgorithm, kMpint, h, sessionId);
             var (sendCipher,    sendMac)    = BuildDirection(negotiated.CipherServerToClient, negotiated.MacServerToClient, derive, Kdf.KeyLetter.EncryptionKeyServerToClient, Kdf.KeyLetter.InitialIVServerToClient, Kdf.KeyLetter.IntegrityKeyServerToClient);
             var (receiveCipher, receiveMac) = BuildDirection(negotiated.CipherClientToServer, negotiated.MacClientToServer, derive, Kdf.KeyLetter.EncryptionKeyClientToServer, Kdf.KeyLetter.InitialIVClientToServer, Kdf.KeyLetter.IntegrityKeyClientToServer);
 
@@ -181,8 +184,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         private static void EnsureSupported(NegotiatedAlgorithms Negotiated)
         {
 
-            if (Negotiated.KeyExchange is not (SshAlgorithmNames.Kex.Curve25519Sha256 or SshAlgorithmNames.Kex.Curve25519Sha256LibSsh))
-                throw new SshWireException($"Unsupported key exchange '{Negotiated.KeyExchange}' (supported: curve25519-sha256).");
+            if (Negotiated.KeyExchange is not (SshAlgorithmNames.Kex.Curve25519Sha256       or
+                                               SshAlgorithmNames.Kex.Curve25519Sha256LibSsh or
+                                               SshAlgorithmNames.Kex.EcdhNistP256            or
+                                               SshAlgorithmNames.Kex.EcdhNistP384            or
+                                               SshAlgorithmNames.Kex.EcdhNistP521))
+                throw new SshWireException($"Unsupported key exchange '{Negotiated.KeyExchange}' (supported: curve25519-sha256, ecdh-sha2-nistp256/384/521).");
 
             if (Negotiated.HostKey != SshAlgorithmNames.HostKey.Ed25519)
                 throw new SshWireException($"Unsupported host key '{Negotiated.HostKey}' (supported: ssh-ed25519).");
@@ -227,8 +234,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         #region (private) MakeDeriver / BuildDirection / BuildMac
 
         // A closure that derives 'length' key bytes for a given key-derivation letter (RFC 4253 §7.2).
-        private static Func<Byte, Int32, Byte[]> MakeDeriver(Byte[] SharedSecretMPInt, Byte[] H, Byte[] SessionId)
-            => (letter, length) => Kdf.Derive(SharedSecretMPInt, H, letter, SessionId, length);
+        private static Func<Byte, Int32, Byte[]> MakeDeriver(HashAlgorithmName HashAlgorithm, Byte[] SharedSecretMPInt, Byte[] H, Byte[] SessionId)
+            => (letter, length) => Kdf.Derive(HashAlgorithm, SharedSecretMPInt, H, letter, SessionId, length);
 
         // Build the cipher (and, for CTR, the encrypt-then-MAC) for one direction from the negotiated names.
         private static (SshTransportCipher Cipher, ISshMac? Mac) BuildDirection(String                    CipherName,

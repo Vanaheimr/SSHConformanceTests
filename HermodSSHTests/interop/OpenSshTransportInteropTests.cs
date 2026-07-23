@@ -77,9 +77,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         [Test]
         [CancelAfter(30000)]
-        [TestCase("aes256-gcm@openssh.com", "hmac-sha2-256",                "aes256-gcm@openssh.com")]
-        [TestCase("aes256-ctr",             "hmac-sha2-256-etm@openssh.com", "aes256-ctr")]
-        public async Task OurServer_CompletesTransport_WithRealOpenSshClient(String             SshCipher,
+        [TestCase("curve25519-sha256",   "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
+        [TestCase("curve25519-sha256",   "aes256-ctr",             "hmac-sha2-256-etm@openssh.com", "aes256-ctr")]
+        [TestCase("ecdh-sha2-nistp256",  "aes256-gcm@openssh.com", "hmac-sha2-256",                 "aes256-gcm@openssh.com")]
+        [TestCase("ecdh-sha2-nistp521",  "aes256-ctr",             "hmac-sha2-512-etm@openssh.com", "aes256-ctr")]
+        public async Task OurServer_CompletesTransport_WithRealOpenSshClient(String             SshKex,
+                                                                             String             SshCipher,
                                                                              String             SshMac,
                                                                              String             ExpectedCipher,
                                                                              CancellationToken  CancellationToken)
@@ -122,7 +125,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 "-p", port.ToString(),
                 "-o", "StrictHostKeyChecking=no",
                 "-o", $"UserKnownHostsFile={knownHosts}",
-                "-o", "KexAlgorithms=curve25519-sha256",
+                "-o", $"KexAlgorithms={SshKex}",
                 "-o", "HostKeyAlgorithms=ssh-ed25519",
                 "-o", $"Ciphers={SshCipher}",
                 "-o", $"MACs={SshMac}",
@@ -158,7 +161,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 var service  = message == SshMessageNumber.ServiceRequest ? reader.ReadString() : "";
 
                 Assert.Multiple(() => {
-                    Assert.That(algorithms.KeyExchange,          Is.EqualTo(SshAlgorithmNames.Kex.Curve25519Sha256));
+                    Assert.That(algorithms.KeyExchange,          Is.EqualTo(SshKex));
                     Assert.That(algorithms.CipherClientToServer, Is.EqualTo(ExpectedCipher));
                     Assert.That(algorithms.StrictKex,            Is.True, "OpenSSH 9.6+ must negotiate strict-KEX with us.");
                     Assert.That(message,                         Is.EqualTo(SshMessageNumber.ServiceRequest),

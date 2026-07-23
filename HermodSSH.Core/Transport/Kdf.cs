@@ -57,21 +57,24 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         #region Derive(SharedSecretMPInt, ExchangeHash, Letter, SessionId, Length)
 
         /// <summary>
-        /// Derive <paramref name="Length"/> bytes of key material for the given letter (SHA-256 variant).
+        /// Derive <paramref name="Length"/> bytes of key material for the given letter, using the key
+        /// exchange's hash algorithm.
         /// </summary>
+        /// <param name="HashAlgorithm">The key exchange's hash algorithm (SHA-256/384/512).</param>
         /// <param name="SharedSecretMPInt">The shared secret K, mpint-encoded (as in the exchange hash).</param>
         /// <param name="ExchangeHash">The exchange hash H.</param>
         /// <param name="Letter">One of the A..F key-derivation letters.</param>
         /// <param name="SessionId">The session id (H of the first key exchange).</param>
         /// <param name="Length">The number of key bytes required.</param>
-        public static Byte[] Derive(ReadOnlySpan<Byte>  SharedSecretMPInt,
+        public static Byte[] Derive(HashAlgorithmName   HashAlgorithm,
+                                    ReadOnlySpan<Byte>  SharedSecretMPInt,
                                     ReadOnlySpan<Byte>  ExchangeHash,
                                     Byte                Letter,
                                     ReadOnlySpan<Byte>  SessionId,
                                     Int32               Length)
         {
 
-            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            using var hash = IncrementalHash.CreateHash(HashAlgorithm);
 
             // K1 = HASH(K || H || letter || session_id)
             hash.AppendData(SharedSecretMPInt);

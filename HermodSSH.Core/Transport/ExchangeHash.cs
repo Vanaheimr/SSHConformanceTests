@@ -55,13 +55,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #endregion
 
-        #region ComputeSha256(V_C, V_S, I_C, I_S, K_S, Q_C, Q_S, SharedSecretMPInt)
+        #region Compute(HashAlgorithm, V_C, V_S, I_C, I_S, K_S, Q_C, Q_S, SharedSecretMPInt)
 
         /// <summary>
-        /// Compute H = SHA-256(V_C || V_S || I_C || I_S || K_S || Q_C || Q_S || K), where every field
-        /// except K is written as an SSH string and K is the pre-encoded shared-secret mpint
-        /// (RFC 8731; the curve25519-sha256 variant of RFC 5656 §4).
+        /// Compute H = HASH(V_C || V_S || I_C || I_S || K_S || Q_C || Q_S || K), where every field
+        /// except K is written as an SSH string and K is the pre-encoded shared-secret mpint. HASH is
+        /// the key exchange's hash (SHA-256 for curve25519/nistp256, SHA-384 for nistp384, SHA-512 for
+        /// nistp521) — RFC 8731, RFC 5656 §4.
         /// </summary>
+        /// <param name="HashAlgorithm">The key exchange's hash algorithm.</param>
         /// <param name="V_C">The client identification string (no CR LF).</param>
         /// <param name="V_S">The server identification string (no CR LF).</param>
         /// <param name="I_C">The client's KEXINIT payload.</param>
@@ -70,14 +72,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <param name="Q_C">The client's ephemeral public key.</param>
         /// <param name="Q_S">The server's ephemeral public key.</param>
         /// <param name="SharedSecretMPInt">The shared secret K, already mpint-encoded.</param>
-        public static Byte[] ComputeSha256(ReadOnlySpan<Byte>  V_C,
-                                           ReadOnlySpan<Byte>  V_S,
-                                           ReadOnlySpan<Byte>  I_C,
-                                           ReadOnlySpan<Byte>  I_S,
-                                           ReadOnlySpan<Byte>  K_S,
-                                           ReadOnlySpan<Byte>  Q_C,
-                                           ReadOnlySpan<Byte>  Q_S,
-                                           ReadOnlySpan<Byte>  SharedSecretMPInt)
+        public static Byte[] Compute(HashAlgorithmName   HashAlgorithm,
+                                     ReadOnlySpan<Byte>  V_C,
+                                     ReadOnlySpan<Byte>  V_S,
+                                     ReadOnlySpan<Byte>  I_C,
+                                     ReadOnlySpan<Byte>  I_S,
+                                     ReadOnlySpan<Byte>  K_S,
+                                     ReadOnlySpan<Byte>  Q_C,
+                                     ReadOnlySpan<Byte>  Q_S,
+                                     ReadOnlySpan<Byte>  SharedSecretMPInt)
         {
 
             var abw     = new ArrayBufferWriter<Byte>();
@@ -96,7 +99,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             SharedSecretMPInt.CopyTo(tail);
             abw.Advance(SharedSecretMPInt.Length);
 
-            return SHA256.HashData(abw.WrittenSpan);
+            using var hash = IncrementalHash.CreateHash(HashAlgorithm);
+            hash.AppendData(abw.WrittenSpan);
+            return hash.GetHashAndReset();
 
         }
 

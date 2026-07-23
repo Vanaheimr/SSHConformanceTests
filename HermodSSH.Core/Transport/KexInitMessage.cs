@@ -93,6 +93,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #region (static) CreateLocal(IsServer)
 
+        /// <summary>The default key-exchange preference list (most preferred first, without the markers).</summary>
+        public static readonly String[] DefaultKeyExchanges =
+        [
+            SshAlgorithmNames.Kex.Curve25519Sha256,
+            SshAlgorithmNames.Kex.Curve25519Sha256LibSsh,
+            SshAlgorithmNames.Kex.EcdhNistP256,
+            SshAlgorithmNames.Kex.EcdhNistP384,
+            SshAlgorithmNames.Kex.EcdhNistP521
+        ];
+
         /// <summary>The default cipher preference list (most preferred first).</summary>
         public static readonly String[] DefaultCiphers =
         [
@@ -117,22 +127,26 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <param name="IsServer">Whether we are the server (selects the -s markers) or client (-c).</param>
         /// <param name="Ciphers">Optional cipher preference override (both directions).</param>
         /// <param name="Macs">Optional MAC preference override (both directions).</param>
+        /// <param name="KeyExchanges">Optional key-exchange preference override (without the markers).</param>
         public static KexInitMessage CreateLocal(Boolean    IsServer,
-                                                 String[]?  Ciphers  = null,
-                                                 String[]?  Macs     = null)
+                                                 String[]?  Ciphers       = null,
+                                                 String[]?  Macs          = null,
+                                                 String[]?  KeyExchanges  = null)
         {
 
             var ciphers = Ciphers ?? DefaultCiphers;
             var macs    = Macs    ?? DefaultMacs;
 
+            // Key exchange list = the offered methods followed by the ext-info and strict-KEX markers.
+            var kex = new List<String>(KeyExchanges ?? DefaultKeyExchanges)
+                      {
+                          IsServer ? SshAlgorithmNames.Kex.ExtInfoServer   : SshAlgorithmNames.Kex.ExtInfoClient,
+                          IsServer ? SshAlgorithmNames.Kex.StrictKexServer : SshAlgorithmNames.Kex.StrictKexClient
+                      };
+
             return new (
                    Cookie:                    RandomNumberGenerator.GetBytes(16),
-                   KexAlgorithms:             [
-                                                  SshAlgorithmNames.Kex.Curve25519Sha256,
-                                                  SshAlgorithmNames.Kex.Curve25519Sha256LibSsh,
-                                                  IsServer ? SshAlgorithmNames.Kex.ExtInfoServer   : SshAlgorithmNames.Kex.ExtInfoClient,
-                                                  IsServer ? SshAlgorithmNames.Kex.StrictKexServer : SshAlgorithmNames.Kex.StrictKexClient
-                                              ],
+                   KexAlgorithms:             [.. kex],
                    ServerHostKeyAlgorithms:   [ SshAlgorithmNames.HostKey.Ed25519 ],
                    EncryptionClientToServer:  ciphers,
                    EncryptionServerToClient:  ciphers,

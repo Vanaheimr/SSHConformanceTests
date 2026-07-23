@@ -30,6 +30,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         {
             public const String Curve25519Sha256         = "curve25519-sha256";
             public const String Curve25519Sha256LibSsh   = "curve25519-sha256@libssh.org";
+            public const String EcdhNistP256             = "ecdh-sha2-nistp256";
+            public const String EcdhNistP384             = "ecdh-sha2-nistp384";
+            public const String EcdhNistP521             = "ecdh-sha2-nistp521";
 
             /// <summary>Client's "I support ext-info" marker (RFC 8308).</summary>
             public const String ExtInfoClient            = "ext-info-c";
