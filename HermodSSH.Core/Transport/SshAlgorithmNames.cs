@@ -64,6 +64,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             public const String RsaSha2_256              = "rsa-sha2-256";
             public const String RsaSha2_512              = "rsa-sha2-512";
             public const String SshRsa                   = "ssh-rsa";   // RSA key type (SHA-1 sig; off by default)
+
+            // OpenSSH certificate host-key algorithms (a host presents a certificate as its host key).
+            public const String Ed25519Cert             = "ssh-ed25519-cert-v01@openssh.com";
+            public const String EcdsaNistP256Cert       = "ecdsa-sha2-nistp256-cert-v01@openssh.com";
+            public const String EcdsaNistP384Cert       = "ecdsa-sha2-nistp384-cert-v01@openssh.com";
+            public const String EcdsaNistP521Cert       = "ecdsa-sha2-nistp521-cert-v01@openssh.com";
+            public const String SshRsaCert              = "ssh-rsa-cert-v01@openssh.com";
         }
 
         /// <summary>Encryption algorithm names.</summary>

@@ -117,7 +117,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             SshAlgorithmNames.HostKey.EcdsaNistP384,
             SshAlgorithmNames.HostKey.EcdsaNistP521,
             SshAlgorithmNames.HostKey.RsaSha2_512,
-            SshAlgorithmNames.HostKey.RsaSha2_256
+            SshAlgorithmNames.HostKey.RsaSha2_256,
+            // Certificate host keys are also accepted (used when a server presents a host certificate).
+            SshAlgorithmNames.HostKey.Ed25519Cert,
+            SshAlgorithmNames.HostKey.EcdsaNistP256Cert,
+            SshAlgorithmNames.HostKey.EcdsaNistP384Cert,
+            SshAlgorithmNames.HostKey.EcdsaNistP521Cert,
+            SshAlgorithmNames.HostKey.SshRsaCert
         ];
 
         /// <summary>The default cipher preference list (most preferred first).</summary>

@@ -58,8 +58,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                            SshAlgorithmNames.HostKey.EcdsaNistP384 or
                                            SshAlgorithmNames.HostKey.EcdsaNistP521 or
                                            SshAlgorithmNames.HostKey.RsaSha2_256   or
-                                           SshAlgorithmNames.HostKey.RsaSha2_512))
-                throw new SshWireException($"Unsupported host key '{Negotiated.HostKey}' (supported: ssh-ed25519, ecdsa-sha2-nistp256/384/521, rsa-sha2-256/512).");
+                                           SshAlgorithmNames.HostKey.RsaSha2_512)   &&
+                !SshCertificate.IsCertificateAlgorithm(Negotiated.HostKey))
+                throw new SshWireException($"Unsupported host key '{Negotiated.HostKey}' (supported: ssh-ed25519, ecdsa-sha2-nistp256/384/521, rsa-sha2-256/512 and their -cert-v01@openssh.com certificates).");
 
             EnsureCipherSupported(Negotiated.CipherClientToServer, Negotiated.MacClientToServer);
             EnsureCipherSupported(Negotiated.CipherServerToClient, Negotiated.MacServerToClient);
