@@ -120,7 +120,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                         return new SshCommandResult(exitCode, stdout.WrittenSpan.ToArray(), stderr.WrittenSpan.ToArray());
 
                     default:
-                        break;   // ignore unrelated global/channel traffic
+                        await HandleTransportTrafficAsync(Transport, payload, CancellationToken).ConfigureAwait(false);
+                        break;
 
                 }
 
@@ -226,13 +227,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                         return;
 
                     default:
+                        await HandleTransportTrafficAsync(Transport, payload, CancellationToken).ConfigureAwait(false);
                         break;
 
                 }
 
-                // If the exec finished and the peer already closed, we are done even without another read.
-                if (handlerDone && closeSent && CancellationToken.IsCancellationRequested)
-                    return;
+                _ = handlerDone;   // (reserved for future multi-request sessions)
 
             }
 
@@ -275,6 +275,47 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
                 Consume(chunk);
                 offset += chunk;
+            }
+
+        }
+
+        #endregion
+
+        #region (private) transport-level traffic (PING/PONG, global requests)
+
+        // Handle traffic that can arrive at any time: reply to ping@openssh.com PINGs and decline
+        // global requests that want a reply (keepalive@openssh.com, hostkeys-00@openssh.com, …).
+        private static async ValueTask HandleTransportTrafficAsync(SshTransport Transport, Byte[] Payload, CancellationToken CancellationToken)
+        {
+
+            var message = (SshMessageNumber) Payload[0];
+
+            if (message == SshMessageNumber.Ping)
+            {
+                // SSH_MSG_PING(192): string data → reply SSH_MSG_PONG(193) echoing the data.
+                var reader = new SshPacketReader(Payload);
+                reader.ReadByte();
+                var data = reader.ReadBinaryString();
+
+                var abw = new ArrayBufferWriter<Byte>(); var w = new SshPacketWriter(abw);
+                w.WriteByte((Byte) SshMessageNumber.Pong);
+                w.WriteBinaryString(data);
+                await Transport.SendPacketAsync(abw.WrittenSpan.ToArray(), CancellationToken).ConfigureAwait(false);
+            }
+
+            else if (message == SshMessageNumber.GlobalRequest)
+            {
+                var reader = new SshPacketReader(Payload);
+                reader.ReadByte();
+                reader.ReadString();                    // request name
+                var wantReply = reader.ReadBoolean();
+
+                if (wantReply)
+                {
+                    var abw = new ArrayBufferWriter<Byte>(); var w = new SshPacketWriter(abw);
+                    w.WriteByte((Byte) SshMessageNumber.RequestFailure);
+                    await Transport.SendPacketAsync(abw.WrittenSpan.ToArray(), CancellationToken).ConfigureAwait(false);
+                }
             }
 
         }
