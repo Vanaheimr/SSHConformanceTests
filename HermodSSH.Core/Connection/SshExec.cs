@@ -50,16 +50,32 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         private readonly Func<ReadOnlyMemory<Byte>, Boolean, CancellationToken, ValueTask> write;
 
         /// <summary>The command line requested via <c>exec</c> (empty string for a <c>shell</c> request).</summary>
-        public String  Command   { get; }
+        public String   Command        { get; }
 
         /// <summary>The authenticated user name.</summary>
-        public String  Username  { get; }
+        public String   Username       { get; }
 
-        internal SshExecContext(String command, String username, Func<ReadOnlyMemory<Byte>, Boolean, CancellationToken, ValueTask> write)
+        /// <summary>Whether the client requested a pseudo-terminal (<c>pty-req</c>) for this session.</summary>
+        public Boolean  HasPty         { get; }
+
+        /// <summary>
+        /// The remote standard input — bytes the client pipes to the command's stdin. Reaches end-of-stream
+        /// when the client sends EOF or closes the channel. For the one-shot (non-streaming) server this is
+        /// an immediately-empty <see cref="Stream.Null"/>.
+        /// </summary>
+        public Stream   StandardInput  { get; }
+
+        internal SshExecContext(String                                                             command,
+                                String                                                             username,
+                                Func<ReadOnlyMemory<Byte>, Boolean, CancellationToken, ValueTask>  write,
+                                Stream?                                                            standardInput  = null,
+                                Boolean                                                            hasPty         = false)
         {
-            this.Command   = command;
-            this.Username  = username;
-            this.write     = write;
+            this.Command        = command;
+            this.Username       = username;
+            this.write          = write;
+            this.StandardInput  = standardInput ?? Stream.Null;
+            this.HasPty         = hasPty;
         }
 
         /// <summary>Write bytes to standard output.</summary>

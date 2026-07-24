@@ -18,6 +18,7 @@
 #region Usings
 
 using System.Buffers;
+using System.IO.Pipelines;
 
 #endregion
 
@@ -125,6 +126,216 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
                 }
 
+            }
+
+        }
+
+        #endregion
+
+        #region StartCommandAsync(Transport, Command, Options, CancellationToken)
+
+        /// <summary>
+        /// Start a command on the peer over a fresh session channel and return a live
+        /// <see cref="SshCommandProcess"/> for streaming interaction — incremental stdout/stderr, piped
+        /// stdin, environment variables, an optional PTY, and (via <paramref name="Options"/>) keepalive and
+        /// idle-timeout enforcement. The streaming counterpart to <see cref="ExecuteAsync"/>.
+        /// </summary>
+        public static ValueTask<SshCommandProcess> StartCommandAsync(SshTransport           Transport,
+                                                                     SshCommand             Command,
+                                                                     SshConnectionOptions?  Options            = null,
+                                                                     CancellationToken      CancellationToken  = default)
+            => SshCommandProcess.StartAsync(Transport, Command, Options, CancellationToken);
+
+        #endregion
+
+        #region ServeCommandAsync(Transport, Username, Handler, CancellationToken)
+
+        /// <summary>
+        /// Serve one streaming session: accept a <c>session</c> channel, gather <c>env</c>/<c>pty-req</c>,
+        /// dispatch an <c>exec</c> or <c>shell</c> request to <paramref name="Handler"/> — which now also
+        /// reads piped standard input via <see cref="SshExecContext.StandardInput"/> — pump its output while
+        /// concurrently feeding it inbound stdin, then report the exit status. Unlike
+        /// <see cref="ServeExecAsync"/>, the handler runs concurrently with the receive loop so it can
+        /// consume stdin as it streams in.
+        /// </summary>
+        public static async ValueTask ServeCommandAsync(SshTransport       Transport,
+                                                        String             Username,
+                                                        SshExecHandler     Handler,
+                                                        CancellationToken  CancellationToken = default)
+        {
+
+            const UInt32 localChannel = 0;
+
+            var  sendGate       = new SemaphoreSlim(1, 1);
+            var  myWindow       = InitialWindow;
+            long remoteWindow   = 0;
+            var  hasPty         = false;
+            var  closeSent      = false;
+
+            UInt32 remoteChannel = 0;
+
+            Pipe?                   stdinPipe   = null;
+            Task<Int32>?            handlerTask = null;
+            Task<Byte[]>?           receiveTask = null;
+            var                     exitSent    = false;
+
+            async ValueTask Send(Byte[] Payload)
+            {
+                await sendGate.WaitAsync(CancellationToken).ConfigureAwait(false);
+                try     { await Transport.SendPacketAsync(Payload, CancellationToken).ConfigureAwait(false); }
+                finally { sendGate.Release(); }
+            }
+
+            try
+            {
+
+                while (true)
+                {
+
+                    // Once the handler is running we race its completion against the next inbound packet.
+                    receiveTask ??= Transport.ReceivePacketAsync(CancellationToken).AsTask();
+
+                    if (handlerTask is not null && !exitSent)
+                        await Task.WhenAny(receiveTask, handlerTask).ConfigureAwait(false);
+                    else
+                        await Task.WhenAny(receiveTask).ConfigureAwait(false);
+
+                    // The handler finished → send exit-status, EOF and CLOSE (once).
+                    if (handlerTask is not null && !exitSent && handlerTask.IsCompleted)
+                    {
+                        var exitCode = await handlerTask.ConfigureAwait(false);
+                        await Send(BuildExitStatus(remoteChannel, (UInt32) exitCode)).ConfigureAwait(false);
+                        await Send(BuildChannelEof(remoteChannel)).ConfigureAwait(false);
+                        await Send(BuildChannelClose(remoteChannel)).ConfigureAwait(false);
+                        closeSent = true;
+                        exitSent  = true;
+                    }
+
+                    if (!receiveTask.IsCompleted)
+                        continue;
+
+                    var payload = await receiveTask.ConfigureAwait(false);
+                    receiveTask = null;
+
+                    var message = (SshMessageNumber) payload[0];
+
+                    switch (message)
+                    {
+
+                        case SshMessageNumber.ChannelOpen:
+                        {
+                            var open = ParseChannelOpen(payload);
+                            if (open.ChannelType != SessionType)
+                            {
+                                await Send(BuildChannelOpenFailure(open.SenderChannel)).ConfigureAwait(false);
+                                break;
+                            }
+                            remoteChannel = open.SenderChannel;
+                            remoteWindow  = open.InitialWindow;
+                            await Send(BuildChannelOpenConfirmation(remoteChannel, localChannel, InitialWindow, MaxPacket)).ConfigureAwait(false);
+                            break;
+                        }
+
+                        case SshMessageNumber.ChannelWindowAdjust:
+                            remoteWindow += ParseWindowAdjust(payload);
+                            break;
+
+                        case SshMessageNumber.ChannelData when handlerTask is not null:
+                        {
+                            var data = ParseChannelData(payload);
+                            await stdinPipe!.Writer.WriteAsync(data, CancellationToken).ConfigureAwait(false);
+                            myWindow = await ReplenishSendingAsync(Send, remoteChannel, myWindow, (UInt32) data.Length).ConfigureAwait(false);
+                            break;
+                        }
+
+                        case SshMessageNumber.ChannelEof:
+                            if (stdinPipe is not null)
+                                await stdinPipe.Writer.CompleteAsync().ConfigureAwait(false);
+                            break;
+
+                        case SshMessageNumber.ChannelRequest:
+                        {
+
+                            var request = ParseChannelRequest(payload);
+
+                            if (request.RequestType is "exec" or "shell" && handlerTask is null)
+                            {
+
+                                if (request.WantReply)
+                                    await Send(BuildChannelSuccess(remoteChannel)).ConfigureAwait(false);
+
+                                stdinPipe = new Pipe();
+
+                                var channel = remoteChannel;
+                                ValueTask Write(ReadOnlyMemory<Byte> d, Boolean isStderr, CancellationToken ct)
+                                    => WriteChannelDataGatedAsync(Send, channel, d, isStderr, () => remoteWindow, n => remoteWindow -= n);
+
+                                var context = new SshExecContext(request.Command, Username, Write, stdinPipe.Reader.AsStream(), hasPty);
+                                handlerTask = Handler(context, CancellationToken).AsTask();
+
+                            }
+                            else if (request.RequestType == "pty-req")
+                            {
+                                hasPty = true;
+                                if (request.WantReply)
+                                    await Send(BuildChannelSuccess(remoteChannel)).ConfigureAwait(false);
+                            }
+                            else if (request.WantReply)
+                            {
+                                var reply = request.RequestType is "env" or "window-change"
+                                                ? BuildChannelSuccess(remoteChannel)
+                                                : BuildChannelFailure(remoteChannel);
+                                await Send(reply).ConfigureAwait(false);
+                            }
+
+                            break;
+
+                        }
+
+                        case SshMessageNumber.ChannelClose:
+                            if (stdinPipe is not null)
+                                await stdinPipe.Writer.CompleteAsync().ConfigureAwait(false);
+                            if (!closeSent)
+                                await Send(BuildChannelClose(remoteChannel)).ConfigureAwait(false);
+                            return;
+
+                        case SshMessageNumber.Ping:
+                        {
+                            var reader = new SshPacketReader(payload);
+                            reader.ReadByte();
+                            var data = reader.ReadBinaryString();
+                            var abw = new ArrayBufferWriter<Byte>(); var w = new SshPacketWriter(abw);
+                            w.WriteByte((Byte) SshMessageNumber.Pong); w.WriteBinaryString(data);
+                            await Send(abw.WrittenSpan.ToArray()).ConfigureAwait(false);
+                            break;
+                        }
+
+                        case SshMessageNumber.GlobalRequest:
+                        {
+                            var reader = new SshPacketReader(payload);
+                            reader.ReadByte(); reader.ReadString();
+                            if (reader.ReadBoolean())
+                            {
+                                var abw = new ArrayBufferWriter<Byte>(); var w = new SshPacketWriter(abw);
+                                w.WriteByte((Byte) SshMessageNumber.RequestFailure);
+                                await Send(abw.WrittenSpan.ToArray()).ConfigureAwait(false);
+                            }
+                            break;
+                        }
+
+                        default:
+                            break;
+
+                    }
+
+                }
+
+            }
+            finally
+            {
+                if (handlerTask is not null)
+                    try { await handlerTask.ConfigureAwait(false); } catch { }
+                sendGate.Dispose();
             }
 
         }
@@ -339,6 +550,43 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
 
         #region (private) flow control
+
+        // Replenish our receive window using a gated send delegate (for the concurrent streaming server).
+        private static async ValueTask<UInt32> ReplenishSendingAsync(Func<Byte[], ValueTask> Send, UInt32 RemoteChannel, UInt32 Window, UInt32 Consumed)
+        {
+
+            Window = Consumed >= Window ? 0 : Window - Consumed;
+
+            if (Window < InitialWindow / 2)
+            {
+                var increment = InitialWindow - Window;
+                await Send(BuildWindowAdjust(RemoteChannel, increment)).ConfigureAwait(false);
+                Window += increment;
+            }
+
+            return Window;
+
+        }
+
+        // Write channel data through a gated send delegate, chunking to the max packet and tracking the window.
+        private static async ValueTask WriteChannelDataGatedAsync(Func<Byte[], ValueTask> Send, UInt32 Channel, ReadOnlyMemory<Byte> Data, Boolean IsStderr, Func<Int64> Window, Action<Int64> Consume)
+        {
+
+            var offset = 0;
+            while (offset < Data.Length)
+            {
+                var chunk = Math.Min((Int32) MaxPacket, Data.Length - offset);
+                var slice = Data.Slice(offset, chunk);
+
+                await Send(IsStderr
+                               ? BuildChannelExtendedData(Channel, 1, slice.Span)
+                               : BuildChannelData(Channel, slice.Span)).ConfigureAwait(false);
+
+                Consume(chunk);
+                offset += chunk;
+            }
+
+        }
 
         private static async ValueTask<UInt32> ReplenishAsync(SshTransport Transport, UInt32 RemoteChannel, UInt32 Window, UInt32 Consumed, CancellationToken CancellationToken)
         {
