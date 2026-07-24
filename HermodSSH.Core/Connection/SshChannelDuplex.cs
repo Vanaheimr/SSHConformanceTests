@@ -45,6 +45,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         private UInt32                  myWindow;
         private Int64                   remoteWindow;
         private Boolean                 remoteClosed;
+        private Boolean                 remoteEof;
 
         #endregion
 
@@ -152,7 +153,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                     return;
                 }
 
-                if (remoteClosed)
+                // EOF or CLOSE with no buffered data left means no more inbound bytes will ever arrive.
+                if (remoteClosed || remoteEof)
                     throw new SshChannelClosedException();
 
                 var payload = await transport.ReceivePacketAsync(CancellationToken).ConfigureAwait(false);
@@ -178,6 +180,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                     }
 
                     case SshMessageNumber.ChannelEof:
+                        remoteEof = true;
                         break;
 
                     case SshMessageNumber.ChannelClose:

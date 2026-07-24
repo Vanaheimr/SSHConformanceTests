@@ -71,7 +71,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
                 var packet = await ReadPacketAsync(Channel, CancellationToken).ConfigureAwait(false);
                 if (packet is null)
-                    return;   // channel closed
+                {
+                    // The client closed the SFTP channel — complete the close handshake so the peer can exit.
+                    try { await Channel.CloseAsync(CancellationToken).ConfigureAwait(false); } catch { }
+                    return;
+                }
 
                 var request = ParseRequest(packet);
                 Byte[] response;
@@ -104,7 +108,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
         }
 
-        private sealed record SftpSession(SftpQuotaTracker? Quota, TokenBucketRateLimiter? Upload, TokenBucketRateLimiter? Download, SftpLimits? Limits);
+        private sealed record SftpSession(SftpQuotaTracker? Quota, TokenBucketRateLimiter? Upload, TokenBucketRateLimiter? Download, SftpLimits? Limits)
+        {
+            // Maps open handles → their path, so handle-based requests (FSTAT) can resolve a path.
+            public Dictionary<String, String> HandlePaths { get; } = [];
+        }
 
         private static async ValueTask CleanupPartialAsync(ISftpFileSystem FileSystem, String Handle, String? Path, CancellationToken CancellationToken)
         {
@@ -141,15 +149,21 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
                     if (writable)
                         Session.Quota?.RegisterWritable(handle, Request.Path, creating);
+                    Session.HandlePaths[handle] = Request.Path;
 
                     return BuildHandle(Request.RequestId, handle);
                 }
 
                 case SftpPacketType.OpenDir:
-                    return BuildHandle(Request.RequestId, await FileSystem.OpenDirectoryAsync(Request.Path, CancellationToken).ConfigureAwait(false));
+                {
+                    var handle = await FileSystem.OpenDirectoryAsync(Request.Path, CancellationToken).ConfigureAwait(false);
+                    Session.HandlePaths[handle] = Request.Path;
+                    return BuildHandle(Request.RequestId, handle);
+                }
 
                 case SftpPacketType.Close:
                     Session.Quota?.OnClose(Request.Handle);
+                    Session.HandlePaths.Remove(Request.Handle);
                     await FileSystem.CloseAsync(Request.Handle, CancellationToken).ConfigureAwait(false);
                     return BuildStatus(Request.RequestId, SftpStatusCode.Ok, "OK");
 
@@ -181,6 +195,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
                 case SftpPacketType.Stat or SftpPacketType.LStat:
                     return BuildAttrs(Request.RequestId, await FileSystem.StatAsync(Request.Path, CancellationToken).ConfigureAwait(false));
+
+                case SftpPacketType.FStat:
+                {
+                    if (!Session.HandlePaths.TryGetValue(Request.Handle, out var fstatPath))
+                        return BuildStatus(Request.RequestId, SftpStatusCode.Failure, "Invalid handle.");
+                    return BuildAttrs(Request.RequestId, await FileSystem.StatAsync(fstatPath, CancellationToken).ConfigureAwait(false));
+                }
+
+                // Attribute-setting (permissions/mtime) is accepted and ignored — we do not model POSIX attrs.
+                case SftpPacketType.SetStat or SftpPacketType.FSetStat:
+                    return BuildStatus(Request.RequestId, SftpStatusCode.Ok, "OK");
 
                 case SftpPacketType.MkDir:
                     await FileSystem.MakeDirectoryAsync(Request.Path, CancellationToken).ConfigureAwait(false);
@@ -338,6 +363,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
                 case SftpPacketType.OpenDir or SftpPacketType.RealPath or SftpPacketType.Stat or
                      SftpPacketType.LStat or SftpPacketType.MkDir or SftpPacketType.Remove or SftpPacketType.RmDir:
                     path = reader.ReadString();
+                    break;
+
+                case SftpPacketType.SetStat:
+                    path = reader.ReadString();   // (attrs follow, ignored)
+                    break;
+
+                case SftpPacketType.FStat or SftpPacketType.FSetStat:
+                    handle = reader.ReadString();   // (attrs follow for FSetStat, ignored)
                     break;
 
                 case SftpPacketType.Rename:

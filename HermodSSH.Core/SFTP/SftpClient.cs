@@ -18,6 +18,8 @@
 #region Usings
 
 using System.Buffers;
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
 
 #endregion
 
@@ -25,18 +27,25 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 {
 
     /// <summary>
-    /// A minimal SFTP (version 3) client over a channel duplex: upload, download, directory listing and
-    /// the common file-management operations. One request is outstanding at a time.
+    /// An SFTP (version 3) client over a channel duplex: upload, download, directory listing and the common
+    /// file-management operations. A background reader correlates replies to requests by request-id, so many
+    /// requests may be outstanding at once — <see cref="UploadAsync"/> and <see cref="DownloadAsync"/>
+    /// pipeline their WRITE/READ requests for throughput, and <see cref="SftpFileStream"/> can stream freely.
     /// </summary>
-    public sealed class SftpClient
+    public sealed class SftpClient : IAsyncDisposable
     {
 
         #region Data
 
-        private const Int32 TransferChunk = 30 * 1024;   // stay under the 32 KiB channel packet
+        private const Int32 TransferChunk         = 30 * 1024;   // stay under the 32 KiB channel packet
+        private const Int32 MaxOutstanding        = 16;          // pipelining window (requests in flight)
 
-        private readonly SshChannelDuplex  channel;
-        private UInt32                     requestId;
+        private readonly SshChannelDuplex                                    channel;
+        private readonly CancellationTokenSource                             cts       = new ();
+        private readonly SemaphoreSlim                                       sendGate  = new (1, 1);
+        private readonly ConcurrentDictionary<UInt32, TaskCompletionSource<Byte[]>>  pending = new ();
+        private readonly Task                                                receiveLoop;
+        private Int32                                                        requestIdSeed;
 
         #endregion
 
@@ -56,6 +65,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
         {
             this.channel           = Channel;
             this.ServerExtensions  = ServerExtensions;
+            this.receiveLoop       = Task.Run(ReceiveLoopAsync);
         }
 
         #endregion
@@ -74,6 +84,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
             w.WriteUInt32(SftpVersion.Three);
             await SftpServer.SendAsync(channel, abw.WrittenSpan.ToArray(), CancellationToken).ConfigureAwait(false);
 
+            // INIT → VERSION is handled synchronously, before the background reader takes over the channel.
             var version = await SftpServer.ReadPacketAsync(channel, CancellationToken).ConfigureAwait(false)
                           ?? throw new SshWireException("The SFTP server closed the channel before SSH_FXP_VERSION.");
             if ((SftpPacketType) version[0] != SftpPacketType.Version)
@@ -97,21 +108,32 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
         #endregion
 
 
-        #region UploadAsync / DownloadAsync
+        #region UploadAsync / DownloadAsync (pipelined)
 
-        /// <summary>Upload bytes to a remote path (creating/truncating it).</summary>
+        /// <summary>Upload bytes to a remote path (creating/truncating it), pipelining the WRITE requests.</summary>
         public async ValueTask UploadAsync(String RemotePath, Byte[] Content, CancellationToken CancellationToken = default)
         {
 
-            var handle = await OpenFileAsync(RemotePath, SftpOpenFlags.Create | SftpOpenFlags.Write | SftpOpenFlags.Truncate, CancellationToken).ConfigureAwait(false);
+            var handle   = await OpenFileAsync(RemotePath, SftpOpenFlags.Create | SftpOpenFlags.Write | SftpOpenFlags.Truncate, CancellationToken).ConfigureAwait(false);
+            var inflight = new Queue<Task>();
 
             try
             {
                 for (var offset = 0; offset < Content.Length; offset += TransferChunk)
                 {
                     var chunk = Content.AsMemory(offset, Math.Min(TransferChunk, Content.Length - offset));
-                    await WriteAsync(handle, offset, chunk, CancellationToken).ConfigureAwait(false);
+                    inflight.Enqueue(WriteAsync(handle, offset, chunk, CancellationToken).AsTask());
+                    if (inflight.Count >= MaxOutstanding)
+                        await inflight.Dequeue().ConfigureAwait(false);
                 }
+
+                while (inflight.Count > 0)
+                    await inflight.Dequeue().ConfigureAwait(false);
+            }
+            catch
+            {
+                await ObserveAsync(inflight).ConfigureAwait(false);   // don't leak faults from in-flight writes
+                throw;
             }
             finally
             {
@@ -120,32 +142,83 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
         }
 
-        /// <summary>Download a remote file's contents.</summary>
+        /// <summary>Download a remote file's contents, pipelining the READ requests across its length.</summary>
         public async ValueTask<Byte[]> DownloadAsync(String RemotePath, CancellationToken CancellationToken = default)
         {
 
-            var handle  = await OpenFileAsync(RemotePath, SftpOpenFlags.Read, CancellationToken).ConfigureAwait(false);
-            var output  = new ArrayBufferWriter<Byte>();
+            var size   = (await StatAsync(RemotePath, CancellationToken).ConfigureAwait(false)).Size ?? -1;
+            var handle = await OpenFileAsync(RemotePath, SftpOpenFlags.Read, CancellationToken).ConfigureAwait(false);
 
             try
             {
-                var offset = 0L;
-                while (true)
+
+                if (size < 0)
+                    return await SequentialDownloadAsync(handle, CancellationToken).ConfigureAwait(false);
+
+                var output    = new Byte[size];
+                var inflight  = new Queue<(Int64 Offset, Int32 Length, Task<Byte[]> Task)>();
+                var nextIssue = 0L;
+
+                void IssueMore()
                 {
-                    var data = await ReadAsync(handle, offset, TransferChunk, CancellationToken).ConfigureAwait(false);
-                    if (data.Length == 0)
-                        break;
-                    output.Write(data);
-                    offset += data.Length;
+                    while (inflight.Count < MaxOutstanding && nextIssue < size)
+                    {
+                        var len = (Int32) Math.Min(TransferChunk, size - nextIssue);
+                        var off = nextIssue;
+                        inflight.Enqueue((off, len, ReadAsync(handle, off, len, CancellationToken).AsTask()));
+                        nextIssue += len;
+                    }
                 }
+
+                IssueMore();
+
+                while (inflight.Count > 0)
+                {
+                    var (offset, length, task) = inflight.Dequeue();
+                    var data = await task.ConfigureAwait(false);
+
+                    if (data.Length == 0)
+                        break;   // EOF earlier than the stat size (file shrank) — stop
+
+                    data.CopyTo(output, offset);
+
+                    // A short read leaves a gap — re-issue the remainder (offset-based reads are independent).
+                    if (data.Length < length)
+                        inflight.Enqueue((offset + data.Length, length - data.Length,
+                                          ReadAsync(handle, offset + data.Length, length - data.Length, CancellationToken).AsTask()));
+
+                    IssueMore();
+                }
+
+                return output;
+
             }
             finally
             {
                 await CloseAsync(handle, CancellationToken).ConfigureAwait(false);
             }
 
-            return output.WrittenSpan.ToArray();
+        }
 
+        private async ValueTask<Byte[]> SequentialDownloadAsync(String Handle, CancellationToken CancellationToken)
+        {
+            var output = new ArrayBufferWriter<Byte>();
+            var offset = 0L;
+            while (true)
+            {
+                var data = await ReadAsync(Handle, offset, TransferChunk, CancellationToken).ConfigureAwait(false);
+                if (data.Length == 0)
+                    break;
+                output.Write(data);
+                offset += data.Length;
+            }
+            return output.WrittenSpan.ToArray();
+        }
+
+        private static async ValueTask ObserveAsync(Queue<Task> Inflight)
+        {
+            while (Inflight.Count > 0)
+                try { await Inflight.Dequeue().ConfigureAwait(false); } catch { }
         }
 
         #endregion
@@ -166,7 +239,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
                     var batch = await ReadDirectoryAsync(handle, CancellationToken).ConfigureAwait(false);
                     if (batch.Count == 0)
                         break;
-                    entries.AddRange(batch.Where(e => e.Name is not ("." or "..")));
+                    entries.AddRange(batch);
                 }
             }
             finally
@@ -174,11 +247,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
                 await CloseAsync(handle, CancellationToken).ConfigureAwait(false);
             }
 
-            return entries;
+            return entries.Where(e => e.Name is not "." and not "..").ToList();
 
         }
 
         #endregion
+
 
         #region file-management operations
 
@@ -186,8 +260,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
         public async ValueTask<SftpFileAttributes> StatAsync(String RemotePath, CancellationToken CancellationToken = default)
         {
             var response = await RoundtripAsync(SftpPacketType.Stat, (ref SshPacketWriter w) => w.WriteString(RemotePath), CancellationToken).ConfigureAwait(false);
-            var reader   = new SshPacketReader(response); reader.ReadByte(); reader.ReadUInt32();
             EnsureNotStatusError(response);
+            var reader = new SshPacketReader(response); reader.ReadByte(); reader.ReadUInt32();
             return SftpFileAttributes.Decode(ref reader);
         }
 
@@ -232,44 +306,62 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
                 reader.ReadUInt64(), reader.ReadUInt64(), reader.ReadUInt64());
         }
 
-        /// <summary>Close the SFTP channel.</summary>
-        public ValueTask DisposeAsync()
-            => channel.CloseAsync();
+        #endregion
+
+        #region OpenFileStreamAsync(RemotePath, Flags, CancellationToken)
+
+        /// <summary>
+        /// Open a remote file as a seekable <see cref="SftpFileStream"/> — read and/or write bytes at
+        /// arbitrary offsets without loading the whole file into memory.
+        /// </summary>
+        public async ValueTask<SftpFileStream> OpenFileStreamAsync(String             RemotePath,
+                                                                   SftpOpenFlags      Flags,
+                                                                   CancellationToken  CancellationToken = default)
+        {
+            var writable = (Flags & (SftpOpenFlags.Write | SftpOpenFlags.Append | SftpOpenFlags.Create | SftpOpenFlags.Truncate)) != 0;
+            var readable = Flags.HasFlag(SftpOpenFlags.Read) || !writable;
+            var initial  = Flags.HasFlag(SftpOpenFlags.Create) || Flags.HasFlag(SftpOpenFlags.Truncate)
+                               ? 0L
+                               : (await StatAsync(RemotePath, CancellationToken).ConfigureAwait(false)).Size ?? 0L;
+
+            var handle = await OpenFileAsync(RemotePath, Flags, CancellationToken).ConfigureAwait(false);
+            return new SftpFileStream(this, handle, readable, writable, initial);
+        }
 
         #endregion
 
 
-        #region (private) primitives
+        #region (internal) file primitives — also used by SftpFileStream
 
-        private async ValueTask<String> OpenFileAsync(String Path, SftpOpenFlags Flags, CancellationToken CancellationToken)
+        internal async ValueTask<String> OpenFileAsync(String Path, SftpOpenFlags Flags, CancellationToken CancellationToken)
         {
             var response = await RoundtripAsync(SftpPacketType.Open, (ref SshPacketWriter w) => { w.WriteString(Path); w.WriteUInt32((UInt32) Flags); SftpFileAttributes.File(0).Encode(ref w); }, CancellationToken).ConfigureAwait(false);
             return ReadHandle(response);
         }
+
+        internal async ValueTask<Byte[]> ReadAsync(String Handle, Int64 Offset, Int32 Length, CancellationToken CancellationToken)
+        {
+            var response = await RoundtripAsync(SftpPacketType.Read, (ref SshPacketWriter w) => { w.WriteString(Handle); w.WriteUInt64((UInt64) Offset); w.WriteUInt32((UInt32) Length); }, CancellationToken).ConfigureAwait(false);
+            if ((SftpPacketType) response[0] == SftpPacketType.Status)
+                return [];   // EOF (or an error surfaced as empty here)
+            var reader = new SshPacketReader(response); reader.ReadByte(); reader.ReadUInt32();
+            return reader.ReadBinaryString();
+        }
+
+        internal ValueTask WriteAsync(String Handle, Int64 Offset, ReadOnlyMemory<Byte> Data, CancellationToken CancellationToken)
+        {
+            var data = Data.ToArray();
+            return ExpectOkAsync(SftpPacketType.Write, (ref SshPacketWriter w) => { w.WriteString(Handle); w.WriteUInt64((UInt64) Offset); w.WriteBinaryString(data); }, CancellationToken);
+        }
+
+        internal ValueTask CloseAsync(String Handle, CancellationToken CancellationToken)
+            => ExpectOkAsync(SftpPacketType.Close, (ref SshPacketWriter w) => w.WriteString(Handle), CancellationToken);
 
         private async ValueTask<String> OpenDirectoryAsync(String Path, CancellationToken CancellationToken)
         {
             var response = await RoundtripAsync(SftpPacketType.OpenDir, (ref SshPacketWriter w) => w.WriteString(Path), CancellationToken).ConfigureAwait(false);
             return ReadHandle(response);
         }
-
-        private async ValueTask<Byte[]> ReadAsync(String Handle, Int64 Offset, Int32 Length, CancellationToken CancellationToken)
-        {
-            var response = await RoundtripAsync(SftpPacketType.Read, (ref SshPacketWriter w) => { w.WriteString(Handle); w.WriteUInt64((UInt64) Offset); w.WriteUInt32((UInt32) Length); }, CancellationToken).ConfigureAwait(false);
-            if ((SftpPacketType) response[0] == SftpPacketType.Status)
-                return [];   // EOF (or an error surfaced as empty here; download stops)
-            var reader = new SshPacketReader(response); reader.ReadByte(); reader.ReadUInt32();
-            return reader.ReadBinaryString();
-        }
-
-        private ValueTask WriteAsync(String Handle, Int64 Offset, ReadOnlyMemory<Byte> Data, CancellationToken CancellationToken)
-        {
-            var data = Data.ToArray();
-            return ExpectOkAsync(SftpPacketType.Write, (ref SshPacketWriter w) => { w.WriteString(Handle); w.WriteUInt64((UInt64) Offset); w.WriteBinaryString(data); }, CancellationToken);
-        }
-
-        private ValueTask CloseAsync(String Handle, CancellationToken CancellationToken)
-            => ExpectOkAsync(SftpPacketType.Close, (ref SshPacketWriter w) => w.WriteString(Handle), CancellationToken);
 
         private async ValueTask<IReadOnlyList<SftpDirectoryEntry>> ReadDirectoryAsync(String Handle, CancellationToken CancellationToken)
         {
@@ -290,21 +382,33 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
             return result;
         }
 
-        // Send a request (a body-writer that must not await) and read the single matching response.
+        #endregion
+
+        #region (private) request/response correlation
+
+        private delegate void WriteBody(ref SshPacketWriter Writer);
+
+        // Send a request (a body-writer that must not await) and await the reply matched by request-id.
         private async ValueTask<Byte[]> RoundtripAsync(SftpPacketType Type, WriteBody Write, CancellationToken CancellationToken)
         {
 
-            var id  = ++requestId;
+            var id  = unchecked((UInt32) System.Threading.Interlocked.Increment(ref requestIdSeed));
+            var tcs = new TaskCompletionSource<Byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+            pending[id] = tcs;
+
             var abw = new ArrayBufferWriter<Byte>();
             var w   = new SshPacketWriter(abw);
             w.WriteByte((Byte) Type);
             w.WriteUInt32(id);
             Write(ref w);
+            var packet = abw.WrittenSpan.ToArray();
 
-            await SftpServer.SendAsync(channel, abw.WrittenSpan.ToArray(), CancellationToken).ConfigureAwait(false);
+            await sendGate.WaitAsync(CancellationToken).ConfigureAwait(false);
+            try     { await SftpServer.SendAsync(channel, packet, CancellationToken).ConfigureAwait(false); }
+            finally { sendGate.Release(); }
 
-            return await SftpServer.ReadPacketAsync(channel, CancellationToken).ConfigureAwait(false)
-                   ?? throw new SshChannelClosedException();
+            await using (CancellationToken.Register(static state => ((TaskCompletionSource<Byte[]>) state!).TrySetCanceled(), tcs).ConfigureAwait(false))
+                return await tcs.Task.ConfigureAwait(false);
 
         }
 
@@ -314,7 +418,38 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
             EnsureNotStatusError(response);
         }
 
-        private delegate void WriteBody(ref SshPacketWriter Writer);
+        // The single background reader: dispatch every reply to its waiting request by id.
+        private async Task ReceiveLoopAsync()
+        {
+            try
+            {
+                while (true)
+                {
+                    var packet = await SftpServer.ReadPacketAsync(channel, cts.Token).ConfigureAwait(false);
+                    if (packet is null)
+                    {
+                        FailAllPending(new SshChannelClosedException());
+                        return;
+                    }
+
+                    var id = BinaryPrimitives.ReadUInt32BigEndian(packet.AsSpan(1, 4));
+                    if (pending.TryRemove(id, out var tcs))
+                        tcs.TrySetResult(packet);
+                    // else: an unsolicited or already-cancelled reply — ignore.
+                }
+            }
+            catch (Exception exception)
+            {
+                FailAllPending(exception);
+            }
+        }
+
+        private void FailAllPending(Exception Exception)
+        {
+            foreach (var id in pending.Keys)
+                if (pending.TryRemove(id, out var tcs))
+                    tcs.TrySetException(Exception);
+        }
 
         private static String ReadHandle(Byte[] Response)
         {
@@ -331,6 +466,21 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
             var code   = (SftpStatusCode) reader.ReadUInt32();
             if (code != SftpStatusCode.Ok)
                 throw new SftpException(code, reader.ReadString());
+        }
+
+        #endregion
+
+        #region DisposeAsync()
+
+        /// <summary>Close the SFTP channel and stop the background reader.</summary>
+        public async ValueTask DisposeAsync()
+        {
+            try { await channel.CloseAsync().ConfigureAwait(false); } catch { }
+            await cts.CancelAsync().ConfigureAwait(false);
+            try { await receiveLoop.ConfigureAwait(false); } catch { }
+            FailAllPending(new SshChannelClosedException());
+            sendGate.Dispose();
+            cts.Dispose();
         }
 
         #endregion
