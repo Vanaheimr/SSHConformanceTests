@@ -69,6 +69,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         private Int64                          remoteWindow;
         private TaskCompletionSource?          windowGrew;
         private Boolean                        sentEof, sentClose, inboundDone;
+        private Stream?                        inputStream, errorStream;
 
         #endregion
 
@@ -84,10 +85,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         public Byte[]   OpenData     { get; }
 
         /// <summary>The inbound data stream (stdout); reading it returns receive-window credit to the peer.</summary>
-        public Stream   Input   => new ChannelReadStream(stdout.Reader, n => Replenish((UInt32) n));
+        public Stream   Input   => inputStream ??= new ChannelReadStream(stdout.Reader, n => Replenish((UInt32) n));
 
         /// <summary>The inbound extended-data stream (stderr); reading it also returns window credit.</summary>
-        public Stream   Error   => new ChannelReadStream(stderr.Reader, n => Replenish((UInt32) n));
+        public Stream   Error   => errorStream ??= new ChannelReadStream(stderr.Reader, n => Replenish((UInt32) n));
 
         /// <summary>Completes when the channel is fully closed.</summary>
         public Task     Closed  => closeTcs.Task;
@@ -184,6 +185,53 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>Reply to the most recent want-reply request (rarely needed directly; used by request handlers).</summary>
         public ValueTask ReplyAsync(Boolean Success, CancellationToken CancellationToken = default)
             => mux.SendAsync(Success ? SshChannelWire.ChannelSuccess(remoteId) : SshChannelWire.ChannelFailure(remoteId), CancellationToken);
+
+        #endregion
+
+        #region AsStream()
+
+        /// <summary>View this channel's data plane as a bidirectional <see cref="Stream"/> (read = stdout, write = channel data).</summary>
+        public Stream AsStream() => new MuxChannelDuplexStream(this);
+
+        private sealed class MuxChannelDuplexStream : Stream
+        {
+            private readonly SshMuxChannel  channel;
+            private readonly Stream         input;
+            private Boolean                 closed;
+
+            public MuxChannelDuplexStream(SshMuxChannel Channel) { channel = Channel; input = Channel.Input; }
+
+            public override ValueTask<Int32> ReadAsync(Memory<Byte> b, CancellationToken ct = default) => input.ReadAsync(b, ct);
+            public override Task<Int32> ReadAsync(Byte[] b, Int32 o, Int32 c, CancellationToken ct)      => input.ReadAsync(b.AsMemory(o, c), ct).AsTask();
+            public override Int32 Read(Byte[] b, Int32 o, Int32 c)                                       => input.ReadAsync(b.AsMemory(o, c)).AsTask().GetAwaiter().GetResult();
+
+            public override ValueTask WriteAsync(ReadOnlyMemory<Byte> b, CancellationToken ct = default) => channel.SendDataAsync(b, ct);
+            public override Task WriteAsync(Byte[] b, Int32 o, Int32 c, CancellationToken ct)            => channel.SendDataAsync(b.AsMemory(o, c), ct).AsTask();
+            public override void Write(Byte[] b, Int32 o, Int32 c)                                       => channel.SendDataAsync(b.AsMemory(o, c)).AsTask().GetAwaiter().GetResult();
+
+            public override Boolean CanRead => !closed;
+            public override Boolean CanWrite => !closed;
+            public override Boolean CanSeek => false;
+            public override Int64 Length => throw new NotSupportedException();
+            public override Int64 Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+            public override void Flush() { }
+            public override Task FlushAsync(CancellationToken ct) => Task.CompletedTask;
+            public override Int64 Seek(Int64 o, SeekOrigin s) => throw new NotSupportedException();
+            public override void SetLength(Int64 v) => throw new NotSupportedException();
+
+            public override async ValueTask DisposeAsync()
+            {
+                if (closed) return; closed = true;
+                try { await channel.CloseAsync().ConfigureAwait(false); } catch { }
+                await base.DisposeAsync().ConfigureAwait(false);
+            }
+            protected override void Dispose(Boolean disposing)
+            {
+                if (closed) return; closed = true;
+                if (disposing) try { channel.CloseAsync().AsTask().GetAwaiter().GetResult(); } catch { }
+                base.Dispose(disposing);
+            }
+        }
 
         #endregion
 

@@ -65,11 +65,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// </summary>
         public Stream   StandardInput  { get; }
 
-        internal SshExecContext(String                                                             command,
-                                String                                                             username,
-                                Func<ReadOnlyMemory<Byte>, Boolean, CancellationToken, ValueTask>  write,
-                                Stream?                                                            standardInput  = null,
-                                Boolean                                                            hasPty         = false)
+        /// <summary>Create an exec/shell context (advanced; usually supplied by the server to a handler).</summary>
+        public SshExecContext(String                                                             command,
+                              String                                                             username,
+                              Func<ReadOnlyMemory<Byte>, Boolean, CancellationToken, ValueTask>  write,
+                              Stream?                                                            standardInput  = null,
+                              Boolean                                                            hasPty         = false)
         {
             this.Command        = command;
             this.Username       = username;
