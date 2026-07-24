@@ -104,7 +104,6 @@ Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the
 ### Optional follow-ups (non-blocking technical debt)
 
 - ⬜ **Hermod `SSHFP(Stream)` ctor does not consume RDLENGTH** — the base `ADNSResourceRecord(Stream, Type)` has that read commented out, unlike `SSHFP(DomainName, Stream)` (the one the response parser actually picks, and the one that is correct). The single-`Stream` ctor is currently unused, so this is latent; fixing it settles a contract shared by **every** record type, hence deliberately left alone in Hermod `160cd023`.
-- ⬜ **Push ordering for the Hermod submodule** — parent commit `fa9c9b7` records the pointer to Hermod `160cd023`, which exists **locally only**. Push the submodule before the parent, or the recorded pointer will not resolve for anyone else.
 
 ---
 
