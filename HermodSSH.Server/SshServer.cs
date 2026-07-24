@@ -22,6 +22,7 @@ using System.Net.Sockets;
 
 using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
+using org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP;
 
 #endregion
 
@@ -42,8 +43,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
         /// <summary>The user authenticator (public keys / certificates / password / 2FA).</summary>
         public required ISshUserAuthenticator       Authenticator     { get; init; }
 
-        /// <summary>Handles <c>exec</c>/<c>shell</c> sessions; when null, session channels are refused.</summary>
+        /// <summary>Handles <c>exec</c>/<c>shell</c> sessions; when null (and no SFTP), session channels are refused.</summary>
         public SshExecHandler?                      ExecHandler       { get; init; }
+
+        /// <summary>Enables the <c>sftp</c> subsystem over the given file system; when null, SFTP is refused.</summary>
+        public ISftpFileSystem?                     SftpFileSystem    { get; init; }
+
+        /// <summary>Optional SFTP access profile (least-privilege gating).</summary>
+        public SshAccessProfile?                    SftpProfile       { get; init; }
+
+        /// <summary>Optional SFTP quotas / bandwidth limits.</summary>
+        public SftpLimits?                          SftpLimits        { get; init; }
 
         /// <summary>The port-forwarding policy (default: off).</summary>
         public ForwardingPolicy                     ForwardingPolicy  { get; init; } = ForwardingPolicy.None;
@@ -145,7 +155,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
         private async ValueTask<Boolean> AcceptChannelAsync(SshChannelOpenInfo Info)
         {
             if (Info.ChannelType == "session")
-                return options.ExecHandler is not null;
+                return options.ExecHandler is not null || options.SftpFileSystem is not null;
 
             if (Info.ChannelType == "direct-tcpip" && options.ForwardingPolicy.DirectTcpIp is not null)
             {
@@ -159,7 +169,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
 
         private async Task ServeSessionAsync(SshMuxChannel Channel, String User, CancellationToken CancellationToken)
         {
-            try { await SshSessionChannel.ServeAsync(Channel, User, options.ExecHandler!, CancellationToken); }
+            Dictionary<String, Func<SshMuxChannel, CancellationToken, ValueTask>>? subsystems = null;
+            if (options.SftpFileSystem is not null)
+                subsystems = new () {
+                    ["sftp"] = (ch, ct) => SftpServer.ServeAsync(new StreamSftpDuplex(ch.AsStream()), options.SftpFileSystem, options.SftpProfile, options.SftpLimits, ct)
+                };
+
+            try { await SshSessionChannel.ServeAsync(Channel, User, options.ExecHandler, subsystems, CancellationToken); }
             catch { }
         }
 

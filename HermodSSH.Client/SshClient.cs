@@ -21,6 +21,7 @@ using System.Buffers;
 
 using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
+using org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP;
 
 #endregion
 
@@ -126,6 +127,19 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Client
             w.WriteString(Host); w.WriteUInt32(Port); w.WriteString("127.0.0.1"); w.WriteUInt32(0);
             var channel = await mux.OpenChannelAsync("direct-tcpip", abw.WrittenSpan.ToArray(), CancellationToken).ConfigureAwait(false);
             return channel.AsStream();
+        }
+
+        #endregion
+
+        #region OpenSftpClientAsync(CancellationToken)
+
+        /// <summary>Open the <c>sftp</c> subsystem over a multiplexed channel and return an SFTP client (runs concurrently with exec/tunnels).</summary>
+        public async ValueTask<SftpClient> OpenSftpClientAsync(CancellationToken CancellationToken = default)
+        {
+            var channel = await mux.OpenChannelAsync("session", CancellationToken: CancellationToken).ConfigureAwait(false);
+            if (!await channel.SendRequestAsync("subsystem", true, SshSessionChannel.EncodeString("sftp"), CancellationToken).ConfigureAwait(false))
+                throw new SshWireException("The server refused the 'sftp' subsystem.");
+            return await SftpClient.OpenAsync(new StreamSftpDuplex(channel.AsStream()), CancellationToken).ConfigureAwait(false);
         }
 
         #endregion

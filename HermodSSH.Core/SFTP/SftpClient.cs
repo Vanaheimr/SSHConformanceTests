@@ -40,7 +40,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
         private const Int32 TransferChunk         = 30 * 1024;   // stay under the 32 KiB channel packet
         private const Int32 MaxOutstanding        = 16;          // pipelining window (requests in flight)
 
-        private readonly SshChannelDuplex                                    channel;
+        private readonly ISftpDuplex                                         channel;
         private readonly CancellationTokenSource                             cts       = new ();
         private readonly SemaphoreSlim                                       sendGate  = new (1, 1);
         private readonly ConcurrentDictionary<UInt32, TaskCompletionSource<Byte[]>>  pending = new ();
@@ -61,7 +61,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
         #region Constructor(s)
 
-        private SftpClient(SshChannelDuplex Channel, IReadOnlyDictionary<String, String> ServerExtensions)
+        private SftpClient(ISftpDuplex Channel, IReadOnlyDictionary<String, String> ServerExtensions)
         {
             this.channel           = Channel;
             this.ServerExtensions  = ServerExtensions;
@@ -73,11 +73,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
         #region (static) OpenAsync(Transport, CancellationToken)
 
-        /// <summary>Open the <c>sftp</c> subsystem and negotiate the protocol version.</summary>
+        /// <summary>Open the <c>sftp</c> subsystem on a single-channel transport and negotiate the protocol version.</summary>
         public static async ValueTask<SftpClient> OpenAsync(SshTransport Transport, CancellationToken CancellationToken = default)
-        {
+            => await OpenAsync(await SshConnection.OpenSubsystemAsync(Transport, "sftp", CancellationToken).ConfigureAwait(false), CancellationToken).ConfigureAwait(false);
 
-            var channel = await SshConnection.OpenSubsystemAsync(Transport, "sftp", CancellationToken).ConfigureAwait(false);
+        /// <summary>Run the SFTP client over an already-established duplex channel (e.g. a multiplexed <c>sftp</c> subsystem channel).</summary>
+        public static async ValueTask<SftpClient> OpenAsync(ISftpDuplex channel, CancellationToken CancellationToken = default)
+        {
 
             var abw = new ArrayBufferWriter<Byte>(); var w = new SshPacketWriter(abw);
             w.WriteByte((Byte) SftpPacketType.Init);

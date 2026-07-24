@@ -19,6 +19,8 @@
 
 using System.Buffers;
 
+using org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP;
+
 #endregion
 
 namespace org.GraphDefined.Vanaheimr.Hermod.SSH
@@ -29,7 +31,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
     /// channel data with window-based flow control, reassembling inbound <c>CHANNEL_DATA</c> into a byte
     /// stream. Used for subsystems such as SFTP, whose length-prefixed messages flow both ways.
     /// </summary>
-    public sealed class SshChannelDuplex
+    public sealed class SshChannelDuplex : ISftpDuplex
     {
 
         #region Data

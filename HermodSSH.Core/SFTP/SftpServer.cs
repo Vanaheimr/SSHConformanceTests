@@ -43,7 +43,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
         /// per-session size quotas are enforced (a quota overrun discards the partial upload) and upload/
         /// download throughput is throttled via a token bucket.
         /// </summary>
-        public static async ValueTask ServeAsync(SshChannelDuplex   Channel,
+        public static async ValueTask ServeAsync(ISftpDuplex        Channel,
                                                  ISftpFileSystem    FileSystem,
                                                  SshAccessProfile?  Profile            = null,
                                                  SftpLimits?        Limits             = null,
@@ -499,7 +499,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
         #region (private) framing
 
-        internal static async ValueTask<Byte[]?> ReadPacketAsync(SshChannelDuplex Channel, CancellationToken CancellationToken)
+        internal static async ValueTask<Byte[]?> ReadPacketAsync(ISftpDuplex Channel, CancellationToken CancellationToken)
         {
             var lengthBytes = await Channel.TryReadExactAsync(4, CancellationToken).ConfigureAwait(false);
             if (lengthBytes is null)
@@ -508,7 +508,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
             return await Channel.ReadExactAsync((Int32) length, CancellationToken).ConfigureAwait(false);
         }
 
-        internal static ValueTask SendAsync(SshChannelDuplex Channel, Byte[] Body, CancellationToken CancellationToken)
+        internal static ValueTask SendAsync(ISftpDuplex Channel, Byte[] Body, CancellationToken CancellationToken)
         {
             var framed = new Byte[4 + Body.Length];
             BinaryPrimitives.WriteUInt32BigEndian(framed, (UInt32) Body.Length);

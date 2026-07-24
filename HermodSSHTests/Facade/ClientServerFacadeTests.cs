@@ -19,6 +19,7 @@
 
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 
 using NUnit.Framework;
@@ -27,6 +28,7 @@ using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
 using org.GraphDefined.Vanaheimr.Hermod.SSH.Client;
 using org.GraphDefined.Vanaheimr.Hermod.SSH.Server;
+using org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP;
 
 #endregion
 
@@ -129,6 +131,65 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             {
                 await server.DisposeAsync();
                 echo.Stop();
+            }
+
+        }
+
+        #endregion
+
+        #region Facade_Sftp_ConcurrentWithExec_OverOneConnection
+
+        [Test]
+        [CancelAfter(25000)]
+        public async Task Facade_Sftp_ConcurrentWithExec_OverOneConnection(CancellationToken CancellationToken)
+        {
+
+            var hostKey = SshHostKey.GenerateEd25519();
+            var userKey = SshHostKey.GenerateEd25519();
+            var fileSystem = new InMemorySftpFileSystem();
+
+            var server = new SshServer(new SshServerOptions {
+                HostKeys       = [ hostKey ],
+                Authenticator  = SshUserAuthenticator.ForAuthorizedKeys(userKey.PublicKeyBlob),
+                ExecHandler    = async (ctx, ct) => { await ctx.WriteAsync($"ran: {ctx.Command}\n", ct); return 0; },
+                SftpFileSystem = fileSystem
+            });
+
+            try
+            {
+
+                await server.StartAsync(new IPSocket(IPv4Address.Localhost, IPPort.Auto), CancellationToken);
+                var port = (UInt16) server.LocalEndPoint.Port.ToInt32();
+
+                await using var client = await SshClient.ConnectAsync("127.0.0.1", port, new SshClientOptions {
+                    Username      = "achim",
+                    VerifyHostKey = blob => blob.AsSpan().SequenceEqual(hostKey.PublicKeyBlob),
+                    Credentials   = [ userKey ]
+                }, CancellationToken);
+
+                var content = RandomNumberGenerator.GetBytes(60_000);   // multi-chunk
+
+                // SFTP subsystem multiplexed alongside a concurrent exec on the same connection.
+                var execTask = client.ExecuteAsync("status", CancellationToken).AsTask();
+
+                var sftp = await client.OpenSftpClientAsync(CancellationToken);
+                await sftp.UploadAsync("/device.bin", content, CancellationToken);
+                var downloaded = await sftp.DownloadAsync("/device.bin", CancellationToken);
+                var listing    = await sftp.ListDirectoryAsync("/", CancellationToken);
+                await sftp.DisposeAsync();
+
+                var result = await execTask;
+
+                Assert.Multiple(() => {
+                    Assert.That(downloaded, Is.EqualTo(content), "SFTP round-trip over the multiplexed subsystem channel");
+                    Assert.That(listing.Select(e => e.Name), Does.Contain("device.bin"));
+                    Assert.That(result.StandardOutput, Is.EqualTo("ran: status\n"), "exec ran concurrently with SFTP");
+                });
+
+            }
+            finally
+            {
+                await server.DisposeAsync();
             }
 
         }

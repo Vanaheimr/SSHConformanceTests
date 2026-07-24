@@ -67,9 +67,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         /// <summary>
         /// Serve a session channel: accept <c>pty-req</c>/<c>env</c>, dispatch <c>exec</c>/<c>shell</c> to
-        /// <paramref name="Handler"/>, stream its output and report the exit status.
+        /// <paramref name="Handler"/>, dispatch a <c>subsystem</c> request to a matching handler in
+        /// <paramref name="Subsystems"/> (e.g. <c>sftp</c>), stream output and report the exit status.
         /// </summary>
-        public static async ValueTask ServeAsync(SshMuxChannel Channel, String Username, SshExecHandler Handler, CancellationToken CancellationToken = default)
+        public static async ValueTask ServeAsync(SshMuxChannel                                                              Channel,
+                                                 String                                                                     Username,
+                                                 SshExecHandler?                                                            Handler,
+                                                 IReadOnlyDictionary<String, Func<SshMuxChannel, CancellationToken, ValueTask>>?  Subsystems = null,
+                                                 CancellationToken                                                          CancellationToken = default)
         {
 
             var hasPty = false;
@@ -80,7 +85,20 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
                 var type = request.Value.Type;
 
-                if (type is "exec" or "shell")
+                if (type == "subsystem")
+                {
+                    var name = ReadString(request.Value.Data);
+                    if (Subsystems is not null && Subsystems.TryGetValue(name, out var serve))
+                    {
+                        if (request.Value.WantReply) await Channel.ReplyAsync(true, CancellationToken).ConfigureAwait(false);
+                        await serve(Channel, CancellationToken).ConfigureAwait(false);
+                        return;
+                    }
+                    if (request.Value.WantReply) await Channel.ReplyAsync(false, CancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (type is "exec" or "shell" && Handler is not null)
                 {
                     var command = type == "exec" ? ReadString(request.Value.Data) : "";
                     if (request.Value.WantReply)
