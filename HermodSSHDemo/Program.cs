@@ -61,16 +61,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
                         PrintHelp();
                         return 0;
 
-                    case "keygen":  return await Commands.KeygenAsync(Arguments, cts.Token);
-                    case "scan":    return await Commands.ScanAsync  (Arguments, cts.Token);
-                    case "ca":      return await Commands.CaAsync    (Arguments, cts.Token);
-                    case "exec":    return await Commands.ExecAsync  (Arguments, cts.Token);
-                    case "serve":   return await Commands.ServeAsync (Arguments, cts.Token);
+                    case "keygen":  return await Commands.KeygenAsync (Arguments, cts.Token);
+                    case "scan":    return await Commands.ScanAsync   (Arguments, cts.Token);
+                    case "ca":      return await Commands.CaAsync     (Arguments, cts.Token);
+                    case "exec":    return await Commands.ExecAsync   (Arguments, cts.Token);
+                    case "serve":   return await Commands.ServeAsync  (Arguments, cts.Token);
+                    case "connect": return await Commands.ConnectAsync(Arguments, cts.Token);
+                    case "sftp":    return await Commands.SftpAsync   (Arguments, cts.Token);
+                    case "forward": return await Commands.ForwardAsync(Arguments, cts.Token);
 
                     // Still planned — see PLAN.md section 5 (Demo CLI).
-                    case "connect":
-                    case "sftp":
-                    case "forward":
                     case "play":
                         Console.Error.WriteLine($"'{command}' is not implemented yet — see PLAN.md.");
                         return 64;  // EX_USAGE
@@ -116,10 +116,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
                   scan       Print a public key's fingerprints and its SSHFP DNS records          [ready]
                   ca         Issue an OpenSSH certificate — sign a subject key with a CA (mini-CA) [ready]
                   exec       Log in, run a command, capture stdout/stderr + exit code, log out     [ready]
-                  serve      Run a demo SSH server (authorized_keys auth, exec handler)            [ready]
-                  connect    Open an interactive session (supports -J jump hosts)                  [planned]
-                  sftp       Transfer files (get / put / ls) with progress                        [planned]
-                  forward    Local / remote / jump-host port forwarding                           [planned]
+                  serve      Run a demo SSH server (authorized_keys auth, exec + SFTP + forwarding) [ready]
+                  connect    Open an interactive session (stdin/stdout streamed)                   [ready]
+                  sftp       Transfer files over SFTP (ls / get / put)                             [ready]
+                  forward    Local port forwarding (ssh -L)                                        [ready]
                   play       Replay a recorded asciicast session                                  [planned]
 
                   help       Show this help
@@ -129,8 +129,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
                   hermod-ssh keygen -t ed25519 -f ./id_ed25519
                   hermod-ssh scan   -f ./id_ed25519.pub -n host.example.
                   hermod-ssh ca --ca ./ca -s ./id_ed25519.pub -I alice@2026 -n alice,admin
-                  hermod-ssh serve  -a ./authorized_keys -p 2222
+                  hermod-ssh serve  -a ./authorized_keys -p 2222 --sftp-root ./root
                   hermod-ssh exec   -i ./id_ed25519 -p 2222 demo@127.0.0.1 "uname -a"
+                  hermod-ssh sftp   -i ./id_ed25519 -p 2222 demo@127.0.0.1 put ./file.bin /file.bin
+                  hermod-ssh forward -i ./id_ed25519 -p 2222 -L 15432:db.internal:5432 demo@127.0.0.1
                 """);
 
         }

@@ -17,10 +17,14 @@
 
 #region Usings
 
+using System.Net.Sockets;
 using System.Text;
 
 using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
+using org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP;
+using org.GraphDefined.Vanaheimr.Hermod.SSH.Client;
+using org.GraphDefined.Vanaheimr.Hermod.SSH.Server;
 
 #endregion
 
@@ -130,30 +134,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
         #region exec
 
-        /// <summary>Log in with a key, run a command, capture stdout/stderr + exit code, log out.</summary>
+        /// <summary>Log in with a key, run a command, capture stdout/stderr + exit code, log out (over the façade).</summary>
         public static async Task<Int32> ExecAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 
-            var identity = Opt(Arguments, "-i", "--identity");
-            var portStr  = Opt(Arguments, "-p", "--port") ?? "22";
-            var rest     = Positional(Arguments);
-
-            if (identity is null || rest.Count < 2)
+            var rest = Positional(Arguments);
+            if (Opt(Arguments, "-i", "--identity") is null || rest.Count < 2)
                 return Usage("exec -i <key> [-p <port>] <user@host> <command...>");
 
-            var (user, host) = SplitTarget(rest[0]);
-            var command      = String.Join(' ', rest.Skip(1));
+            await using var client = await ConnectClientAsync(Arguments, rest[0], CancellationToken);
 
-            var key  = SshKeyGenerator.LoadPrivateKey(await File.ReadAllTextAsync(identity, CancellationToken)).Key;
-            var pipe = await SshTcp.ConnectAsync(host, IPPort.Parse(portStr), CancellationToken);
-
-            using var transport = await SshTransport.ClientHandshakeAsync(pipe, VerifyHostKey: _ => true, CancellationToken: CancellationToken);
-            Console.Error.WriteLine($"Warning: accepting host key of {host} without verification (demo).");
-
-            if (!await UserAuthentication.ClientPublicKeyAuthenticateAsync(transport, user, key, CancellationToken: CancellationToken))
-                return Fail("Authentication failed.");
-
-            var result = await SshConnection.ExecuteAsync(transport, command, CancellationToken);
+            var result = await client.ExecuteAsync(String.Join(' ', rest.Skip(1)), CancellationToken);
             Console.Out.Write(result.StandardOutput);
             Console.Error.Write(result.StandardError);
             return result.ExitCode;
@@ -162,49 +153,201 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
         #endregion
 
+        #region connect
+
+        /// <summary>Open a session and stream it interactively: local stdin → remote, remote stdout/stderr → local.</summary>
+        public static async Task<Int32> ConnectAsync(String[] Arguments, CancellationToken CancellationToken)
+        {
+
+            var rest = Positional(Arguments);
+            if (Opt(Arguments, "-i", "--identity") is null || rest.Count < 1)
+                return Usage("connect -i <key> [-p <port>] <user@host> [command...]");
+
+            await using var client  = await ConnectClientAsync(Arguments, rest[0], CancellationToken);
+            var command             = String.Join(' ', rest.Skip(1));
+
+            var channel = await client.Multiplexer.OpenChannelAsync("session", CancellationToken: CancellationToken);
+            await channel.SendRequestAsync(command.Length > 0 ? "exec" : "shell", true,
+                                           command.Length > 0 ? SshSessionChannel.EncodeString(command) : [],
+                                           CancellationToken);
+
+            // Pump remote → local (stdout + stderr) and local → remote (stdin) until the channel ends.
+            var toOut = channel.Input.CopyToAsync(Console.OpenStandardOutput(), CancellationToken);
+            var toErr = channel.Error.CopyToAsync(Console.OpenStandardError(), CancellationToken);
+            var toIn  = Task.Run(async () =>
+            {
+                try { await Console.OpenStandardInput().CopyToAsync(channel.AsStream(), CancellationToken); } catch { }
+                try { await channel.SendEofAsync(CancellationToken); } catch { }
+            }, CancellationToken);
+
+            var exit = 0;
+            SshChannelRequest? request;
+            while ((request = await channel.ReadRequestAsync(CancellationToken)) is not null)
+                if (request.Value.Type == "exit-status")
+                    exit = (Int32) ReadUInt32(request.Value.Data);
+
+            await Task.WhenAll(toOut, toErr);
+            _ = toIn;
+            return exit;
+
+        }
+
+        #endregion
+
+        #region sftp
+
+        /// <summary>Transfer files over a multiplexed SFTP subsystem: <c>ls</c> / <c>get</c> / <c>put</c>.</summary>
+        public static async Task<Int32> SftpAsync(String[] Arguments, CancellationToken CancellationToken)
+        {
+
+            var rest = Positional(Arguments);
+            if (Opt(Arguments, "-i", "--identity") is null || rest.Count < 2)
+                return Usage("sftp -i <key> [-p <port>] <user@host> <ls <path> | get <remote> <local> | put <local> <remote>>");
+
+            await using var client = await ConnectClientAsync(Arguments, rest[0], CancellationToken);
+            var sftp               = await client.OpenSftpClientAsync(CancellationToken);
+            var op                 = rest[1].ToLowerInvariant();
+
+            try
+            {
+                switch (op)
+                {
+                    case "ls":
+                        foreach (var entry in await sftp.ListDirectoryAsync(rest.ElementAtOrDefault(2) ?? "/", CancellationToken))
+                            Console.WriteLine($"  {(entry.Attributes.IsDirectory ? "d" : "-")} {entry.Attributes.Size,12}  {entry.Name}");
+                        return 0;
+
+                    case "get" when rest.Count >= 4:
+                        await File.WriteAllBytesAsync(rest[3], await sftp.DownloadAsync(rest[2], CancellationToken), CancellationToken);
+                        Console.WriteLine($"Downloaded {rest[2]} → {rest[3]}");
+                        return 0;
+
+                    case "put" when rest.Count >= 4:
+                        await sftp.UploadAsync(rest[3], await File.ReadAllBytesAsync(rest[2], CancellationToken), CancellationToken);
+                        Console.WriteLine($"Uploaded {rest[2]} → {rest[3]}");
+                        return 0;
+
+                    default:
+                        return Usage("sftp … <ls <path> | get <remote> <local> | put <local> <remote>>");
+                }
+            }
+            finally { await sftp.DisposeAsync(); }
+
+        }
+
+        #endregion
+
+        #region forward
+
+        /// <summary>Local port forward (<c>ssh -L</c>): bind a local port and tunnel each connection through the server.</summary>
+        public static async Task<Int32> ForwardAsync(String[] Arguments, CancellationToken CancellationToken)
+        {
+
+            var rest = Positional(Arguments);
+            var spec = Opt(Arguments, "-L", "--local");
+            if (Opt(Arguments, "-i", "--identity") is null || rest.Count < 1 || spec is null)
+                return Usage("forward -i <key> [-p <port>] -L <localport>:<host>:<hostport> <user@host>");
+
+            // Parse localport:host:hostport
+            var parts = spec.Split(':');
+            if (parts.Length != 3)
+                return Usage("forward … -L <localport>:<host>:<hostport> …");
+            var localPort  = UInt16.Parse(parts[0]);
+            var remoteHost = parts[1];
+            var remotePort = UInt16.Parse(parts[2]);
+
+            await using var client = await ConnectClientAsync(Arguments, rest[0], CancellationToken);
+
+            var listener = new TcpListener(System.Net.IPAddress.Loopback, localPort);
+            listener.Start();
+            Console.WriteLine($"Forwarding 127.0.0.1:{localPort} → {remoteHost}:{remotePort} (through {rest[0]}) — Ctrl+C to stop");
+
+            try
+            {
+                while (!CancellationToken.IsCancellationRequested)
+                {
+                    var socket = await listener.AcceptTcpClientAsync(CancellationToken);
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var tunnel = await client.OpenTcpStreamAsync(remoteHost, remotePort, CancellationToken);
+                            await SshChannelRelay.RelayAsync(tunnel, socket.GetStream(), CancellationToken);
+                        }
+                        catch { }
+                    }, CancellationToken);
+                }
+            }
+            finally { listener.Stop(); }
+
+            return 0;
+
+        }
+
+        #endregion
+
+
+        #region (shared) ConnectClientAsync
+
+        // Connect + authenticate a façade SshClient from the common -i/-p options and a user@host target.
+        private static async Task<SshClient> ConnectClientAsync(String[] Arguments, String Target, CancellationToken CancellationToken)
+        {
+            var identity     = Opt(Arguments, "-i", "--identity")!;
+            var portStr      = Opt(Arguments, "-p", "--port") ?? "22";
+            var (user, host) = SplitTarget(Target);
+            var key          = SshKeyGenerator.LoadPrivateKey(await File.ReadAllTextAsync(identity, CancellationToken)).Key;
+
+            Console.Error.WriteLine($"Warning: accepting host key of {host} without verification (demo).");
+            return await SshClient.ConnectAsync(host, UInt16.Parse(portStr), new SshClientOptions {
+                Username      = user,
+                VerifyHostKey = _ => true,
+                Credentials   = [ key ]
+            }, CancellationToken);
+        }
+
+        private static UInt32 ReadUInt32(Byte[] Data) { var r = new SshPacketReader(Data); return r.ReadUInt32(); }
+
+        #endregion
+
         #region serve
 
-        /// <summary>Run a demo SSH server: authorize keys and answer <c>exec</c> with a canned handler.</summary>
+        /// <summary>Run a demo SSH server (façade): authorize keys, answer <c>exec</c>, and optionally serve SFTP + forwarding.</summary>
         public static async Task<Int32> ServeAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 
             var hostKeyPath = Opt(Arguments, "-k", "--host-key")       ?? "hermod_host_ed25519";
             var authKeys    = Opt(Arguments, "-a", "--authorized-keys");
             var portStr     = Opt(Arguments, "-p", "--port") ?? "2222";
+            var sftpRoot    = Opt(Arguments, "--sftp-root");
 
             if (authKeys is null)
-                return Usage("serve -a <authorized_keys> [-k <host-key>] [-p <port>]");
+                return Usage("serve -a <authorized_keys> [-k <host-key>] [-p <port>] [--sftp-root <dir>]");
 
-            var hostKey       = await SshKeyGenerator.LoadOrCreateHostKeyAsync(hostKeyPath, "ssh-ed25519", CancellationToken);
-            var authorized    = (await File.ReadAllLinesAsync(authKeys, CancellationToken))
-                                     .Where(l => l.Trim().Length > 0 && !l.TrimStart().StartsWith('#'))
-                                     .Select(l => SshPublicKey.Parse(l).Blob)
-                                     .ToArray();
-            var authenticator = SshUserAuthenticator.ForAuthorizedKeys(authorized);
+            var hostKey    = await SshKeyGenerator.LoadOrCreateHostKeyAsync(hostKeyPath, "ssh-ed25519", CancellationToken);
+            var authorized = (await File.ReadAllLinesAsync(authKeys, CancellationToken))
+                                 .Where(l => l.Trim().Length > 0 && !l.TrimStart().StartsWith('#'))
+                                 .Select(l => SshPublicKey.Parse(l).Blob)
+                                 .ToArray();
 
-            using var listener = SshTcpListener.Start(new IPSocket(IPv4Address.Any, IPPort.Parse(portStr)));
-            Console.WriteLine($"hermod-ssh serve listening on port {portStr} ({authorized.Length} authorized key(s)) — Ctrl+C to stop");
-
-            while (!CancellationToken.IsCancellationRequested)
-            {
-                var pipe = await listener.AcceptAsync(CancellationToken);
-                _ = Task.Run(async () =>
+            await using var server = new SshServer(new SshServerOptions {
+                HostKeys         = [ hostKey ],
+                Authenticator    = SshUserAuthenticator.ForAuthorizedKeys(authorized),
+                ExecHandler      = async (ctx, ct) =>
                 {
-                    try
-                    {
-                        using var t = await SshTransport.ServerHandshakeAsync(pipe, hostKey, CancellationToken: CancellationToken);
-                        await UserAuthentication.ServerAuthenticateAsync(t, authenticator, CancellationToken: CancellationToken);
-                        await SshConnection.ServeExecAsync(t, "demo", async (ctx, ct) =>
-                        {
-                            await ctx.WriteLineAsync($"hermod-ssh demo server — you asked to run: {ctx.Command}", ct);
-                            await ctx.WriteLineAsync($"host: {Environment.MachineName}, time: {DateTimeOffset.UtcNow:u}", ct);
-                            return 0;
-                        }, CancellationToken);
-                    }
-                    catch (Exception e) { Console.Error.WriteLine($"session ended: {e.Message}"); }
-                }, CancellationToken);
-            }
+                    await ctx.WriteLineAsync($"hermod-ssh demo server — you asked to run: {ctx.Command}", ct);
+                    await ctx.WriteLineAsync($"host: {Environment.MachineName}, time: {DateTimeOffset.UtcNow:u}", ct);
+                    return 0;
+                },
+                SftpFileSystem   = sftpRoot is null ? null : new LocalSftpFileSystem(sftpRoot),
+                ForwardingPolicy = ForwardingPolicy.LoopbackOnly
+            });
 
+            await server.StartAsync(new IPSocket(IPv4Address.Any, IPPort.Parse(portStr)), CancellationToken);
+            Console.WriteLine($"hermod-ssh serve listening on port {portStr} ({authorized.Length} authorized key(s)"
+                              + $"{(sftpRoot is null ? "" : $", SFTP root {sftpRoot}")}) — Ctrl+C to stop");
+
+            try { await Task.Delay(Timeout.Infinite, CancellationToken); }
+            catch (OperationCanceledException) { }
             return 0;
 
         }
