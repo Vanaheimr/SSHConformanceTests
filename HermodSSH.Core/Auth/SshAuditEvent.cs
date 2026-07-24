@@ -24,14 +24,38 @@ using System.Collections.Concurrent;
 namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 {
 
+    /// <summary>Which end of the connection emitted an audit event.</summary>
+    public enum SshRole
+    {
+        /// <summary>The client side.</summary>
+        Client,
+        /// <summary>The server side.</summary>
+        Server
+    }
+
+
     /// <summary>
     /// The base of the typed audit event stream — a single source of truth for security-relevant events
-    /// that a host can route to logs, metrics or a SIEM. Records are immutable and carry a timestamp.
+    /// that a host can route to logs, metrics or a SIEM. Records are immutable and carry a timestamp plus a
+    /// common envelope (a monotonic sequence number, a connection id correlating all events of one
+    /// connection, the peer endpoint and the emitting role) that a sink stamps on the way out.
     /// </summary>
     public abstract record SshAuditEvent(DateTimeOffset Timestamp)
     {
         /// <summary>The event type name (for structured logging / filtering).</summary>
         public String EventType => GetType().Name;
+
+        /// <summary>A monotonic sequence number stamped by the sink (0 until stamped).</summary>
+        public Int64 SequenceNumber { get; init; }
+
+        /// <summary>An id correlating every event of one connection.</summary>
+        public String? ConnectionId { get; init; }
+
+        /// <summary>The peer endpoint (host:port) the connection is with.</summary>
+        public String? PeerEndpoint { get; init; }
+
+        /// <summary>The role that emitted this event.</summary>
+        public SshRole Role { get; init; }
     }
 
 
