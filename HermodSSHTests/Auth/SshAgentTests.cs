@@ -182,7 +182,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 catch { }
             }, CancellationToken);
 
-            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             var ok = await UserAuthentication.ClientPublicKeyAuthenticateAsync(client, "achim", agentKey, CancellationToken: CancellationToken);
 
             await server;

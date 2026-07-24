@@ -92,7 +92,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             if (!SshSignature.Verify(kS, h, signatureBlob))
                 throw new SshWireException("The server's host-key signature over the exchange hash is invalid!");
 
-            if (VerifyHostKey is not null && !VerifyHostKey(kS))
+            // Fail closed: the signature proves key possession, not host identity, so a missing verifier
+            // means the server is unauthenticated and the connection is trivially machine-in-the-middled.
+            if (VerifyHostKey is null)
+                throw new SshWireException("No host-key verification was supplied, so the server's identity cannot be established. "
+                                           + "Pass a verifier (e.g. HostKeyPolicy.ForHost(host, port)), or SshHostKeyVerification.AcceptAnyUnsafe to skip it deliberately.");
+
+            if (!VerifyHostKey(kS))
                 throw new SshWireException("The server's host key was rejected by the host-key policy.");
 
             // 6. NEWKEYS + key derivation.

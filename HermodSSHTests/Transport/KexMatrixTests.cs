@@ -54,7 +54,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             String[] kexes = [ Kex ];
 
-            var clientTask = SshHandshake.ClientHandshakeAsync(clientPipe, KeyExchanges: kexes, CancellationToken: CancellationToken);
+            var clientTask = SshHandshake.ClientHandshakeAsync(clientPipe, KeyExchanges: kexes, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             var serverTask = SshHandshake.ServerHandshakeAsync(serverPipe, hostKey, KeyExchanges: kexes, CancellationToken: CancellationToken);
 
             using var client = await clientTask;

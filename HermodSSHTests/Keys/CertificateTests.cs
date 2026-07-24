@@ -160,7 +160,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var clientRun = Task.Run(async () =>
             {
-                using var t = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+                using var t = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
                 return await UserAuthentication.ClientPublicKeyAuthenticateAsync(t, "achim", certifiedKey, CancellationToken: CancellationToken);
             }, CancellationToken);
 
@@ -243,7 +243,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 catch { }
             }, CancellationToken);
 
-            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             var ok = await UserAuthentication.ClientPublicKeyAuthenticateAsync(client, "bob", certifiedKey, CancellationToken: CancellationToken);
 
             Assert.That(ok, Is.False, "a certificate must be rejected for a principal it does not list");

@@ -67,7 +67,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             // Force the client to accept exactly the algorithm under test, so the negotiation is deterministic.
             String[] hostKeyAlgs = [ HostKeyAlgorithm ];
 
-            var clientTask = SshHandshake.ClientHandshakeAsync(clientPipe, HostKeyAlgorithms: hostKeyAlgs, CancellationToken: CancellationToken);
+            var clientTask = SshHandshake.ClientHandshakeAsync(clientPipe, HostKeyAlgorithms: hostKeyAlgs, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             var serverTask = SshHandshake.ServerHandshakeAsync(serverPipe, hostKey, CancellationToken: CancellationToken);
 
             using var client = await clientTask;   // the client only completes if it verified the host-key signature
@@ -91,7 +91,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var (clientPipe, serverPipe) = DuplexPipe.CreateConnectedPair();
 
             // Server has an Ed25519 key; the client accepts only RSA — negotiation must fail.
-            var clientTask = SshHandshake.ClientHandshakeAsync(clientPipe, HostKeyAlgorithms: [ SshAlgorithmNames.HostKey.RsaSha2_512 ], CancellationToken: CancellationToken);
+            var clientTask = SshHandshake.ClientHandshakeAsync(clientPipe, HostKeyAlgorithms: [ SshAlgorithmNames.HostKey.RsaSha2_512 ], VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             _ = SshHandshake.ServerHandshakeAsync(serverPipe, SshHostKey.GenerateEd25519(), CancellationToken: CancellationToken);
 
             Assert.That(async () => await clientTask, Throws.TypeOf<SshWireException>());

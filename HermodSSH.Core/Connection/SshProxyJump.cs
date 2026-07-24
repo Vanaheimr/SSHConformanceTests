@@ -116,11 +116,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <paramref name="Bastion"/> and complete a full SSH handshake with the target <b>through</b> it. The
         /// target's host-key verification (<paramref name="VerifyHostKey"/>) and any subsequent auth happen
         /// end-to-end — the bastion never sees the target session's plaintext or credentials.
+        ///
+        /// <para>
+        /// That guarantee rests entirely on <paramref name="VerifyHostKey"/>, which is therefore
+        /// mandatory: an unverified target lets the <b>bastion itself</b> terminate the inner handshake
+        /// with a key of its own and read everything meant to pass through it.
+        /// </para>
         /// </summary>
         public static async ValueTask<SshTunneledConnection> ConnectThroughAsync(SshTransport             Bastion,
                                                                                  String                   Host,
                                                                                  UInt16                   Port,
-                                                                                 Func<Byte[], Boolean>?   VerifyHostKey      = null,
+                                                                                 Func<Byte[], Boolean>    VerifyHostKey,
                                                                                  String[]?                KeyExchanges       = null,
                                                                                  String[]?                HostKeyAlgorithms  = null,
                                                                                  CancellationToken        CancellationToken   = default)
@@ -149,7 +155,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>Open a tunnel to a <see cref="SshJumpHost"/>'s host/port through the bastion.</summary>
         public static ValueTask<SshTunneledConnection> ConnectThroughAsync(SshTransport             Bastion,
                                                                            SshJumpHost              Target,
-                                                                           Func<Byte[], Boolean>?   VerifyHostKey      = null,
+                                                                           Func<Byte[], Boolean>    VerifyHostKey,
                                                                            String[]?                KeyExchanges       = null,
                                                                            String[]?                HostKeyAlgorithms  = null,
                                                                            CancellationToken        CancellationToken   = default)

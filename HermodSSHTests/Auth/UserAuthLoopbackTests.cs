@@ -59,7 +59,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var clientRun = Task.Run(async () =>
             {
-                using var transport = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+                using var transport = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
                 String? banner = null;
                 var ok = await UserAuthentication.ClientPublicKeyAuthenticateAsync(
                              transport, "achim", userKey, BannerCallback: (text, _) => banner = text, CancellationToken: CancellationToken);
@@ -103,7 +103,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var clientRun = Task.Run(async () =>
             {
-                using var transport = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+                using var transport = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
                 return await UserAuthentication.ClientPublicKeyAuthenticateAsync(transport, "achim", userKey, CancellationToken: CancellationToken);
             }, CancellationToken);
 
@@ -142,7 +142,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var clientRun = Task.Run(async () =>
             {
-                using var transport = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+                using var transport = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
                 return await UserAuthentication.ClientPublicKeyAuthenticateAsync(transport, "operator", userKey, CancellationToken: CancellationToken);
             }, CancellationToken);
 

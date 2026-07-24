@@ -92,7 +92,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 var policy   = ForwardingPolicy.Custom(NetworkAcl.DenyByDefault().Allow(Cidr: "127.0.0.1/32", Ports: targetPort.ToString()));
                 var bastion  = StartBastion(bastionPipe, bastionHostKey, bastionUserKey.PublicKeyBlob, policy, CancellationToken);
 
-                using var client = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+                using var client = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
                 await UserAuthentication.ClientPublicKeyAuthenticateAsync(client, "achim", bastionUserKey, CancellationToken: CancellationToken);
 
                 // Tunnel to the target through the bastion; verify the TARGET's host key end-to-end.
@@ -140,7 +140,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 var policy  = ForwardingPolicy.Custom(NetworkAcl.DenyByDefault().Allow(Cidr: "127.0.0.1/32", Ports: targetPort.ToString()));
                 _ = StartBastion(bastionPipe, bastionHostKey, bastionUserKey.PublicKeyBlob, policy, CancellationToken);
 
-                using var client = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+                using var client = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
                 await UserAuthentication.ClientPublicKeyAuthenticateAsync(client, "achim", bastionUserKey, CancellationToken: CancellationToken);
 
                 // The target presents a key we do NOT trust → the tunneled handshake must fail.

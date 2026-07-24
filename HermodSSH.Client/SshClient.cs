@@ -38,8 +38,19 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Client
         /// <summary>The user to authenticate as.</summary>
         public required String                    Username       { get; init; }
 
-        /// <summary>Host-key trust decision (e.g. from a <c>HostKeyPolicy</c>); null accepts any key (TOFU-off, unsafe).</summary>
-        public Func<Byte[], Boolean>?             VerifyHostKey  { get; init; }
+        /// <summary>
+        /// The host-key trust decision — <b>required</b>, because omitting it would leave the server
+        /// unauthenticated and the session open to a machine-in-the-middle, and a silent default is
+        /// exactly the kind of mistake that is never noticed.
+        ///
+        /// <para>
+        /// Normally comes from a <see cref="HostKeyPolicy"/>: <c>policy.ForHost(host, port)</c> chains
+        /// pinned fingerprints, <c>known_hosts</c>, host certificates, SSHFP and TOFU. For loopback
+        /// tests and demos, pass <see cref="SshHostKeyVerification.AcceptAnyUnsafe"/> — deliberately
+        /// spelled out rather than reached by leaving a property unset.
+        /// </para>
+        /// </summary>
+        public required Func<Byte[], Boolean>     VerifyHostKey  { get; init; }
 
         /// <summary>The public-key credentials to try, in order.</summary>
         public IReadOnlyList<ISshHostKey>         Credentials    { get; init; } = [];

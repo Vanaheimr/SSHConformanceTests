@@ -358,10 +358,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
             var (user, host) = SplitTarget(Target);
             var key          = SshKeyGenerator.LoadPrivateKey(await File.ReadAllTextAsync(identity, CancellationToken)).Key;
 
-            Console.Error.WriteLine($"Warning: accepting host key of {host} without verification (demo).");
+            Console.Error.WriteLine($"Warning: accepting host key of {host} without verification (demo) — "
+                                    + "this connection is not protected against a machine-in-the-middle.");
             return await SshClient.ConnectAsync(host, UInt16.Parse(portStr), new SshClientOptions {
                 Username      = user,
-                VerifyHostKey = _ => true,
+                VerifyHostKey = SshHostKeyVerification.AcceptAnyUnsafe,
                 Credentials   = [ key ]
             }, CancellationToken);
         }

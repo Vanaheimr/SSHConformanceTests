@@ -63,7 +63,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             String[] ciphers = [ Cipher ];
             String[] macs    = [ Mac ];
 
-            var clientTask = SshHandshake.ClientHandshakeAsync(clientPipe, Ciphers: ciphers, Macs: macs, CancellationToken: CancellationToken);
+            var clientTask = SshHandshake.ClientHandshakeAsync(clientPipe, Ciphers: ciphers, Macs: macs, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             var serverTask = SshHandshake.ServerHandshakeAsync(serverPipe, hostKey, Ciphers: ciphers, Macs: macs, CancellationToken: CancellationToken);
 
             using var client = await clientTask;

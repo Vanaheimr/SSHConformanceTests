@@ -59,7 +59,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             // ~100 KiB crosses several transfer chunks / channel packets.
             var content = RandomNumberGenerator.GetBytes(100_000);
 
-            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             Assert.That(await UserAuthentication.ClientPublicKeyAuthenticateAsync(client, "achim", userKey, CancellationToken: CancellationToken), Is.True);
 
             var sftp = await SftpClient.OpenAsync(client, CancellationToken);
@@ -113,7 +113,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 await SftpServer.ServeAsync(duplex, new InMemorySftpFileSystem(), CancellationToken: CancellationToken);
             }, CancellationToken);
 
-            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             await UserAuthentication.ClientPublicKeyAuthenticateAsync(client, "achim", userKey, CancellationToken: CancellationToken);
             var sftp = await SftpClient.OpenAsync(client, CancellationToken);
 

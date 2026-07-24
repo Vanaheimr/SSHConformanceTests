@@ -125,7 +125,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 catch { /* the client stops after one attempt on failure */ }
             }, CancellationToken);
 
-            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             var ok = await UserAuthentication.ClientPasswordAuthenticateAsync(client, User, Password, CancellationToken: CancellationToken);
 
             clientPipe.Output.Complete();
@@ -165,7 +165,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var clientRun = Task.Run(async () =>
             {
-                using var t = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+                using var t = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
                 return await UserAuthentication.ClientAuthenticateAsync(
                            t, "achim",
                            Keys: [ userKey ],
@@ -213,7 +213,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 catch { }
             }, CancellationToken);
 
-            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             var ok = await UserAuthentication.ClientAuthenticateAsync(
                          client, "achim",
                          Keys: [ userKey ],

@@ -60,7 +60,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         private static async Task<SshTransport> ClientLogin(IDuplexPipe ClientPipe, ISshHostKey UserKey, CancellationToken CancellationToken)
         {
-            var t = await SshTransport.ClientHandshakeAsync(ClientPipe, CancellationToken: CancellationToken);
+            var t = await SshTransport.ClientHandshakeAsync(ClientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             await UserAuthentication.ClientPublicKeyAuthenticateAsync(t, "achim", UserKey, CancellationToken: CancellationToken);
             return t;
         }

@@ -53,7 +53,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var clientRun = Task.Run(async () =>
             {
-                using var t = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+                using var t = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
                 return await UserAuthentication.ClientPublicKeyAuthenticateAsync(t, "achim", userKey, CancellationToken: CancellationToken);
             }, CancellationToken);
 
@@ -94,7 +94,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 catch (SshAuthenticationException) { }
             }, CancellationToken);
 
-            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+            using var client = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             await UserAuthentication.ClientPasswordAuthenticateAsync(client, "achim", "wrong", CancellationToken: CancellationToken);
 
             clientPipe.Output.Complete();

@@ -46,7 +46,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var hostKey = Ed25519KeyPair.Generate();
 
-            var clientTask = SshHandshake.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+            var clientTask = SshHandshake.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             var serverTask = SshHandshake.ServerHandshakeAsync(serverPipe, hostKey, CancellationToken: CancellationToken);
 
             using var client = await clientTask;
@@ -120,7 +120,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             async Task<Byte[]> HandshakeOnce()
             {
                 var (c, s) = DuplexPipe.CreateConnectedPair();
-                var ct = SshHandshake.ClientHandshakeAsync(c, CancellationToken: CancellationToken);
+                var ct = SshHandshake.ClientHandshakeAsync(c, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
                 using var server = await SshHandshake.ServerHandshakeAsync(s, hostKey, CancellationToken: CancellationToken);
                 using var client = await ct;
                 return client.SessionId;

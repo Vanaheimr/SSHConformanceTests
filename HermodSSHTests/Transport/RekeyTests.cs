@@ -46,7 +46,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var (clientPipe, serverPipe) = DuplexPipe.CreateConnectedPair();
             var hostKey = Ed25519KeyPair.Generate();
 
-            var clientTask = SshTransport.ClientHandshakeAsync(clientPipe, Ciphers: Ciphers, CancellationToken: CancellationToken);
+            var clientTask = SshTransport.ClientHandshakeAsync(clientPipe, Ciphers: Ciphers, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             var serverTask = SshTransport.ServerHandshakeAsync(serverPipe, hostKey, Ciphers: Ciphers, CancellationToken: CancellationToken);
 
             var client = await clientTask;

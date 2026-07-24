@@ -64,7 +64,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 var content = RandomNumberGenerator.GetBytes(80_000);   // multi-chunk
 
-                using var client = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+                using var client = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
                 await UserAuthentication.ClientPublicKeyAuthenticateAsync(client, "achim", userKey, CancellationToken: CancellationToken);
 
                 var sftp = await SftpClient.OpenAsync(client, CancellationToken);

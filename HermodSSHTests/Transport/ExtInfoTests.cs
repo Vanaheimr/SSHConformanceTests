@@ -92,7 +92,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var (clientPipe, serverPipe) = DuplexPipe.CreateConnectedPair();
             var hostKey = Ed25519KeyPair.Generate();
 
-            var clientTask = SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+            var clientTask = SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             var serverTask = SshTransport.ServerHandshakeAsync(serverPipe, hostKey, CancellationToken: CancellationToken);
 
             using var client = await clientTask;
@@ -136,7 +136,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             String[] onlyEd25519 = [ SshAlgorithmNames.HostKey.Ed25519 ];
 
-            var clientTask = SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+            var clientTask = SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             var serverTask = SshTransport.ServerHandshakeAsync(serverPipe, hostKey, ServerSignatureAlgorithms: onlyEd25519, CancellationToken: CancellationToken);
 
             using var client = await clientTask;

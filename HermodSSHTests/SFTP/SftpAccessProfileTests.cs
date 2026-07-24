@@ -57,7 +57,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 catch { /* torn down with the client */ }
             }, CancellationToken);
 
-            var client = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+            var client = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             await UserAuthentication.ClientPublicKeyAuthenticateAsync(client, "achim", userKey, CancellationToken: CancellationToken);
             return await SftpClient.OpenAsync(client, CancellationToken);
 

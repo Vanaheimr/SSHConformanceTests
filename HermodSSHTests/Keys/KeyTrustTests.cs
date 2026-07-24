@@ -212,7 +212,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var clientRun = Task.Run(async () =>
             {
-                using var transport = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+                using var transport = await SshTransport.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
                 return await UserAuthentication.ClientPublicKeyAuthenticateAsync(transport, "achim", userKey, CancellationToken: CancellationToken);
             }, CancellationToken);
 

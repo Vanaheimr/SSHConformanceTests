@@ -55,7 +55,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             // Client: connect and run the client handshake.
             var clientPipe = await SshTcp.ConnectAsync(new IPSocket(LoopbackAddress, localSocket.Port), CancellationToken);
-            using var client = await SshHandshake.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
+            using var client = await SshHandshake.ClientHandshakeAsync(clientPipe, VerifyHostKey: SshHostKeyVerification.AcceptAnyUnsafe, CancellationToken: CancellationToken);
             using var server = await serverTask;
 
             Assert.Multiple(() => {
