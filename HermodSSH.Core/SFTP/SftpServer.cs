@@ -36,10 +36,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
         #region ServeAsync(Channel, FileSystem, CancellationToken)
 
-        /// <summary>Run the SFTP server loop over an established subsystem channel.</summary>
+        /// <summary>
+        /// Run the SFTP server loop over an established subsystem channel. When <paramref name="Profile"/>
+        /// is given, each operation is gated against it (least privilege): a denied operation returns
+        /// SSH_FX_PERMISSION_DENIED without touching the file system.
+        /// </summary>
         public static async ValueTask ServeAsync(SshChannelDuplex   Channel,
                                                  ISftpFileSystem    FileSystem,
-                                                 CancellationToken  CancellationToken = default)
+                                                 SshAccessProfile?  Profile            = null,
+                                                 CancellationToken  CancellationToken  = default)
         {
 
             // 1. INIT → VERSION.
@@ -64,7 +69,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
                 try
                 {
-                    response = await DispatchAsync(FileSystem, request, CancellationToken).ConfigureAwait(false);
+                    if (Profile is not null && !Profile.AllowsSftp(RequiredPermission(request)))
+                        response = BuildStatus(request.RequestId, SftpStatusCode.PermissionDenied, "Operation not permitted by the access profile.");
+                    else
+                        response = await DispatchAsync(FileSystem, request, CancellationToken).ConfigureAwait(false);
                 }
                 catch (SftpException e)
                 {
@@ -210,6 +218,26 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
             return new SftpRequest(type, requestId, path, target, handle, offset, length, flags, data);
 
         }
+
+        // The SFTP permission an operation requires, for access-profile gating.
+        private static SftpPermissions RequiredPermission(SftpRequest Request)
+            => Request.Type switch {
+                   SftpPacketType.Open      => Request.OpenFlags.HasFlag(SftpOpenFlags.Write) || Request.OpenFlags.HasFlag(SftpOpenFlags.Create)
+                                                   ? (Request.OpenFlags.HasFlag(SftpOpenFlags.Create) ? SftpPermissions.Create : SftpPermissions.Write)
+                                                   : SftpPermissions.Read,
+                   SftpPacketType.Read      => SftpPermissions.Read,
+                   SftpPacketType.Write     => SftpPermissions.Write,
+                   SftpPacketType.OpenDir   => SftpPermissions.List,
+                   SftpPacketType.ReadDir   => SftpPermissions.List,
+                   SftpPacketType.MkDir     => SftpPermissions.MakeDirectory,
+                   SftpPacketType.Remove    => SftpPermissions.Delete,
+                   SftpPacketType.RmDir     => SftpPermissions.Delete,
+                   SftpPacketType.Rename    => SftpPermissions.Rename,
+                   SftpPacketType.Stat      => SftpPermissions.Stat,
+                   SftpPacketType.LStat     => SftpPermissions.Stat,
+                   SftpPacketType.FStat     => SftpPermissions.Stat,
+                   _                        => SftpPermissions.None   // Close, RealPath, Init — always allowed
+               };
 
         #endregion
 

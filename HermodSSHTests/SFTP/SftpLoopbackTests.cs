@@ -53,7 +53,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 using var t = await SshTransport.ServerHandshakeAsync(serverPipe, hostKey, CancellationToken: CancellationToken);
                 await UserAuthentication.ServerAuthenticateAsync(t, authenticator, CancellationToken: CancellationToken);
                 var duplex = await SshConnection.AcceptSubsystemAsync(t, "sftp", CancellationToken);
-                await SftpServer.ServeAsync(duplex, fileSystem, CancellationToken);
+                await SftpServer.ServeAsync(duplex, fileSystem, CancellationToken: CancellationToken);
             }, CancellationToken);
 
             // ~100 KiB crosses several transfer chunks / channel packets.
@@ -110,7 +110,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 using var t = await SshTransport.ServerHandshakeAsync(serverPipe, hostKey, CancellationToken: CancellationToken);
                 await UserAuthentication.ServerAuthenticateAsync(t, authenticator, CancellationToken: CancellationToken);
                 var duplex = await SshConnection.AcceptSubsystemAsync(t, "sftp", CancellationToken);
-                await SftpServer.ServeAsync(duplex, new InMemorySftpFileSystem(), CancellationToken);
+                await SftpServer.ServeAsync(duplex, new InMemorySftpFileSystem(), CancellationToken: CancellationToken);
             }, CancellationToken);
 
             using var client = await SshTransport.ClientHandshakeAsync(clientPipe, CancellationToken: CancellationToken);
