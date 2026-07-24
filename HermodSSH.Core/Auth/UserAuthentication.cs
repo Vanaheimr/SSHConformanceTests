@@ -118,11 +118,23 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                     completedMethods.Add(request.Method);
                     await EmitAsync(AuditSink, new AuthMethodSucceededEvent(clock.GetUtcNow(), request.Username, request.Method), CancellationToken).ConfigureAwait(false);
 
-                    // A certificate that authenticated carries the CA's constraints into the session.
-                    if (request.Method == PublicKeyMethod &&
-                        SshCertificate.IsCertificateAlgorithm(request.Algorithm) &&
-                        SshCertificate.TryParse(request.PublicKeyBlob, out var authenticatedCert))
-                        restrictions = SshCertificateRestrictions.FromCertificate(authenticatedCert!);
+                    if (request.Method == PublicKeyMethod)
+                    {
+
+                        // A certificate carries the CA's constraints; an authorized_keys entry carries
+                        // the administrator's. Both can apply, and the stricter side wins — a credential
+                        // may only ever narrow what another source already permits.
+                        if (SshCertificate.IsCertificateAlgorithm(request.Algorithm) &&
+                            SshCertificate.TryParse(request.PublicKeyBlob, out var authenticatedCert))
+                            restrictions = restrictions.And(SshCertificateRestrictions.FromCertificate(authenticatedCert!));
+
+                        var fromEntry = await Authenticator.GetRestrictionsAsync(
+                                                  new SshPublicKeyAuthRequest(request.Username, request.Algorithm, request.PublicKeyBlob),
+                                                  CancellationToken).ConfigureAwait(false);
+
+                        restrictions = restrictions.And(fromEntry);
+
+                    }
 
                     var remaining = Authenticator.RemainingMethods(request.Username, completedMethods);
 

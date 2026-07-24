@@ -176,7 +176,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
                 }
 
                 await using var mux = new SshChannelMultiplexer(transport);
-                mux.ChannelAcceptor = info => AcceptChannelAsync(info);
+                mux.ChannelAcceptor = info => AcceptChannelAsync(info, auth.Restrictions);
                 SshRemoteForwarding.ServeRemoteForwards(mux, options.ForwardingPolicy, CancellationToken);
 
                 if (options.AdvertiseHostKeys)
@@ -200,10 +200,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
             catch { /* connection torn down */ }
         }
 
-        private async ValueTask<Boolean> AcceptChannelAsync(SshChannelOpenInfo Info)
+        private async ValueTask<Boolean> AcceptChannelAsync(SshChannelOpenInfo Info, SshSessionRestrictions Restrictions)
         {
             if (Info.ChannelType == "session")
                 return options.ExecHandler is not null || options.SftpFileSystem is not null;
+
+            // no-port-forwarding / restrict on the authorizing entry narrows the server's own policy;
+            // the stricter of the two always wins.
+            if (Info.ChannelType == "direct-tcpip" && !Restrictions.AllowPortForwarding)
+                return false;
 
             if (Info.ChannelType == "direct-tcpip" && options.ForwardingPolicy.DirectTcpIp is not null)
             {

@@ -48,12 +48,47 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
     /// <param name="SourceAddresses">
     /// The addresses this credential may be used from (<c>source-address</c>). Empty means unrestricted.
     /// </param>
-    public sealed record SshSessionRestrictions(String?                ForcedCommand    = null,
-                                                IReadOnlyList<IpCidr>? SourceAddresses  = null)
+    /// <param name="AllowPty">
+    /// Whether a pseudo-terminal may be allocated (<c>authorized_keys</c> <c>no-pty</c> / <c>restrict</c>).
+    /// </param>
+    /// <param name="AllowPortForwarding">
+    /// Whether this session may open forwarding channels (<c>no-port-forwarding</c> / <c>restrict</c>).
+    /// Intersects with the server's own <see cref="ForwardingPolicy"/> — the stricter side wins.
+    /// </param>
+    public sealed record SshSessionRestrictions(String?                ForcedCommand        = null,
+                                                IReadOnlyList<IpCidr>? SourceAddresses      = null,
+                                                Boolean                AllowPty             = true,
+                                                Boolean                AllowPortForwarding  = true)
     {
 
         /// <summary>No restrictions — an ordinary, unrestricted credential.</summary>
         public static SshSessionRestrictions None { get; } = new ();
+
+        /// <summary>
+        /// Combine two restriction sets so that the <b>stricter</b> side always wins — a credential can
+        /// only ever narrow what another source already permits, never widen it. Used where a
+        /// certificate and an <c>authorized_keys</c> entry both apply.
+        /// </summary>
+        /// <param name="Other">The restrictions to intersect with.</param>
+        public SshSessionRestrictions And(SshSessionRestrictions Other)
+        {
+
+            // Two different forced commands cannot both be honoured; keep this one and let the caller
+            // decide, rather than silently picking the more permissive.
+            var command = ForcedCommand ?? Other.ForcedCommand;
+
+            var sources = (SourceAddresses, Other.SourceAddresses) switch {
+                              (null, var b)            => b,
+                              (var a, null)            => a,
+                              var (a, b)               => (IReadOnlyList<IpCidr>) [.. a!.Where(cidr => b!.Any(o => o.Equals(cidr)))]
+                          };
+
+            return new SshSessionRestrictions(command,
+                                              sources,
+                                              AllowPty            && Other.AllowPty,
+                                              AllowPortForwarding && Other.AllowPortForwarding);
+
+        }
 
         /// <summary>The critical options this implementation actually enforces.</summary>
         public static IReadOnlySet<String> EnforcedCriticalOptions { get; }
@@ -61,7 +96,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         /// <summary>Whether anything is actually restricted.</summary>
         public Boolean IsRestricted
-            => ForcedCommand is not null || SourceAddresses?.Count > 0;
+            => ForcedCommand is not null || SourceAddresses?.Count > 0 || !AllowPty || !AllowPortForwarding;
 
         /// <summary>
         /// Whether a peer at the given address may use this credential. An unknown peer address is

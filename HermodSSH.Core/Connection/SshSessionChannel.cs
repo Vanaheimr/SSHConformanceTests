@@ -128,8 +128,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
                 if (type == "pty-req")
                 {
-                    hasPty = true;
-                    if (request.Value.WantReply) await Channel.ReplyAsync(true, CancellationToken).ConfigureAwait(false);
+
+                    // no-pty / restrict: refuse the terminal rather than granting it and pretending.
+                    var allowed = Restrictions?.AllowPty ?? true;
+                    if (allowed)
+                        hasPty = true;
+
+                    if (request.Value.WantReply) await Channel.ReplyAsync(allowed, CancellationToken).ConfigureAwait(false);
+
                 }
                 else if (type is "env" or "window-change")
                 {

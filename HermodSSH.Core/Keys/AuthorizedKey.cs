@@ -56,6 +56,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>The raw option tokens as parsed, preserved for options we do not model explicitly.</summary>
         public IReadOnlyList<String>  Options  { get; init; } = [];
 
+        /// <summary>
+        /// What this entry's options confine the session to — the enforced form of <c>command=</c>,
+        /// <c>from=</c>, <c>restrict</c>, <c>no-pty</c> and <c>no-port-forwarding</c>, applied by the
+        /// server once the key authenticates. A line whose options cannot all be enforced is refused at
+        /// parse time rather than accepted with parts of it silently dropped.
+        /// </summary>
+        public SshSessionRestrictions  Restrictions  { get; init; } = SshSessionRestrictions.None;
+
         #endregion
 
         #region Constructor(s)

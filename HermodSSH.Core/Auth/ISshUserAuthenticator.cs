@@ -60,6 +60,19 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         ValueTask<Boolean> AuthorizePublicKeyAsync(SshPublicKeyAuthRequest  Request,
                                                    CancellationToken        CancellationToken = default);
 
+        /// <summary>
+        /// The restrictions the authorizing entry places on the session — an <c>authorized_keys</c>
+        /// line's <c>command=</c>/<c>from=</c>/<c>restrict</c>/<c>no-*</c> options. Called only after the
+        /// key has authenticated. Defaults to unrestricted, so an authenticator that models no options
+        /// need not implement it. Certificate critical options travel separately, read off the
+        /// authenticated blob itself.
+        /// </summary>
+        /// <param name="Request">The public key that authenticated.</param>
+        /// <param name="CancellationToken">An optional token to cancel this request.</param>
+        ValueTask<SshSessionRestrictions> GetRestrictionsAsync(SshPublicKeyAuthRequest  Request,
+                                                               CancellationToken        CancellationToken = default)
+            => ValueTask.FromResult(SshSessionRestrictions.None);
+
         /// <summary>Whether the given password authenticates the user (RFC 4252 §8). Default: no.</summary>
         ValueTask<Boolean> AuthorizePasswordAsync(String             Username,
                                                   String             Password,
@@ -141,14 +154,19 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var keys   = AuthorizedKeys.ToArray();
             var clock  = TimeProvider ?? System.TimeProvider.System;
 
-            return new SshUserAuthenticator((request, _) =>
+            AuthorizedKey? Match(SshPublicKeyAuthRequest request)
             {
                 var now = clock.GetUtcNow();
-                return ValueTask.FromResult(
-                    keys.Any(key => !key.IsCertAuthority &&
-                                    key.Matches(request.PublicKeyBlob) &&
-                                    key.IsValidAt(now)));
-            });
+                return keys.FirstOrDefault(key => !key.IsCertAuthority &&
+                                                   key.Matches(request.PublicKeyBlob) &&
+                                                   key.IsValidAt(now));
+            }
+
+            return new SshUserAuthenticator((request, _) => ValueTask.FromResult(Match(request) is not null)) {
+                       // The entry that matched carries the line's command=/from=/restrict/no-* options
+                       // into the session; without this they would be parsed and then ignored.
+                       Restrictions = request => ValueTask.FromResult(Match(request)?.Restrictions ?? SshSessionRestrictions.None)
+                   };
 
         }
 
@@ -160,6 +178,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                                           CancellationToken        CancellationToken = default)
 
             => authorizePublicKey(Request, CancellationToken);
+
+        /// <summary>Supplies the restrictions of the entry that authorized the key, if any.</summary>
+        public Func<SshPublicKeyAuthRequest, ValueTask<SshSessionRestrictions>>? Restrictions { get; init; }
+
+        /// <inheritdoc />
+        public ValueTask<SshSessionRestrictions> GetRestrictionsAsync(SshPublicKeyAuthRequest  Request,
+                                                                      CancellationToken        CancellationToken = default)
+
+            => Restrictions?.Invoke(Request) ?? ValueTask.FromResult(SshSessionRestrictions.None);
 
         #endregion
 
