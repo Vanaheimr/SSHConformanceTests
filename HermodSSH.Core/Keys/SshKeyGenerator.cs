@@ -53,14 +53,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         /// <summary>
         /// Write a key pair to disk as OpenSSH does: the unencrypted <c>openssh-key-v1</c> private key at
-        /// <paramref name="PrivateKeyPath"/> and the public key at <c>&lt;path&gt;.pub</c>.
+        /// <paramref name="PrivateKeyPath"/> — owner-readable only, as OpenSSH insists — and the public
+        /// key at <c>&lt;path&gt;.pub</c>.
         /// </summary>
         public static async Task WriteKeyPairAsync(ISshHostKey        Key,
                                                    String             PrivateKeyPath,
                                                    String             Comment            = "",
                                                    CancellationToken  CancellationToken  = default)
         {
-            await File.WriteAllTextAsync(PrivateKeyPath, OpenSshPrivateKey.Format(Key, Comment), CancellationToken).ConfigureAwait(false);
+            await SshPrivateKeyFile.WriteAsync(PrivateKeyPath, OpenSshPrivateKey.Format(Key, Comment), CancellationToken).ConfigureAwait(false);
             await File.WriteAllTextAsync(PrivateKeyPath + ".pub", SshPublicKey.FromHostKey(Key, Comment).ToAuthorizedKeyLine() + "\n", CancellationToken).ConfigureAwait(false);
         }
 

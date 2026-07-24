@@ -17,7 +17,9 @@
 
 #region Usings
 
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 
 using NUnit.Framework;
 
@@ -128,6 +130,61 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 Assert.That(loaded.Comment,           Is.EqualTo("round-trip"));
                 Assert.That(SshSignature.Verify(loaded.Key.PublicKeyBlob, data, signature), Is.True);
             });
+
+        }
+
+        #endregion
+
+        #region WriteKeyPairAsync_LocksDownThePrivateKey
+
+        /// <summary>
+        /// The private key we write must be readable by its owner only — OpenSSH refuses a key that
+        /// anybody else can read, which is what broke <c>ssh-keygen -y</c> on our written keys. The
+        /// public <c>.pub</c> file, by contrast, stays freely readable.
+        /// </summary>
+        [Test]
+        [CancelAfter(15000)]
+        public async Task WriteKeyPairAsync_LocksDownThePrivateKey(CancellationToken CancellationToken)
+        {
+
+            var key  = SshHostKey.GenerateEd25519();
+            var path = Path.Combine(Path.GetTempPath(), "hermod_perm_" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+
+                await SshKeyGenerator.WriteKeyPairAsync(key, path, "perm-test", CancellationToken);
+
+                if (OperatingSystem.IsWindows())
+                {
+                    var security = new FileInfo(path).GetAccessControl();
+                    var rules    = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
+                    var owner    = WindowsIdentity.GetCurrent().User!;
+
+                    Assert.Multiple(() => {
+                        Assert.That(security.AreAccessRulesProtected, Is.True,
+                                    "the private key's DACL must not inherit permissions");
+                        Assert.That(rules.Cast<FileSystemAccessRule>().Select(r => r.IdentityReference),
+                                    Is.All.EqualTo(owner),
+                                    "only the current user may appear in the private key's DACL");
+                    });
+                }
+                else
+                {
+                    const UnixFileMode groupAndOther =
+                        UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                        UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
+
+                    Assert.That(File.GetUnixFileMode(path) & groupAndOther, Is.EqualTo((UnixFileMode) 0),
+                                "the private key must carry no group/other permission bits (mode 0600)");
+                }
+
+            }
+            finally
+            {
+                try { File.Delete(path);          } catch { }
+                try { File.Delete(path + ".pub"); } catch { }
+            }
 
         }
 
