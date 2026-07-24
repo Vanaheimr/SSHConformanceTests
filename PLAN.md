@@ -464,6 +464,8 @@ policy is `publickey,keyboard-interactive`: a valid key/cert gets *partial* succ
 ### Key generation
 `SshKeyGenerator`: create `ssh-ed25519`, `ecdsa-sha2-nistp256/384/521` and `ssh-rsa` (2048/3072/4096) key pairs (the `ssh-keygen -t` equivalent), export to openssh-key-v1 (optionally passphrase-encrypted via bcrypt_pbkdf), PKCS#8/PEM and RFC 4716, with fingerprints. Feeds the mini-CA and tests; the **server auto-generates missing host keys on first run** into its config directory (matching the sibling SMTPServer's first-run crypto pattern).
 
+Private-key files are always written **owner-only** via `SshPrivateKeyFile` (POSIX mode `0600`; on Windows a protected DACL with a single ACE for the current user) — the file is created empty, locked down, and only then filled, so key material never sits on disk under an inherited ACL. OpenSSH refuses private keys anybody else can read: Windows' `ssh-keygen.exe` fails such a key with *"Bad permissions … UNPROTECTED PRIVATE KEY FILE"* (Git-for-Windows' MSYS build does not, so interop tests must not rely on whichever `ssh-keygen` `PATH` happens to resolve first).
+
 ### Mini-CA
 `OpenSshCertificateBuilder`: issue user/host certificates (equivalent of `ssh-keygen -s`), incl. all fields/options. Required for tests, useful as a product feature (e.g. short-lived certificates from an auth service).
 
