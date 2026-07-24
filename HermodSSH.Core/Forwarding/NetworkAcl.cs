@@ -304,6 +304,19 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             return any;
         }
 
+        /// <summary>DNS-rebinding-safe evaluation over already-resolved <see cref="IPAddress"/>es.</summary>
+        public Boolean AllowsAll(IEnumerable<IPAddress> Addresses, UInt16 Port, String? Host = null)
+        {
+            var any = false;
+            foreach (var address in Addresses)
+            {
+                any = true;
+                if (!Allows(address, Port, Host))
+                    return false;
+            }
+            return any;
+        }
+
         #endregion
 
         #region Presets

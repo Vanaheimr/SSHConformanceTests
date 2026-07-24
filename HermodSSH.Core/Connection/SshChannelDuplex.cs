@@ -116,6 +116,30 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #endregion
 
+        #region ReadSomeAsync(Buffer, CancellationToken)
+
+        /// <summary>
+        /// Read up to <c>Buffer.Length</c> bytes (at least one, unless at EOF), returning the count read or 0
+        /// at a clean end-of-stream — the byte-stream read semantics a <see cref="Stream"/> expects.
+        /// </summary>
+        public async ValueTask<Int32> ReadSomeAsync(Memory<Byte> Buffer, CancellationToken CancellationToken = default)
+        {
+
+            if (offset >= current.Length)
+            {
+                try   { await FillAsync(CancellationToken).ConfigureAwait(false); }
+                catch (SshChannelClosedException) { return 0; }
+            }
+
+            var available = Math.Min(current.Length - offset, Buffer.Length);
+            current.AsSpan(offset, available).CopyTo(Buffer.Span);
+            offset += available;
+            return available;
+
+        }
+
+        #endregion
+
         #region CloseAsync(CancellationToken)
 
         /// <summary>Send EOF and CLOSE for this channel.</summary>
