@@ -57,6 +57,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>The SFTP operations this profile permits.</summary>
         public SftpPermissions Sftp { get; init; } = SftpPermissions.All;
 
+        /// <summary>The port-forwarding policy for this session (defaults to off).</summary>
+        public ForwardingPolicy PortForwarding { get; init; } = ForwardingPolicy.None;
+
 
         /// <summary>Full SFTP access.</summary>
         public static SshAccessProfile FullSftp
