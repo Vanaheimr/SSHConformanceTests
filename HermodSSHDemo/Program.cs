@@ -36,45 +36,61 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
         /// The command-line entry point.
         /// </summary>
         /// <param name="Arguments">The command-line arguments.</param>
-        public static Int32 Main(String[] Arguments)
+        public static async Task<Int32> Main(String[] Arguments)
         {
 
             var command = Arguments.Length > 0 ? Arguments[0].ToLowerInvariant() : "help";
 
-            switch (command)
+            using var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+            try
             {
+                switch (command)
+                {
 
-                case "version":
-                case "--version":
-                case "-v":
-                    Console.WriteLine($"hermod-ssh {Version}");
-                    return 0;
+                    case "version":
+                    case "--version":
+                    case "-v":
+                        Console.WriteLine($"hermod-ssh {Version}");
+                        return 0;
 
-                case "help":
-                case "--help":
-                case "-h":
-                    PrintHelp();
-                    return 0;
+                    case "help":
+                    case "--help":
+                    case "-h":
+                        PrintHelp();
+                        return 0;
 
-                // Planned verbs — see PLAN.md section 5 (Demo CLI). Implemented per milestone.
-                case "keygen":
-                case "serve":
-                case "connect":
-                case "exec":
-                case "sftp":
-                case "forward":
-                case "ca":
-                case "scan":
-                case "play":
-                    Console.WriteLine($"'{command}' is not implemented yet — this is the M0 scaffold.");
-                    Console.WriteLine("See PLAN.md for the milestone that delivers it.");
-                    return 64;  // EX_USAGE
+                    case "keygen":  return await Commands.KeygenAsync(Arguments, cts.Token);
+                    case "scan":    return await Commands.ScanAsync  (Arguments, cts.Token);
+                    case "ca":      return await Commands.CaAsync    (Arguments, cts.Token);
+                    case "exec":    return await Commands.ExecAsync  (Arguments, cts.Token);
+                    case "serve":   return await Commands.ServeAsync (Arguments, cts.Token);
 
-                default:
-                    Console.Error.WriteLine($"Unknown command '{command}'.");
-                    PrintHelp();
-                    return 64;  // EX_USAGE
+                    // Still planned — see PLAN.md section 5 (Demo CLI).
+                    case "connect":
+                    case "sftp":
+                    case "forward":
+                    case "play":
+                        Console.Error.WriteLine($"'{command}' is not implemented yet — see PLAN.md.");
+                        return 64;  // EX_USAGE
 
+                    default:
+                        Console.Error.WriteLine($"Unknown command '{command}'.");
+                        PrintHelp();
+                        return 64;  // EX_USAGE
+
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine("Cancelled.");
+                return 130;
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine($"error: {e.Message}");
+                return 1;
             }
 
         }
@@ -95,22 +111,26 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
                 Usage:
                   hermod-ssh <command> [options]
 
-                Commands (planned; delivered per milestone):
-                  keygen     Generate host/user keys (Ed25519/ECDSA/RSA) and export any format
-                  serve      Run a demo SSH/SFTP server (auth, access profiles, recording, banner)
-                  connect    Log in and open an interactive session (supports -J jump hosts)
-                  exec       Log in, run a command, capture output, log out
-                  sftp       Transfer files (get / put / ls) with progress
-                  forward    Local / remote / jump-host port forwarding
-                  ca         Issue and inspect OpenSSH certificates (mini-CA)
-                  scan       Fetch a host key or emit its SSHFP DNS record
-                  play       Replay a recorded asciicast session
+                Commands:
+                  keygen     Generate host/user keys (Ed25519/ECDSA/RSA) and export any format   [ready]
+                  scan       Print a public key's fingerprints and its SSHFP DNS records          [ready]
+                  ca         Issue an OpenSSH certificate — sign a subject key with a CA (mini-CA) [ready]
+                  exec       Log in, run a command, capture stdout/stderr + exit code, log out     [ready]
+                  serve      Run a demo SSH server (authorized_keys auth, exec handler)            [ready]
+                  connect    Open an interactive session (supports -J jump hosts)                  [planned]
+                  sftp       Transfer files (get / put / ls) with progress                        [planned]
+                  forward    Local / remote / jump-host port forwarding                           [planned]
+                  play       Replay a recorded asciicast session                                  [planned]
 
                   help       Show this help
                   version    Show the version
 
-                This is the M0 scaffold: the wire-format core and its tests are in place;
-                the commands above light up as their library features are implemented.
+                Examples:
+                  hermod-ssh keygen -t ed25519 -f ./id_ed25519
+                  hermod-ssh scan   -f ./id_ed25519.pub -n host.example.
+                  hermod-ssh ca --ca ./ca -s ./id_ed25519.pub -I alice@2026 -n alice,admin
+                  hermod-ssh serve  -a ./authorized_keys -p 2222
+                  hermod-ssh exec   -i ./id_ed25519 -p 2222 demo@127.0.0.1 "uname -a"
                 """);
 
         }

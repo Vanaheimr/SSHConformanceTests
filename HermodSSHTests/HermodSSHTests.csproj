@@ -28,6 +28,7 @@
     <ProjectReference Include="..\HermodSSH.Core\HermodSSH.Core.csproj" />
     <ProjectReference Include="..\HermodSSH.Client\HermodSSH.Client.csproj" />
     <ProjectReference Include="..\HermodSSH.Server\HermodSSH.Server.csproj" />
+    <ProjectReference Include="..\HermodSSHDemo\HermodSSHDemo.csproj" />
   </ItemGroup>
 
 </Project>

@@ -11,6 +11,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\HermodSSH.Core\HermodSSH.Core.csproj" />
     <ProjectReference Include="..\HermodSSH.Client\HermodSSH.Client.csproj" />
     <ProjectReference Include="..\HermodSSH.Server\HermodSSH.Server.csproj" />
   </ItemGroup>
