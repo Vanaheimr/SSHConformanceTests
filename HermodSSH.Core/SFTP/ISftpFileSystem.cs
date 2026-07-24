@@ -23,7 +23,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
 
     /// <summary>An SFTP operation error carrying the status code to return on the wire.</summary>
-    public sealed class SftpException : Exception
+    public class SftpException : Exception
     {
         /// <summary>The SFTP status code.</summary>
         public SftpStatusCode Code { get; }

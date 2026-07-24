@@ -52,7 +52,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                     using var t = await SshTransport.ServerHandshakeAsync(serverPipe, hostKey, CancellationToken: CancellationToken);
                     await UserAuthentication.ServerAuthenticateAsync(t, authenticator, CancellationToken: CancellationToken);
                     var duplex = await SshConnection.AcceptSubsystemAsync(t, "sftp", CancellationToken);
-                    await SftpServer.ServeAsync(duplex, FileSystem, Profile, CancellationToken);
+                    await SftpServer.ServeAsync(duplex, FileSystem, Profile, CancellationToken: CancellationToken);
                 }
                 catch { /* torn down with the client */ }
             }, CancellationToken);

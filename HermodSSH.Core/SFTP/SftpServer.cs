@@ -39,13 +39,21 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
         /// <summary>
         /// Run the SFTP server loop over an established subsystem channel. When <paramref name="Profile"/>
         /// is given, each operation is gated against it (least privilege): a denied operation returns
-        /// SSH_FX_PERMISSION_DENIED without touching the file system.
+        /// SSH_FX_PERMISSION_DENIED without touching the file system. When <paramref name="Limits"/> is given,
+        /// per-session size quotas are enforced (a quota overrun discards the partial upload) and upload/
+        /// download throughput is throttled via a token bucket.
         /// </summary>
         public static async ValueTask ServeAsync(SshChannelDuplex   Channel,
                                                  ISftpFileSystem    FileSystem,
                                                  SshAccessProfile?  Profile            = null,
+                                                 SftpLimits?        Limits             = null,
                                                  CancellationToken  CancellationToken  = default)
         {
+
+            var session = new SftpSession(
+                               Limits is { HasSizeQuota: true } ? new SftpQuotaTracker(Limits) : null,
+                               Limits is { UploadBytesPerSecond: > 0 }   ? new TokenBucketRateLimiter(Limits.UploadBytesPerSecond!.Value,   Limits.TimeProvider, Limits.BurstBytes) : null,
+                               Limits is { DownloadBytesPerSecond: > 0 } ? new TokenBucketRateLimiter(Limits.DownloadBytesPerSecond!.Value, Limits.TimeProvider, Limits.BurstBytes) : null);
 
             // 1. INIT → VERSION.
             var init = await ReadPacketAsync(Channel, CancellationToken).ConfigureAwait(false)
@@ -72,7 +80,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
                     if (Profile is not null && !Profile.AllowsSftp(RequiredPermission(request)))
                         response = BuildStatus(request.RequestId, SftpStatusCode.PermissionDenied, "Operation not permitted by the access profile.");
                     else
-                        response = await DispatchAsync(FileSystem, request, CancellationToken).ConfigureAwait(false);
+                        response = await DispatchAsync(FileSystem, session, request, CancellationToken).ConfigureAwait(false);
+                }
+                catch (SftpQuotaExceededException e)
+                {
+                    // Mid-write overrun: discard the partial upload and keep the session healthy.
+                    await CleanupPartialAsync(FileSystem, request.Handle, e.PathToCleanup, CancellationToken).ConfigureAwait(false);
+                    response = BuildStatus(request.RequestId, e.Code, e.Message);
                 }
                 catch (SftpException e)
                 {
@@ -89,12 +103,22 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
         }
 
+        private sealed record SftpSession(SftpQuotaTracker? Quota, TokenBucketRateLimiter? Upload, TokenBucketRateLimiter? Download);
+
+        private static async ValueTask CleanupPartialAsync(ISftpFileSystem FileSystem, String Handle, String? Path, CancellationToken CancellationToken)
+        {
+            if (Handle.Length > 0)
+                try { await FileSystem.CloseAsync(Handle, CancellationToken).ConfigureAwait(false); } catch { }
+            if (Path is not null)
+                try { await FileSystem.RemoveAsync(Path, CancellationToken).ConfigureAwait(false); } catch { }
+        }
+
         #endregion
 
 
         #region (private) DispatchAsync(FileSystem, Request, CancellationToken)
 
-        private static async ValueTask<Byte[]> DispatchAsync(ISftpFileSystem FileSystem, SftpRequest Request, CancellationToken CancellationToken)
+        private static async ValueTask<Byte[]> DispatchAsync(ISftpFileSystem FileSystem, SftpSession Session, SftpRequest Request, CancellationToken CancellationToken)
         {
 
             switch (Request.Type)
@@ -104,25 +128,46 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
                     return BuildName(Request.RequestId, [ new SftpDirectoryEntry(await FileSystem.RealPathAsync(Request.Path, CancellationToken).ConfigureAwait(false), SftpFileAttributes.Directory()) ]);
 
                 case SftpPacketType.Open:
-                    return BuildHandle(Request.RequestId, await FileSystem.OpenAsync(Request.Path, Request.OpenFlags, CancellationToken).ConfigureAwait(false));
+                {
+                    var writable = (Request.OpenFlags & (SftpOpenFlags.Write | SftpOpenFlags.Append | SftpOpenFlags.Create | SftpOpenFlags.Truncate)) != 0;
+                    var creating = Request.OpenFlags.HasFlag(SftpOpenFlags.Create);
+
+                    // Enforce the file-count quota before anything is created on the backing store.
+                    if (creating)
+                        Session.Quota?.CheckCanCreate(Request.Path);
+
+                    var handle = await FileSystem.OpenAsync(Request.Path, Request.OpenFlags, CancellationToken).ConfigureAwait(false);
+
+                    if (writable)
+                        Session.Quota?.RegisterWritable(handle, Request.Path, creating);
+
+                    return BuildHandle(Request.RequestId, handle);
+                }
 
                 case SftpPacketType.OpenDir:
                     return BuildHandle(Request.RequestId, await FileSystem.OpenDirectoryAsync(Request.Path, CancellationToken).ConfigureAwait(false));
 
                 case SftpPacketType.Close:
+                    Session.Quota?.OnClose(Request.Handle);
                     await FileSystem.CloseAsync(Request.Handle, CancellationToken).ConfigureAwait(false);
                     return BuildStatus(Request.RequestId, SftpStatusCode.Ok, "OK");
 
                 case SftpPacketType.Read:
                 {
                     var data = await FileSystem.ReadAsync(Request.Handle, Request.Offset, (Int32) Request.Length, CancellationToken).ConfigureAwait(false);
-                    return data.Length == 0
-                               ? BuildStatus(Request.RequestId, SftpStatusCode.Eof, "EOF")
-                               : BuildData(Request.RequestId, data);
+                    if (data.Length == 0)
+                        return BuildStatus(Request.RequestId, SftpStatusCode.Eof, "EOF");
+                    if (Session.Download is not null)
+                        await Session.Download.ThrottleAsync(data.Length, CancellationToken).ConfigureAwait(false);
+                    return BuildData(Request.RequestId, data);
                 }
 
                 case SftpPacketType.Write:
+                    // Meter first (throws on overrun → the partial file is discarded upstream), then write.
+                    Session.Quota?.OnWrite(Request.Handle, Request.Offset, Request.Data.Length);
                     await FileSystem.WriteAsync(Request.Handle, Request.Offset, Request.Data, CancellationToken).ConfigureAwait(false);
+                    if (Session.Upload is not null)
+                        await Session.Upload.ThrottleAsync(Request.Data.Length, CancellationToken).ConfigureAwait(false);
                     return BuildStatus(Request.RequestId, SftpStatusCode.Ok, "OK");
 
                 case SftpPacketType.ReadDir:
