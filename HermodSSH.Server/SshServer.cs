@@ -58,6 +58,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
         /// <summary>The port-forwarding policy (default: off).</summary>
         public ForwardingPolicy                     ForwardingPolicy  { get; init; } = ForwardingPolicy.None;
 
+        /// <summary>
+        /// Resolves a forwarding target's hostname to addresses; defaults to system DNS. The same seam
+        /// <see cref="SshForwarding"/> uses — injectable so the ACL's dial-time binding can be tested.
+        /// </summary>
+        public SshAddressResolver?                  AddressResolver   { get; init; }
+
         /// <summary>An optional typed audit-event sink.</summary>
         public ISshAuditSink?                       AuditSink         { get; init; }
 
@@ -176,9 +182,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
 
             if (Info.ChannelType == "direct-tcpip" && options.ForwardingPolicy.DirectTcpIp is not null)
             {
+
                 var (host, port) = ParseDirectTcpIp(Info.TypeData);
                 var addresses    = await ResolveAsync(host).ConfigureAwait(false);
+
+                // An early refusal, so a forbidden target is rejected with CHANNEL_OPEN_FAILURE rather
+                // than being accepted and then dropped. This is *not* the authoritative check: the
+                // binding decision is made at dial time against the addresses actually dialed.
                 return options.ForwardingPolicy.DirectTcpIp.AllowsAll(addresses, port, host);
+
             }
 
             return false;
@@ -201,8 +213,21 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
             try
             {
                 var (host, port) = ParseDirectTcpIp(Channel.OpenData);
-                var addresses    = await ResolveAsync(host).ConfigureAwait(false);
-                var socket       = new Socket(SocketType.Stream, ProtocolType.Tcp);
+
+                // Resolve ONCE and gate exactly what we are about to dial. Checking one resolution and
+                // then dialing a second lets an attacker-controlled name return an allowed address for
+                // the check and a forbidden one for the connection (DNS rebinding), which is precisely
+                // what AllowsAll's caller contract forbids.
+                var addresses = await ResolveAsync(host).ConfigureAwait(false);
+
+                if (options.ForwardingPolicy.DirectTcpIp is null ||
+                    !options.ForwardingPolicy.DirectTcpIp.AllowsAll(addresses, port, host))
+                {
+                    await Channel.CloseAsync(CancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
+                var socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
                 await socket.ConnectAsync(new System.Net.IPEndPoint(addresses[0], port), CancellationToken).ConfigureAwait(false);
                 await SshChannelRelay.RelayAsync(Channel.AsStream(), new NetworkStream(socket, ownsSocket: true), CancellationToken);
             }
@@ -217,10 +242,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
             return (host, port);
         }
 
-        private static async ValueTask<IReadOnlyList<IPAddress>> ResolveAsync(String Host)
-            => IPAddress.TryParse(Host, out var literal)
-                   ? [literal]
-                   : await System.Net.Dns.GetHostAddressesAsync(Host).ConfigureAwait(false);
+        private async ValueTask<IReadOnlyList<IPAddress>> ResolveAsync(String Host)
+        {
+
+            if (options.AddressResolver is not null)
+                return await options.AddressResolver(Host, CancellationToken.None).ConfigureAwait(false);
+
+            return IPAddress.TryParse(Host, out var literal)
+                       ? [literal]
+                       : await System.Net.Dns.GetHostAddressesAsync(Host).ConfigureAwait(false);
+
+        }
 
         #endregion
 

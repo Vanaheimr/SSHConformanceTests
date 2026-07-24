@@ -76,9 +76,21 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
     public static class SshCertificateValidator
     {
 
-        // Critical options we understand; an unknown critical option must cause rejection (RFC / PROTOCOL.certkeys).
+        /// <summary>
+        /// Critical options we both recognise <b>and enforce</b>; anything else must cause rejection
+        /// (PROTOCOL.certkeys: "critical options … must be understood, or the certificate is refused").
+        ///
+        /// <para>
+        /// This set is deliberately <b>empty</b>. "Understood" has to mean enforced: listing an option
+        /// here without acting on it would turn a CA's restriction into a silent no-op — a certificate
+        /// issued as <c>force-command="/usr/bin/backup-only"</c> would be accepted and the holder would
+        /// then run any command at all, which is worse than refusing the certificate outright. Until
+        /// <c>force-command</c> and <c>source-address</c> are actually applied to the session, a
+        /// certificate carrying them is rejected. Add a name here only together with its enforcement.
+        /// </para>
+        /// </summary>
         private static readonly HashSet<String> KnownCriticalOptions =
-            new (StringComparer.Ordinal) { "force-command", "source-address", "verify-required" };
+            new (StringComparer.Ordinal);
 
 
         #region Validate(Certificate, ExpectedType, Principal, Trust, Now)

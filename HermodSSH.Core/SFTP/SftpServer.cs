@@ -403,10 +403,21 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
         }
 
+        /// <summary>
+        /// Any open flag that ends up writing to the file. <c>Truncate</c> and <c>Append</c> modify the
+        /// file just as surely as <c>Write</c> does — <see cref="LocalSftpFileSystem"/> opens for write
+        /// whenever any of these is set, so the permission gate must use the very same mask or a
+        /// read-only session could truncate (or create) files it may only read.
+        /// </summary>
+        private const SftpOpenFlags WritingOpenFlags = SftpOpenFlags.Write     |
+                                                       SftpOpenFlags.Append    |
+                                                       SftpOpenFlags.Create    |
+                                                       SftpOpenFlags.Truncate;
+
         // The SFTP permission an operation requires, for access-profile gating.
         private static SftpPermissions RequiredPermission(SftpRequest Request)
             => Request.Type switch {
-                   SftpPacketType.Open      => Request.OpenFlags.HasFlag(SftpOpenFlags.Write) || Request.OpenFlags.HasFlag(SftpOpenFlags.Create)
+                   SftpPacketType.Open      => (Request.OpenFlags & WritingOpenFlags) != 0
                                                    ? (Request.OpenFlags.HasFlag(SftpOpenFlags.Create) ? SftpPermissions.Create : SftpPermissions.Write)
                                                    : SftpPermissions.Read,
                    SftpPacketType.Read      => SftpPermissions.Read,
@@ -420,7 +431,29 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
                    SftpPacketType.Stat      => SftpPermissions.Stat,
                    SftpPacketType.LStat     => SftpPermissions.Stat,
                    SftpPacketType.FStat     => SftpPermissions.Stat,
-                   _                        => SftpPermissions.None   // Close, RealPath, Init — always allowed
+
+                   // An extension is only as harmless as what it does: posix-rename mutates, so it must
+                   // demand the same permissions as the plain operations it is built from.
+                   SftpPacketType.Extended  => RequiredExtendedPermission(Request.ExtendedName),
+
+                   // Deny by default. Only the three stateless, non-privileged packets are free; anything
+                   // added later must classify itself here rather than slip through a permissive fallback.
+                   SftpPacketType.Close     or
+                   SftpPacketType.RealPath  or
+                   SftpPacketType.Init      => SftpPermissions.None,
+                   _                        => SftpPermissions.All
+               };
+
+        // The permission an extended request requires. Unknown extensions demand everything, so an
+        // unimplemented name can never be a way around the profile.
+        private static SftpPermissions RequiredExtendedPermission(String? ExtendedName)
+            => ExtendedName switch {
+                   "posix-rename@openssh.com"  => SftpPermissions.Delete | SftpPermissions.Rename,
+                   "fsync@openssh.com"         => SftpPermissions.Write,
+                   "statvfs@openssh.com"       => SftpPermissions.Stat,
+                   "fstatvfs@openssh.com"      => SftpPermissions.Stat,
+                   "limits@openssh.com"        => SftpPermissions.None,
+                   _                           => SftpPermissions.All
                };
 
         #endregion
