@@ -156,12 +156,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// reads piped standard input via <see cref="SshExecContext.StandardInput"/> — pump its output while
         /// concurrently feeding it inbound stdin, then report the exit status. Unlike
         /// <see cref="ServeExecAsync"/>, the handler runs concurrently with the receive loop so it can
-        /// consume stdin as it streams in.
+        /// consume stdin as it streams in. An optional <paramref name="Recorder"/> tees the channel output
+        /// into an asciicast v2 recording and captures the command and its exit status (the recorder's
+        /// lifetime — begin/complete — is owned by the caller).
         /// </summary>
         public static async ValueTask ServeCommandAsync(SshTransport       Transport,
                                                         String             Username,
                                                         SshExecHandler     Handler,
-                                                        CancellationToken  CancellationToken = default)
+                                                        SessionRecorder?   Recorder           = null,
+                                                        CancellationToken  CancellationToken   = default)
         {
 
             const UInt32 localChannel = 0;
@@ -204,6 +207,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                     if (handlerTask is not null && !exitSent && handlerTask.IsCompleted)
                     {
                         var exitCode = await handlerTask.ConfigureAwait(false);
+                        if (Recorder is not null)
+                            await Recorder.RecordExitAsync(exitCode, CancellationToken).ConfigureAwait(false);
                         await Send(BuildExitStatus(remoteChannel, (UInt32) exitCode)).ConfigureAwait(false);
                         await Send(BuildChannelEof(remoteChannel)).ConfigureAwait(false);
                         await Send(BuildChannelClose(remoteChannel)).ConfigureAwait(false);
@@ -264,11 +269,20 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                 if (request.WantReply)
                                     await Send(BuildChannelSuccess(remoteChannel)).ConfigureAwait(false);
 
+                                if (Recorder is not null)
+                                    await Recorder.StartAsync(Command: request.RequestType == "exec" ? request.Command : null,
+                                                              CancellationToken: CancellationToken).ConfigureAwait(false);
+
                                 stdinPipe = new Pipe();
 
-                                var channel = remoteChannel;
-                                ValueTask Write(ReadOnlyMemory<Byte> d, Boolean isStderr, CancellationToken ct)
-                                    => WriteChannelDataGatedAsync(Send, channel, d, isStderr, () => remoteWindow, n => remoteWindow -= n);
+                                var channel   = remoteChannel;
+                                var recorder  = Recorder;
+                                async ValueTask Write(ReadOnlyMemory<Byte> d, Boolean isStderr, CancellationToken ct)
+                                {
+                                    if (recorder is not null)
+                                        await recorder.RecordOutputAsync(d, ct).ConfigureAwait(false);
+                                    await WriteChannelDataGatedAsync(Send, channel, d, isStderr, () => remoteWindow, n => remoteWindow -= n).ConfigureAwait(false);
+                                }
 
                                 var context = new SshExecContext(request.Command, Username, Write, stdinPipe.Reader.AsStream(), hasPty);
                                 handlerTask = Handler(context, CancellationToken).AsTask();

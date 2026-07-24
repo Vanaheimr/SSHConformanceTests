@@ -63,7 +63,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                     {
                         try { await Task.Delay(Timeout.InfiniteTimeSpan, serverStop.Token); } catch { }
                         return 0;
-                    }, CancellationToken);
+                    }, CancellationToken: CancellationToken);
                 }
                 catch { }
             }, CancellationToken);
@@ -116,7 +116,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                             await Task.Delay(TimeSpan.FromMilliseconds(100), ct);
                         }
                         return 0;
-                    }, CancellationToken);
+                    }, CancellationToken: CancellationToken);
                 }
                 catch { }
             }, CancellationToken);

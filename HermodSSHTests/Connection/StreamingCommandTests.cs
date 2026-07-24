@@ -53,7 +53,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                    {
                        using var t = await SshTransport.ServerHandshakeAsync(ServerPipe, HostKey, CancellationToken: CancellationToken);
                        await UserAuthentication.ServerAuthenticateAsync(t, SshUserAuthenticator.ForAuthorizedKeys(UserPublicKey), CancellationToken: CancellationToken);
-                       await SshConnection.ServeCommandAsync(t, "achim", Handler, CancellationToken);
+                       await SshConnection.ServeCommandAsync(t, "achim", Handler, CancellationToken: CancellationToken);
                    }
                    catch { /* torn down with the client */ }
                }, CancellationToken);
