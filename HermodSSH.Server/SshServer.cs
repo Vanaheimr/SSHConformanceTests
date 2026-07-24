@@ -60,6 +60,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
 
         /// <summary>An optional typed audit-event sink.</summary>
         public ISshAuditSink?                       AuditSink         { get; init; }
+
+        /// <summary>
+        /// Advertise all <see cref="HostKeys"/> to authenticated clients via
+        /// <c>hostkeys-00@openssh.com</c>, and answer the matching proof challenges — the server half of
+        /// OpenSSH's <c>UpdateHostKeys</c>, which lets a host key be rotated without clients tripping
+        /// their host-key warning. Enabled by default; harmless for clients that ignore it.
+        /// </summary>
+        public Boolean                              AdvertiseHostKeys { get; init; } = true;
     }
 
 
@@ -139,7 +147,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
                 await using var mux = new SshChannelMultiplexer(transport);
                 mux.ChannelAcceptor = info => AcceptChannelAsync(info);
                 SshRemoteForwarding.ServeRemoteForwards(mux, options.ForwardingPolicy, CancellationToken);
+
+                if (options.AdvertiseHostKeys)
+                    SshHostKeyRotation.ServeHostKeyProofs(mux, options.HostKeys);
+
                 mux.Start();
+
+                // Advertise every host key we hold, so clients can learn a rotated-in key before the
+                // old one is retired. Only meaningful after authentication has completed.
+                if (options.AdvertiseHostKeys)
+                    await SshHostKeyRotation.AnnounceAsync(mux, options.HostKeys, CancellationToken);
 
                 while (!CancellationToken.IsCancellationRequested)
                 {

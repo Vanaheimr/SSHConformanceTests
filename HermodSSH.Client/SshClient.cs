@@ -43,6 +43,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Client
 
         /// <summary>The public-key credentials to try, in order.</summary>
         public IReadOnlyList<ISshHostKey>         Credentials    { get; init; } = [];
+
+        /// <summary>
+        /// Called when the server advertises its full host-key set via <c>hostkeys-00@openssh.com</c>
+        /// (OpenSSH's <c>UpdateHostKeys</c>) — the hook for rotating a <c>known_hosts</c> entry before
+        /// the old key is retired. Every reported key has already proven possession of its private half,
+        /// so it is safe to trust; when the server fails to prove them the callback is not invoked.
+        /// Leave null to ignore the advertisement (the default).
+        /// </summary>
+        public Func<SshHostKeyUpdate, CancellationToken, ValueTask>?  HostKeysReceived  { get; init; }
     }
 
 
@@ -104,8 +113,43 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Client
                 throw new SshAuthenticationException("None of the supplied credentials were accepted.");
             }
 
-            return new SshClient(transport, new SshChannelMultiplexer(transport).Start());
+            var mux = new SshChannelMultiplexer(transport);
 
+            if (Options.HostKeysReceived is not null)
+                WireHostKeyUpdates(mux, transport.ServerHostKey, Options.HostKeysReceived);
+
+            return new SshClient(transport, mux.Start());
+
+        }
+
+        // Handle the server's hostkeys-00@openssh.com advertisement. The proof exchange must run OFF the
+        // receive loop: it awaits a REQUEST_SUCCESS that this very loop is the one to dispatch, so doing
+        // it inline would deadlock. The connect-scoped token is deliberately not captured — the callback
+        // outlives ConnectAsync; a torn-down multiplexer faults the pending reply and ends the task.
+        private static void WireHostKeyUpdates(SshChannelMultiplexer                              Mux,
+                                               Byte[]                                             CurrentHostKey,
+                                               Func<SshHostKeyUpdate, CancellationToken, ValueTask>  Callback)
+        {
+            Mux.GlobalRequestHandler = info =>
+            {
+
+                if (info.Name != SshHostKeyRotation.AnnouncementRequestName)
+                    return ValueTask.FromResult(false);
+
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var update = await SshHostKeyRotation.HandleAnnouncementAsync(Mux, info.Data, CurrentHostKey).ConfigureAwait(false);
+                        if (update.ProvenKeys.Count > 0)
+                            await Callback(update, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch { /* the advertisement is advisory — never break the connection over it */ }
+                });
+
+                return ValueTask.FromResult(true);
+
+            };
         }
 
         #endregion

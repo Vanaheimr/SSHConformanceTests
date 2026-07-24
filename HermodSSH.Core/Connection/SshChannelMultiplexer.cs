@@ -40,6 +40,26 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
     /// <param name="Data">The remaining request-specific bytes.</param>
     public readonly record struct SshGlobalRequestInfo(String Name, Boolean WantReply, Byte[] Data);
 
+    /// <summary>
+    /// The answer to a global request: REQUEST_SUCCESS or REQUEST_FAILURE, plus any response payload.
+    /// Most requests carry no payload; <c>hostkeys-prove-00@openssh.com</c> answers with signatures.
+    /// </summary>
+    /// <param name="Success">Whether to answer REQUEST_SUCCESS (else REQUEST_FAILURE).</param>
+    /// <param name="Data">The response-specific bytes that follow the reply message number.</param>
+    public readonly record struct SshGlobalRequestReply(Boolean Success, Byte[] Data)
+    {
+
+        /// <summary>A successful reply without a payload.</summary>
+        public static SshGlobalRequestReply Ok       { get; } = new (true,  []);
+
+        /// <summary>A REQUEST_FAILURE reply.</summary>
+        public static SshGlobalRequestReply Failed   { get; } = new (false, []);
+
+        /// <summary>A successful reply carrying a response payload.</summary>
+        public static SshGlobalRequestReply WithData(Byte[] Data) => new (true, Data);
+
+    }
+
 
     /// <summary>
     /// The SSH connection multiplexer: a single background loop reads the transport and demultiplexes every
@@ -67,7 +87,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         private readonly CancellationTokenSource                   cts      = new ();
         private readonly ConcurrentDictionary<UInt32, SshMuxChannel>  channels = new ();
         private readonly Channel<SshMuxChannel>                    accepted = System.Threading.Channels.Channel.CreateUnbounded<SshMuxChannel>();
-        private readonly ConcurrentQueue<TaskCompletionSource<Boolean>>  pendingGlobalReplies = new ();
+        private readonly ConcurrentQueue<TaskCompletionSource<SshGlobalRequestReply>>  pendingGlobalReplies = new ();
         private Int32                                             nextLocalId;
         private Task                                             runTask = Task.CompletedTask;
 
@@ -77,6 +97,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         /// <summary>The underlying transport.</summary>
         public SshTransport Transport => transport;
+
+        /// <summary>The session identifier of the underlying transport (the first exchange hash).</summary>
+        public Byte[] SessionId => transport.SessionId;
 
         /// <summary>Whether this end is the server.</summary>
         public Boolean IsServer => transport.IsServer;
@@ -95,6 +118,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// </summary>
         public Func<SshGlobalRequestInfo, ValueTask<Boolean>> GlobalRequestHandler { get; set; }
             = _ => ValueTask.FromResult(false);
+
+        /// <summary>
+        /// An optional global-request handler that can answer with a <b>response payload</b> (which
+        /// <see cref="GlobalRequestHandler"/> cannot). It is consulted <i>first</i>; returning
+        /// <c>null</c> means "not mine" and falls through to <see cref="GlobalRequestHandler"/>, so
+        /// independent features (e.g. <c>hostkeys-prove-00@openssh.com</c> and <c>tcpip-forward</c>)
+        /// can be wired side by side without clobbering each other.
+        /// </summary>
+        public Func<SshGlobalRequestInfo, ValueTask<SshGlobalRequestReply?>>? GlobalRequestResponder { get; set; }
 
         #endregion
 
@@ -150,18 +182,27 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         /// <summary>Send a global request (e.g. <c>tcpip-forward</c>); when <paramref name="WantReply"/>, await the SUCCESS/FAILURE reply.</summary>
         public async ValueTask<Boolean> SendGlobalRequestAsync(String Name, Boolean WantReply, Byte[] Data, CancellationToken CancellationToken = default)
+            => (await SendGlobalRequestWithReplyAsync(Name, WantReply, Data, CancellationToken).ConfigureAwait(false)).Success;
+
+        /// <summary>
+        /// Send a global request and return the peer's full reply <i>including any response payload</i> —
+        /// needed for requests that answer with data, such as <c>hostkeys-prove-00@openssh.com</c>.
+        /// </summary>
+        public async ValueTask<SshGlobalRequestReply> SendGlobalRequestWithReplyAsync(String Name, Boolean WantReply, Byte[] Data, CancellationToken CancellationToken = default)
         {
 
-            TaskCompletionSource<Boolean>? tcs = null;
+            TaskCompletionSource<SshGlobalRequestReply>? tcs = null;
             if (WantReply)
             {
-                tcs = new TaskCompletionSource<Boolean>(TaskCreationOptions.RunContinuationsAsynchronously);
+                tcs = new TaskCompletionSource<SshGlobalRequestReply>(TaskCreationOptions.RunContinuationsAsynchronously);
                 pendingGlobalReplies.Enqueue(tcs);
             }
 
             await SendAsync(SshChannelWire.GlobalRequest(Name, WantReply, Data), CancellationToken).ConfigureAwait(false);
 
-            return tcs is null || await tcs.Task.WaitAsync(CancellationToken).ConfigureAwait(false);
+            return tcs is null
+                       ? SshGlobalRequestReply.Ok
+                       : await tcs.Task.WaitAsync(CancellationToken).ConfigureAwait(false);
 
         }
 
@@ -292,11 +333,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                     break;
 
                 case SshMessageNumber.RequestSuccess:
-                    if (pendingGlobalReplies.TryDequeue(out var okTcs)) okTcs.TrySetResult(true);
+                    if (pendingGlobalReplies.TryDequeue(out var okTcs))
+                        okTcs.TrySetResult(new SshGlobalRequestReply(true, Payload.AsSpan(1).ToArray()));
                     break;
 
                 case SshMessageNumber.RequestFailure:
-                    if (pendingGlobalReplies.TryDequeue(out var failTcs)) failTcs.TrySetResult(false);
+                    if (pendingGlobalReplies.TryDequeue(out var failTcs)) failTcs.TrySetResult(SshGlobalRequestReply.Failed);
                     break;
 
                 case SshMessageNumber.Ping:
@@ -356,13 +398,24 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var wantReply = r.ReadBoolean();
             var rest      = Payload.AsSpan((Int32) r.Position).ToArray();
 
-            var ok = await GlobalRequestHandler(new SshGlobalRequestInfo(name, wantReply, rest)).ConfigureAwait(false);
+            var info  = new SshGlobalRequestInfo(name, wantReply, rest);
+
+            // The payload-capable responder gets first refusal; null means "not mine".
+            var reply = GlobalRequestResponder is not null
+                            ? await GlobalRequestResponder(info).ConfigureAwait(false)
+                            : null;
+
+            reply ??= await GlobalRequestHandler(info).ConfigureAwait(false)
+                          ? SshGlobalRequestReply.Ok
+                          : SshGlobalRequestReply.Failed;
 
             if (wantReply)
             {
-                var abw = new ArrayBufferWriter<Byte>(); var w = new SshPacketWriter(abw);
-                w.WriteByte((Byte) (ok ? SshMessageNumber.RequestSuccess : SshMessageNumber.RequestFailure));
-                await SendAsync(abw.WrittenSpan.ToArray()).ConfigureAwait(false);
+                var data     = reply.Value.Data;
+                var response = new Byte[1 + data.Length];
+                response[0]  = (Byte) (reply.Value.Success ? SshMessageNumber.RequestSuccess : SshMessageNumber.RequestFailure);
+                data.CopyTo(response, 1);
+                await SendAsync(response).ConfigureAwait(false);
             }
         }
 
