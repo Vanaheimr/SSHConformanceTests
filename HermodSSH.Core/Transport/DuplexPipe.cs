@@ -47,6 +47,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
 
         /// <summary>
+        /// Wrap a bidirectional <see cref="Stream"/> as an <see cref="IDuplexPipe"/> — used to run a fresh SSH
+        /// transport over a tunneled channel stream (the ProxyJump / SSH-over-SSH mechanism).
+        /// </summary>
+        public static IDuplexPipe FromStream(Stream Stream)
+            => new DuplexPipe(PipeReader.Create(Stream), PipeWriter.Create(Stream));
+
+
+        /// <summary>
         /// Create two cross-wired duplex pipes: whatever is written to one endpoint's output can be
         /// read from the other endpoint's input, and vice versa.
         /// </summary>
