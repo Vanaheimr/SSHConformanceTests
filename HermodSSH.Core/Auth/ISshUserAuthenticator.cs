@@ -28,7 +28,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
 
     /// <summary>The outcome of a successful user authentication.</summary>
-    public sealed record SshAuthResult(String Username, String Method);
+    /// <summary>The outcome of a successful authentication.</summary>
+    /// <param name="Username">The authenticated account.</param>
+    /// <param name="Method">The RFC 4252 method name that succeeded.</param>
+    /// <param name="Restrictions">
+    /// What the credential confines this session to — an OpenSSH certificate's enforced critical
+    /// options (<c>force-command</c>, <c>source-address</c>). <see cref="SshSessionRestrictions.None"/>
+    /// for an ordinary credential. The session layer must apply these; a certificate carrying a
+    /// restriction nobody applies is refused at validation time rather than silently widened.
+    /// </param>
+    public sealed record SshAuthResult(String                  Username,
+                                       String                  Method,
+                                       SshSessionRestrictions  Restrictions);
 
 
     /// <summary>

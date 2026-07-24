@@ -18,6 +18,7 @@
 #region Usings
 
 using System.IO.Pipelines;
+using System.Buffers;
 using System.Net.Sockets;
 
 using org.GraphDefined.Vanaheimr.Hermod;
@@ -134,14 +135,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
             {
                 while (!CancellationToken.IsCancellationRequested)
                 {
-                    var pipe = await listener!.AcceptAsync(CancellationToken);
-                    _ = Task.Run(() => HandleConnectionAsync(pipe, CancellationToken));
+                    var (pipe, peer) = await listener!.AcceptWithPeerAsync(CancellationToken);
+                    _ = Task.Run(() => HandleConnectionAsync(pipe, peer, CancellationToken));
                 }
             }
             catch { }
         }
 
-        private async Task HandleConnectionAsync(IDuplexPipe Pipe, CancellationToken CancellationToken)
+        private async Task HandleConnectionAsync(IDuplexPipe Pipe, IPSocket? Peer, CancellationToken CancellationToken)
         {
             try
             {
@@ -149,6 +150,30 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
                 using var transport = await SshTransport.ServerHandshakeAsync(Pipe, options.HostKeys[0], CancellationToken: CancellationToken);
                 var auth = await UserAuthentication.ServerAuthenticateAsync(transport, options.Authenticator, AuditSink: options.AuditSink, CancellationToken: CancellationToken);
                 var user = auth.Username;
+
+                // A source-address certificate may only be used from the addresses the CA named. The
+                // check belongs here rather than in the validator: only the server knows where the
+                // client actually connected from. An undeterminable peer address counts as a mismatch —
+                // a restriction that cannot be evaluated must not be treated as satisfied.
+                if (!auth.Restrictions.AllowsSource(Peer?.IPAddress.ToDotNet()))
+                {
+
+                    if (options.AuditSink is not null)
+                        await options.AuditSink.WriteAsync(new AuthenticationFailedEvent(DateTimeOffset.UtcNow, user, 0), CancellationToken);
+
+                    // Say so rather than dropping the connection silently: the client learns at once
+                    // that its credential is not valid from here, instead of hanging until a timeout.
+                    var abw = new ArrayBufferWriter<Byte>();
+                    var w   = new SshPacketWriter(abw);
+                    w.WriteByte((Byte) SshMessageNumber.Disconnect);
+                    w.WriteUInt32((UInt32) DisconnectReason.NoMoreAuthMethodsAvailable);
+                    w.WriteString("this credential is not permitted from your address");
+                    w.WriteString("");
+
+                    try { await transport.SendPacketAsync(abw.WrittenSpan.ToArray(), CancellationToken); } catch { }
+                    return;
+
+                }
 
                 await using var mux = new SshChannelMultiplexer(transport);
                 mux.ChannelAcceptor = info => AcceptChannelAsync(info);
@@ -167,7 +192,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
                 while (!CancellationToken.IsCancellationRequested)
                 {
                     var channel = await mux.AcceptChannelAsync(CancellationToken);
-                    if (channel.ChannelType == "session")           _ = ServeSessionAsync(channel, user, CancellationToken);
+                    if (channel.ChannelType == "session")           _ = ServeSessionAsync(channel, user, auth.Restrictions, CancellationToken);
                     else if (channel.ChannelType == "direct-tcpip") _ = ServeDirectTcpIpAsync(channel, CancellationToken);
                 }
 
@@ -196,7 +221,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
             return false;
         }
 
-        private async Task ServeSessionAsync(SshMuxChannel Channel, String User, CancellationToken CancellationToken)
+        private async Task ServeSessionAsync(SshMuxChannel Channel, String User, SshSessionRestrictions Restrictions, CancellationToken CancellationToken)
         {
             Dictionary<String, Func<SshMuxChannel, CancellationToken, ValueTask>>? subsystems = null;
             if (options.SftpFileSystem is not null)
@@ -204,7 +229,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Server
                     ["sftp"] = (ch, ct) => SftpServer.ServeAsync(new StreamSftpDuplex(ch.AsStream()), options.SftpFileSystem, options.SftpProfile, options.SftpLimits, ct)
                 };
 
-            try { await SshSessionChannel.ServeAsync(Channel, User, options.ExecHandler, subsystems, CancellationToken); }
+            try { await SshSessionChannel.ServeAsync(Channel, User, options.ExecHandler, subsystems, CancellationToken, Restrictions); }
             catch { }
         }
 

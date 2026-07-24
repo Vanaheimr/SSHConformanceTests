@@ -74,7 +74,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                                                  String                                                                     Username,
                                                  SshExecHandler?                                                            Handler,
                                                  IReadOnlyDictionary<String, Func<SshMuxChannel, CancellationToken, ValueTask>>?  Subsystems = null,
-                                                 CancellationToken                                                          CancellationToken = default)
+                                                 CancellationToken                                                          CancellationToken = default,
+                                                 SshSessionRestrictions?                                                    Restrictions = null)
         {
 
             var hasPty = false;
@@ -100,14 +101,23 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
                 if (type is "exec" or "shell" && Handler is not null)
                 {
-                    var command = type == "exec" ? ReadString(request.Value.Data) : "";
+
+                    var requested = type == "exec" ? ReadString(request.Value.Data) : "";
+
+                    // A force-command certificate confines the session to the CA's command, whatever the
+                    // client asked for — including a bare shell request. What it asked for is kept for
+                    // the handler's information only (OpenSSH's SSH_ORIGINAL_COMMAND).
+                    var forced    = Restrictions?.ForcedCommand;
+                    var command   = forced ?? requested;
+
                     if (request.Value.WantReply)
                         await Channel.ReplyAsync(true, CancellationToken).ConfigureAwait(false);
 
                     var channel = Channel;
                     var context = new SshExecContext(command, Username,
                                                      (data, isErr, ct) => isErr ? channel.SendErrorAsync(data, ct) : channel.SendDataAsync(data, ct),
-                                                     hasPty: hasPty);
+                                                     hasPty: hasPty,
+                                                     originalCommand: forced is null ? null : requested);
 
                     var exit = await Handler(context, CancellationToken).ConfigureAwait(false);
 

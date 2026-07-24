@@ -93,7 +93,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                 if (SshCertificate.IsCertificateAlgorithm(request.Algorithm) &&
                     SshCertificate.TryParse(request.PublicKeyBlob, out var certificate))
                 {
-                    var validation = SshCertificateValidator.Validate(certificate!, SshCertType.User, request.Username, Trust, clock.GetUtcNow());
+                    // The restrictions a certificate carries are applied by the session layer, which
+                    // reads them straight off the authenticated blob — so declare them enforced here.
+                    var validation = SshCertificateValidator.Validate(certificate!, SshCertType.User, request.Username, Trust, clock.GetUtcNow(),
+                                                                      SshSessionRestrictions.EnforcedCriticalOptions);
                     return ValueTask.FromResult(validation.IsValid);
                 }
 

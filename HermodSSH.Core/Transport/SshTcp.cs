@@ -172,10 +172,26 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// Accept the next incoming connection as a duplex pipe.
         /// </summary>
         public async Task<IDuplexPipe> AcceptAsync(CancellationToken CancellationToken = default)
+            => (await AcceptWithPeerAsync(CancellationToken).ConfigureAwait(false)).Pipe;
+
+        /// <summary>
+        /// Accept the next incoming connection, keeping the peer's address alongside the pipe. Needed
+        /// wherever an authorization decision depends on <i>where</i> the client connected from — a
+        /// certificate's <c>source-address</c> restriction, or address-based auditing.
+        /// </summary>
+        /// <param name="CancellationToken">An optional token to cancel the accept.</param>
+        public async Task<(IDuplexPipe Pipe, IPSocket? Peer)> AcceptWithPeerAsync(CancellationToken CancellationToken = default)
         {
+
             var client = await socket.AcceptAsync(CancellationToken).ConfigureAwait(false);
             client.NoDelay = true;
-            return SshTcp.AsDuplexPipe(client);
+
+            var peer = client.RemoteEndPoint is IPEndPoint remote
+                           ? IPSocket.FromIPEndPoint(remote)
+                           : (IPSocket?) null;
+
+            return (SshTcp.AsDuplexPipe(client), peer);
+
         }
 
         #endregion

@@ -49,11 +49,23 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         private readonly Func<ReadOnlyMemory<Byte>, Boolean, CancellationToken, ValueTask> write;
 
-        /// <summary>The command line requested via <c>exec</c> (empty string for a <c>shell</c> request).</summary>
-        public String   Command        { get; }
+        /// <summary>
+        /// The command line to run. Normally what the client requested via <c>exec</c> (empty for a
+        /// <c>shell</c> request) — but when the authenticating credential carries a
+        /// <c>force-command</c> restriction this is the CA's command instead, and what the client asked
+        /// for is in <see cref="OriginalCommand"/>. A handler should therefore run <b>this</b>.
+        /// </summary>
+        public String   Command         { get; }
+
+        /// <summary>
+        /// What the client actually asked to run, when a <c>force-command</c> replaced it; otherwise
+        /// null. Equivalent to OpenSSH's <c>SSH_ORIGINAL_COMMAND</c>. Purely informational — a forced
+        /// command must not be talked out of running by it.
+        /// </summary>
+        public String?  OriginalCommand { get; }
 
         /// <summary>The authenticated user name.</summary>
-        public String   Username       { get; }
+        public String   Username        { get; }
 
         /// <summary>Whether the client requested a pseudo-terminal (<c>pty-req</c>) for this session.</summary>
         public Boolean  HasPty         { get; }
@@ -69,14 +81,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         public SshExecContext(String                                                             command,
                               String                                                             username,
                               Func<ReadOnlyMemory<Byte>, Boolean, CancellationToken, ValueTask>  write,
-                              Stream?                                                            standardInput  = null,
-                              Boolean                                                            hasPty         = false)
+                              Stream?                                                            standardInput    = null,
+                              Boolean                                                            hasPty           = false,
+                              String?                                                            originalCommand  = null)
         {
-            this.Command        = command;
-            this.Username       = username;
-            this.write          = write;
-            this.StandardInput  = standardInput ?? Stream.Null;
-            this.HasPty         = hasPty;
+            this.Command          = command;
+            this.OriginalCommand  = originalCommand;
+            this.Username         = username;
+            this.write            = write;
+            this.StandardInput    = standardInput ?? Stream.Null;
+            this.HasPty           = hasPty;
         }
 
         /// <summary>Write bytes to standard output.</summary>

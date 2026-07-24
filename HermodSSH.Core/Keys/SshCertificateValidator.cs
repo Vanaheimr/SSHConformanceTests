@@ -77,30 +77,40 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
     {
 
         /// <summary>
-        /// Critical options we both recognise <b>and enforce</b>; anything else must cause rejection
-        /// (PROTOCOL.certkeys: "critical options … must be understood, or the certificate is refused").
-        ///
-        /// <para>
-        /// This set is deliberately <b>empty</b>. "Understood" has to mean enforced: listing an option
-        /// here without acting on it would turn a CA's restriction into a silent no-op — a certificate
-        /// issued as <c>force-command="/usr/bin/backup-only"</c> would be accepted and the holder would
-        /// then run any command at all, which is worse than refusing the certificate outright. Until
-        /// <c>force-command</c> and <c>source-address</c> are actually applied to the session, a
-        /// certificate carrying them is rejected. Add a name here only together with its enforcement.
-        /// </para>
+        /// Critical options this implementation is <i>able</i> to enforce (PROTOCOL.certkeys:
+        /// "critical options … must be understood, or the certificate is refused"). Whether they are
+        /// actually enforced for a given validation is the caller's declaration — see the
+        /// <c>EnforcedCriticalOptions</c> parameter of <see cref="Validate"/>. Membership here only
+        /// sharpens the rejection message; it never makes a certificate acceptable on its own, because
+        /// "understood" has to mean enforced: accepting a restriction and then dropping it would hand
+        /// the holder more access than the CA issued.
         /// </summary>
         private static readonly HashSet<String> KnownCriticalOptions =
-            new (StringComparer.Ordinal);
+            new (StringComparer.Ordinal) { "force-command", "source-address" };
 
 
         #region Validate(Certificate, ExpectedType, Principal, Trust, Now)
 
         /// <summary>Validate a certificate for a principal against the trust store at a given instant.</summary>
+        /// <param name="Certificate">The certificate to validate.</param>
+        /// <param name="ExpectedType">Whether a user or a host certificate is expected.</param>
+        /// <param name="Principal">The principal (login name / hostname) being authenticated.</param>
+        /// <param name="Trust">The trusted CAs and revocation lists.</param>
+        /// <param name="Now">The instant to evaluate the validity window at.</param>
+        /// <param name="EnforcedCriticalOptions">
+        /// The critical options the <i>caller</i> undertakes to enforce on the resulting session. Only
+        /// these are accepted; anything else fails validation. It defaults to <b>none</b>, so a caller
+        /// that does not apply restrictions cannot accidentally accept a restricted certificate and then
+        /// ignore what it says — which would hand the holder more access than the CA granted. A server
+        /// that carries restrictions into the session passes
+        /// <see cref="SshSessionRestrictions.EnforcedCriticalOptions"/>.
+        /// </param>
         public static SshCertificateValidation Validate(SshCertificate                Certificate,
                                                         SshCertType                   ExpectedType,
                                                         String                        Principal,
                                                         SshCertificateAuthorityTrust  Trust,
-                                                        DateTimeOffset                Now)
+                                                        DateTimeOffset                Now,
+                                                        IReadOnlySet<String>?         EnforcedCriticalOptions   = null)
         {
 
             // 2. Type must match (a host cert must not authenticate a user, and vice versa).
@@ -128,10 +138,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             if (Certificate.Principals.Count > 0 && !Certificate.Principals.Contains(Principal, StringComparer.Ordinal))
                 return SshCertificateValidation.Fail($"'{Principal}' is not a valid principal for this certificate");
 
-            // 7. Every critical option must be understood.
+            // 7. Every critical option must be understood — and here "understood" means the caller will
+            //    actually enforce it. An option we merely recognise but drop would silently widen the
+            //    holder's access beyond what the CA issued, so it must fail validation instead.
             foreach (var option in Certificate.CriticalOptions)
-                if (!KnownCriticalOptions.Contains(option.Key))
-                    return SshCertificateValidation.Fail($"unknown critical option '{option.Key}'");
+                if (EnforcedCriticalOptions is null || !EnforcedCriticalOptions.Contains(option.Key))
+                    return SshCertificateValidation.Fail(
+                               KnownCriticalOptions.Contains(option.Key)
+                                   ? $"critical option '{option.Key}' is not enforced by this caller"
+                                   : $"unknown critical option '{option.Key}'");
 
             // 8. The certificate must not be revoked.
             if (Trust.IsRevoked(Certificate))

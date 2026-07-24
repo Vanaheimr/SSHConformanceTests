@@ -91,6 +91,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var failedAttempts   = 0;
             var completedMethods = new HashSet<String>(StringComparer.Ordinal);
 
+            // Restrictions the succeeding credential imposes on the session. Read off the blob that was
+            // actually authenticated — the certificate has already had its CA signature, validity,
+            // principals and critical options checked by the authenticator at this point.
+            var restrictions     = SshSessionRestrictions.None;
+
             while (true)
             {
 
@@ -113,13 +118,19 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                     completedMethods.Add(request.Method);
                     await EmitAsync(AuditSink, new AuthMethodSucceededEvent(clock.GetUtcNow(), request.Username, request.Method), CancellationToken).ConfigureAwait(false);
 
+                    // A certificate that authenticated carries the CA's constraints into the session.
+                    if (request.Method == PublicKeyMethod &&
+                        SshCertificate.IsCertificateAlgorithm(request.Algorithm) &&
+                        SshCertificate.TryParse(request.PublicKeyBlob, out var authenticatedCert))
+                        restrictions = SshCertificateRestrictions.FromCertificate(authenticatedCert!);
+
                     var remaining = Authenticator.RemainingMethods(request.Username, completedMethods);
 
                     if (remaining.Count == 0)
                     {
                         await Transport.SendPacketAsync(new Byte[] { (Byte) SshMessageNumber.UserAuthSuccess }, CancellationToken).ConfigureAwait(false);
                         await EmitAsync(AuditSink, new AuthenticationSucceededEvent(clock.GetUtcNow(), request.Username, [.. completedMethods]), CancellationToken).ConfigureAwait(false);
-                        return new SshAuthResult(request.Username, request.Method);
+                        return new SshAuthResult(request.Username, request.Method, restrictions);
                     }
 
                     // A factor succeeded but more are required — partial success (RFC 4252).
