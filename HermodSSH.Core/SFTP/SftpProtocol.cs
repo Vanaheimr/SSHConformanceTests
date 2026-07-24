@@ -45,7 +45,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
         Handle    = 102,
         Data      = 103,
         Name      = 104,
-        Attrs     = 105
+        Attrs     = 105,
+        Extended       = 200,
+        ExtendedReply  = 201
     }
 
 

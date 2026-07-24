@@ -40,11 +40,22 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
         #endregion
 
+        #region Properties
+
+        /// <summary>The extensions the server advertised in its SSH_FXP_VERSION (name → data).</summary>
+        public IReadOnlyDictionary<String, String> ServerExtensions { get; }
+
+        /// <summary>Whether the server advertised the named extension.</summary>
+        public Boolean Supports(String Extension) => ServerExtensions.ContainsKey(Extension);
+
+        #endregion
+
         #region Constructor(s)
 
-        private SftpClient(SshChannelDuplex Channel)
+        private SftpClient(SshChannelDuplex Channel, IReadOnlyDictionary<String, String> ServerExtensions)
         {
-            this.channel = Channel;
+            this.channel           = Channel;
+            this.ServerExtensions  = ServerExtensions;
         }
 
         #endregion
@@ -68,7 +79,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
             if ((SftpPacketType) version[0] != SftpPacketType.Version)
                 throw new SshWireException("Expected SSH_FXP_VERSION.");
 
-            return new SftpClient(channel);
+            // Parse the advertised extension name/data pairs that follow the version word.
+            var extensions = new Dictionary<String, String>(StringComparer.Ordinal);
+            var vReader    = new SshPacketReader(version);
+            vReader.ReadByte(); vReader.ReadUInt32();   // type + version
+            while (vReader.Position < version.Length)
+            {
+                var name = vReader.ReadString();
+                var data = vReader.ReadString();
+                extensions[name] = data;
+            }
+
+            return new SftpClient(channel, extensions);
 
         }
 
@@ -184,6 +206,31 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
         /// <summary>Rename a remote file or directory.</summary>
         public ValueTask RenameAsync(String OldPath, String NewPath, CancellationToken CancellationToken = default)
             => ExpectOkAsync(SftpPacketType.Rename, (ref SshPacketWriter w) => { w.WriteString(OldPath); w.WriteString(NewPath); }, CancellationToken);
+
+        /// <summary>Atomically rename with replace semantics via <c>posix-rename@openssh.com</c>.</summary>
+        public ValueTask PosixRenameAsync(String OldPath, String NewPath, CancellationToken CancellationToken = default)
+            => ExpectOkAsync(SftpPacketType.Extended, (ref SshPacketWriter w) => { w.WriteString("posix-rename@openssh.com"); w.WriteString(OldPath); w.WriteString(NewPath); }, CancellationToken);
+
+        /// <summary>Query the server's protocol limits via <c>limits@openssh.com</c>.</summary>
+        public async ValueTask<SftpProtocolLimits> LimitsAsync(CancellationToken CancellationToken = default)
+        {
+            var response = await RoundtripAsync(SftpPacketType.Extended, (ref SshPacketWriter w) => w.WriteString("limits@openssh.com"), CancellationToken).ConfigureAwait(false);
+            EnsureNotStatusError(response);
+            var reader = new SshPacketReader(response); reader.ReadByte(); reader.ReadUInt32();
+            return new SftpProtocolLimits(reader.ReadUInt64(), reader.ReadUInt64(), reader.ReadUInt64(), reader.ReadUInt64());
+        }
+
+        /// <summary>Query file-system statistics via <c>statvfs@openssh.com</c> (we surface the session quota as free space).</summary>
+        public async ValueTask<SftpFileSystemStats> StatVfsAsync(String RemotePath, CancellationToken CancellationToken = default)
+        {
+            var response = await RoundtripAsync(SftpPacketType.Extended, (ref SshPacketWriter w) => { w.WriteString("statvfs@openssh.com"); w.WriteString(RemotePath); }, CancellationToken).ConfigureAwait(false);
+            EnsureNotStatusError(response);
+            var reader = new SshPacketReader(response); reader.ReadByte(); reader.ReadUInt32();
+            return new SftpFileSystemStats(
+                reader.ReadUInt64(), reader.ReadUInt64(), reader.ReadUInt64(), reader.ReadUInt64(),
+                reader.ReadUInt64(), reader.ReadUInt64(), reader.ReadUInt64(), reader.ReadUInt64(),
+                reader.ReadUInt64(), reader.ReadUInt64(), reader.ReadUInt64());
+        }
 
         /// <summary>Close the SFTP channel.</summary>
         public ValueTask DisposeAsync()

@@ -53,7 +53,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
             var session = new SftpSession(
                                Limits is { HasSizeQuota: true } ? new SftpQuotaTracker(Limits) : null,
                                Limits is { UploadBytesPerSecond: > 0 }   ? new TokenBucketRateLimiter(Limits.UploadBytesPerSecond!.Value,   Limits.TimeProvider, Limits.BurstBytes) : null,
-                               Limits is { DownloadBytesPerSecond: > 0 } ? new TokenBucketRateLimiter(Limits.DownloadBytesPerSecond!.Value, Limits.TimeProvider, Limits.BurstBytes) : null);
+                               Limits is { DownloadBytesPerSecond: > 0 } ? new TokenBucketRateLimiter(Limits.DownloadBytesPerSecond!.Value, Limits.TimeProvider, Limits.BurstBytes) : null,
+                               Limits);
 
             // 1. INIT → VERSION.
             var init = await ReadPacketAsync(Channel, CancellationToken).ConfigureAwait(false)
@@ -103,7 +104,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
         }
 
-        private sealed record SftpSession(SftpQuotaTracker? Quota, TokenBucketRateLimiter? Upload, TokenBucketRateLimiter? Download);
+        private sealed record SftpSession(SftpQuotaTracker? Quota, TokenBucketRateLimiter? Upload, TokenBucketRateLimiter? Download, SftpLimits? Limits);
 
         private static async ValueTask CleanupPartialAsync(ISftpFileSystem FileSystem, String Handle, String? Path, CancellationToken CancellationToken)
         {
@@ -197,6 +198,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
                     await FileSystem.RenameAsync(Request.Path, Request.TargetPath, CancellationToken).ConfigureAwait(false);
                     return BuildStatus(Request.RequestId, SftpStatusCode.Ok, "OK");
 
+                case SftpPacketType.Extended:
+                    return await DispatchExtendedAsync(FileSystem, Session, Request, CancellationToken).ConfigureAwait(false);
+
                 default:
                     return BuildStatus(Request.RequestId, SftpStatusCode.OpUnsupported, $"Unsupported request {Request.Type}.");
 
@@ -206,10 +210,95 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
 
         #endregion
 
+        #region (private) DispatchExtendedAsync — OpenSSH SFTP extensions
+
+        // Handle the OpenSSH SFTP extensions advertised in our VERSION packet.
+        private static async ValueTask<Byte[]> DispatchExtendedAsync(ISftpFileSystem FileSystem, SftpSession Session, SftpRequest Request, CancellationToken CancellationToken)
+        {
+
+            switch (Request.ExtendedName)
+            {
+
+                // Atomic rename with replace semantics (Path = old, TargetPath = new).
+                case "posix-rename@openssh.com":
+                    try   { await FileSystem.RemoveAsync(Request.TargetPath, CancellationToken).ConfigureAwait(false); }
+                    catch (SftpException) { /* target may not exist — fine */ }
+                    await FileSystem.RenameAsync(Request.Path, Request.TargetPath, CancellationToken).ConfigureAwait(false);
+                    return BuildStatus(Request.RequestId, SftpStatusCode.Ok, "OK");
+
+                // Flush a handle to stable storage — RandomAccess writes are already durable, so this is a no-op success.
+                case "fsync@openssh.com":
+                    return BuildStatus(Request.RequestId, SftpStatusCode.Ok, "OK");
+
+                // Report file-system stats — we surface the session quota as free space.
+                case "statvfs@openssh.com":
+                case "fstatvfs@openssh.com":
+                    return BuildStatVfs(Request.RequestId, Session);
+
+                // Report our protocol limits (max packet / read / write / open handles).
+                case "limits@openssh.com":
+                    return BuildLimits(Request.RequestId, Session);
+
+                default:
+                    return BuildStatus(Request.RequestId, SftpStatusCode.OpUnsupported, $"Unsupported extension '{Request.ExtendedName}'.");
+
+            }
+
+        }
+
+        private static Byte[] BuildStatVfs(UInt32 RequestId, SftpSession Session)
+        {
+
+            const UInt64 blockSize = 1;   // byte-granular blocks → the byte quota maps to space exactly
+
+            // Total/free blocks reflect the per-session byte quota, if any (otherwise a large nominal space).
+            UInt64 totalBytes = Session.Limits?.MaxBytesPerSession is { } max ? (UInt64) max : 1UL << 44;   // ~16 TiB nominal
+            UInt64 usedBytes  = Session.Quota is { } q ? (UInt64) q.SessionBytesWritten : 0;
+            UInt64 freeBytes  = usedBytes >= totalBytes ? 0 : totalBytes - usedBytes;
+
+            UInt64 totalFiles = Session.Limits?.MaxFileCount is { } fc ? (UInt64) fc : 1UL << 32;
+            UInt64 usedFiles  = Session.Quota is { } q2 ? (UInt64) q2.FilesCreated : 0;
+            UInt64 freeFiles  = usedFiles >= totalFiles ? 0 : totalFiles - usedFiles;
+
+            var abw = new ArrayBufferWriter<Byte>(); var w = new SshPacketWriter(abw);
+            w.WriteByte((Byte) SftpPacketType.ExtendedReply);
+            w.WriteUInt32(RequestId);
+            w.WriteUInt64(blockSize);                 // f_bsize
+            w.WriteUInt64(blockSize);                 // f_frsize
+            w.WriteUInt64(totalBytes / blockSize);    // f_blocks
+            w.WriteUInt64(freeBytes  / blockSize);    // f_bfree
+            w.WriteUInt64(freeBytes  / blockSize);    // f_bavail
+            w.WriteUInt64(totalFiles);                // f_files
+            w.WriteUInt64(freeFiles);                 // f_ffree
+            w.WriteUInt64(freeFiles);                 // f_favail
+            w.WriteUInt64(0);                         // f_sid
+            w.WriteUInt64(0);                         // f_flag
+            w.WriteUInt64(255);                       // f_namemax
+            return abw.WrittenSpan.ToArray();
+
+        }
+
+        private static Byte[] BuildLimits(UInt32 RequestId, SftpSession Session)
+        {
+
+            var abw = new ArrayBufferWriter<Byte>(); var w = new SshPacketWriter(abw);
+            w.WriteByte((Byte) SftpPacketType.ExtendedReply);
+            w.WriteUInt32(RequestId);
+            w.WriteUInt64(34_000);                    // max-packet-length
+            w.WriteUInt64(32_768);                    // max-read-length
+            w.WriteUInt64(32_768);                    // max-write-length
+            w.WriteUInt64(Session.Limits?.MaxFileCount is { } fc ? (UInt64) fc : 0);   // max-open-handles (0 = no limit)
+            return abw.WrittenSpan.ToArray();
+
+        }
+
+        #endregion
+
         #region (private) request parsing
 
         private readonly record struct SftpRequest(SftpPacketType Type, UInt32 RequestId, String Path, String TargetPath,
-                                                   String Handle, Int64 Offset, UInt32 Length, SftpOpenFlags OpenFlags, Byte[] Data);
+                                                   String Handle, Int64 Offset, UInt32 Length, SftpOpenFlags OpenFlags, Byte[] Data,
+                                                   String ExtendedName);
 
         private static SftpRequest ParseRequest(Byte[] Packet)
         {
@@ -218,11 +307,28 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
             var type       = (SftpPacketType) reader.ReadByte();
             var requestId  = reader.ReadUInt32();
 
-            String path = "", target = "", handle = "";
+            String path = "", target = "", handle = "", extendedName = "";
             Int64 offset = 0; UInt32 length = 0; SftpOpenFlags flags = 0; Byte[] data = [];
 
             switch (type)
             {
+
+                case SftpPacketType.Extended:
+                    extendedName = reader.ReadString();
+                    switch (extendedName)
+                    {
+                        case "posix-rename@openssh.com":
+                            path   = reader.ReadString();
+                            target = reader.ReadString();
+                            break;
+                        case "fsync@openssh.com":
+                            handle = reader.ReadString();
+                            break;
+                        case "statvfs@openssh.com" or "fstatvfs@openssh.com":
+                            path = reader.ReadString();
+                            break;
+                    }
+                    break;
                 case SftpPacketType.Open:
                     path  = reader.ReadString();
                     flags = (SftpOpenFlags) reader.ReadUInt32();
@@ -260,7 +366,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
                     break;
             }
 
-            return new SftpRequest(type, requestId, path, target, handle, offset, length, flags, data);
+            return new SftpRequest(type, requestId, path, target, handle, offset, length, flags, data, extendedName);
 
         }
 
@@ -293,6 +399,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
             var abw = new ArrayBufferWriter<Byte>(); var w = new SshPacketWriter(abw);
             w.WriteByte((Byte) SftpPacketType.Version);
             w.WriteUInt32(SftpVersion.Three);
+            // Advertise the OpenSSH extensions we support (name/data pairs).
+            w.WriteString("posix-rename@openssh.com"); w.WriteString("1");
+            w.WriteString("fsync@openssh.com");        w.WriteString("1");
+            w.WriteString("statvfs@openssh.com");      w.WriteString("2");
+            w.WriteString("limits@openssh.com");       w.WriteString("1");
             return abw.WrittenSpan.ToArray();
         }
 
