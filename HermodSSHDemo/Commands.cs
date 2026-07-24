@@ -286,6 +286,67 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
         #endregion
 
+        #region play
+
+        /// <summary>Replay a recorded asciicast v2 session to the terminal, honoring the inter-event timing.</summary>
+        public static async Task<Int32> PlayAsync(String[] Arguments, CancellationToken CancellationToken)
+        {
+
+            var rest = Positional(Arguments);
+            if (rest.Count < 1)
+                return Usage("play <recording.cast> [--speed <factor>] [--max-idle <seconds>] [--instant]");
+
+            var path = rest[0];
+            if (!File.Exists(path))
+                return Fail($"No such recording: {path}");
+
+            var speed   = Double.TryParse(Opt(Arguments, "--speed"),    out var s) && s > 0 ? s : 1.0;
+            var maxIdle = Double.TryParse(Opt(Arguments, "--max-idle"), out var m) && m > 0 ? m : Double.PositiveInfinity;
+            var instant = Has(Arguments, "--instant");
+
+            var recording = AsciicastReader.Parse(await File.ReadAllTextAsync(path, CancellationToken));
+
+            // The banner goes to stderr so it never pollutes the replayed terminal stream on stdout.
+            Console.Error.WriteLine($"▶ Replaying {path} — {recording.Header.Width}x{recording.Header.Height}"
+                                    + (recording.Header.Command is { } cmd ? $", command: {cmd}" : "")
+                                    + $" ({recording.Events.Count} event(s))");
+
+            var stdout   = Console.OpenStandardOutput();
+            var previous = 0.0;
+
+            foreach (var e in recording.Events)
+            {
+
+                if (e.Code != AsciicastEventCode.Output)
+                    continue;
+
+                if (!instant)
+                {
+                    // ElapsedSeconds is absolute from the start, so the gap is correct even across skipped events.
+                    var gap = Math.Min(e.ElapsedSeconds - previous, maxIdle) / speed;
+                    if (gap > 0)
+                        await Task.Delay(TimeSpan.FromSeconds(gap), CancellationToken);
+                }
+                previous = e.ElapsedSeconds;
+
+                var bytes = Encoding.UTF8.GetBytes(e.Data);
+                await stdout.WriteAsync(bytes, CancellationToken);
+                await stdout.FlushAsync(CancellationToken);
+
+            }
+
+            if (recording.ExitStatus is { } exit)
+            {
+                Console.Error.WriteLine($"▶ Recorded exit status: {exit}");
+                return exit;
+            }
+
+            return 0;
+
+        }
+
+        #endregion
+
 
         #region (shared) ConnectClientAsync
 
