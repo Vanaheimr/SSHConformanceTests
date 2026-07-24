@@ -75,6 +75,37 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             return this;
         }
 
+        /// <summary>
+        /// Accept user certificates signed by a trusted CA (OpenSSH <c>TrustedUserCAKeys</c> equivalent):
+        /// a presented certificate is validated (CA trust, signature, validity, principals = the login name,
+        /// critical options, revocation) before the client's own signature is checked. Combine with
+        /// <see cref="WithAuthorizedKeys"/> / <see cref="WithPublicKey"/> for plain-key fallback.
+        /// </summary>
+        public SshAuthenticationPolicy WithCertificateAuthority(SshCertificateAuthorityTrust Trust, TimeProvider? TimeProvider = null)
+        {
+
+            var previous  = publicKey;
+            var clock     = TimeProvider ?? System.TimeProvider.System;
+
+            publicKey = (request, cancellationToken) =>
+            {
+
+                if (SshCertificate.IsCertificateAlgorithm(request.Algorithm) &&
+                    SshCertificate.TryParse(request.PublicKeyBlob, out var certificate))
+                {
+                    var validation = SshCertificateValidator.Validate(certificate!, SshCertType.User, request.Username, Trust, clock.GetUtcNow());
+                    return ValueTask.FromResult(validation.IsValid);
+                }
+
+                // Not a certificate — defer to any configured plain public-key policy.
+                return previous?.Invoke(request, cancellationToken) ?? ValueTask.FromResult(false);
+
+            };
+
+            return this;
+
+        }
+
         #endregion
 
         #region WithPassword

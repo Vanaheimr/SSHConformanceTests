@@ -61,14 +61,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             return process.ExitCode;
         }
 
-        private static async Task<String> RunCaptureAsync(String Exe, CancellationToken CancellationToken, params String[] Args)
+        private static async Task<(String StdOut, String StdErr, Int32 ExitCode)> RunCaptureAsync(String Exe, CancellationToken CancellationToken, params String[] Args)
         {
             var startInfo = new ProcessStartInfo(Exe) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
             foreach (var a in Args) startInfo.ArgumentList.Add(a);
             using var process = Process.Start(startInfo)!;
-            var stdout = await process.StandardOutput.ReadToEndAsync(CancellationToken);
+            var stdout = process.StandardOutput.ReadToEndAsync(CancellationToken);
+            var stderr = process.StandardError. ReadToEndAsync(CancellationToken);
             await process.WaitForExitAsync(CancellationToken);
-            return stdout;
+            return (await stdout, await stderr, process.ExitCode);
         }
 
         #endregion
@@ -189,11 +190,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 await SshKeyGenerator.WriteKeyPairAsync(key, path, "written-by-hermod", CancellationToken);
 
                 // ssh-keygen -y derives the public key from OUR private key — proof it can read our format.
-                var derivedPublic = (await RunCaptureAsync(keygen!, CancellationToken, "-y", "-f", path)).Trim();
+                var result        = await RunCaptureAsync(keygen!, CancellationToken, "-y", "-f", path);
+                var derivedPublic = result.StdOut.Trim();
                 var expected      = SshPublicKey.FromHostKey(key).ToAuthorizedKeyLine();
 
                 Assert.That(derivedPublic.StartsWith(expected, StringComparison.Ordinal), Is.True,
-                            $"ssh-keygen -y should reproduce our public key.\n  ours: {expected}\n  ssh-keygen: {derivedPublic}");
+                            $"ssh-keygen -y should reproduce our public key.\n  ours: {expected}\n  ssh-keygen: {derivedPublic}\n  exit code: {result.ExitCode}\n  stderr: {result.StdErr.Trim()}");
 
             }
             finally

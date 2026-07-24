@@ -109,6 +109,42 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         public static HostKeyPolicy PinKey(SshPublicKey Key)
             => Pin(Key.ToAuthorizedKeyLine());
 
+        /// <summary>Start a policy that accepts host certificates signed by a trusted host CA.</summary>
+        public static HostKeyPolicy HostCertificate(SshCertificateAuthorityTrust Trust, TimeProvider? TimeProvider = null)
+            => new HostKeyPolicy([]).OrHostCertificate(Trust, TimeProvider);
+
+        #endregion
+
+        #region OrHostCertificate(Trust, TimeProvider = null)
+
+        /// <summary>
+        /// Add a host-certificate source: a presented host certificate is accepted when it validates
+        /// (host type, trusted CA, signature, validity, the host as a principal) against <paramref name="Trust"/>.
+        /// </summary>
+        public HostKeyPolicy OrHostCertificate(SshCertificateAuthorityTrust Trust, TimeProvider? TimeProvider = null)
+        {
+
+            var clock = TimeProvider ?? System.TimeProvider.System;
+
+            sources.Add(prompt =>
+            {
+
+                if (!SshCertificate.IsCertificateAlgorithm(prompt.PublicKey.Algorithm))
+                    return HostKeyVerdict.Unknown;
+
+                if (!SshCertificate.TryParse(prompt.PublicKey.Blob, out var certificate))
+                    return HostKeyVerdict.Reject;
+
+                return SshCertificateValidator.Validate(certificate!, SshCertType.Host, prompt.Host, Trust, clock.GetUtcNow()).IsValid
+                           ? HostKeyVerdict.Accept
+                           : HostKeyVerdict.Reject;
+
+            });
+
+            return this;
+
+        }
+
         #endregion
 
         #region OrKnownHosts(KnownHosts) / OrKnownHostsFile(Path)
@@ -126,6 +162,27 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                 var matches = KnownHosts.Lookup(prompt.Host, prompt.Port);
                 if (matches.Count == 0)
                     return HostKeyVerdict.Unknown;
+
+                // A host certificate: validate it against the matching @cert-authority entries.
+                if (SshCertificate.IsCertificateAlgorithm(prompt.PublicKey.Algorithm))
+                {
+
+                    if (!SshCertificate.TryParse(prompt.PublicKey.Blob, out var certificate))
+                        return HostKeyVerdict.Reject;
+
+                    var caEntries = matches.Where(e => e.Marker == KnownHostMarker.CertAuthority).ToList();
+                    if (caEntries.Count == 0)
+                        return HostKeyVerdict.Unknown;
+
+                    var trust = new SshCertificateAuthorityTrust();
+                    foreach (var entry in caEntries)
+                        trust.TrustCA(entry.PublicKey.Blob);
+
+                    return SshCertificateValidator.Validate(certificate!, SshCertType.Host, prompt.Host, trust, DateTimeOffset.UtcNow).IsValid
+                               ? HostKeyVerdict.Accept
+                               : HostKeyVerdict.Reject;
+
+                }
 
                 if (matches.Any(e => e.Marker == KnownHostMarker.Revoked && e.PublicKey.Blob.AsSpan().SequenceEqual(prompt.PublicKey.Blob)))
                     return HostKeyVerdict.Reject;

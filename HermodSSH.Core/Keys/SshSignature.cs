@@ -54,6 +54,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                 var keyReader  = new SshPacketReader(PublicKeyBlob);
                 var keyType    = keyReader.ReadString();
 
+                // A certificate blob: verify the signature against the certificate's embedded subject key.
+                if (SshCertificate.IsCertificateAlgorithm(keyType))
+                    return SshCertificate.TryParse(PublicKeyBlob.ToArray(), out var certificate) &&
+                           Verify(certificate!.SubjectPublicKey, Data, SignatureBlob);
+
                 var sigReader  = new SshPacketReader(SignatureBlob);
                 var sigAlg     = sigReader.ReadString();
                 var sigData    = sigReader.ReadBinaryString();

@@ -17,7 +17,10 @@
 
 #region Usings
 
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
+using System.Security.Principal;
+using System.Security.AccessControl;
 
 using NUnit.Framework;
 
@@ -127,6 +130,64 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 Assert.That(loaded.Key.PublicKeyBlob, Is.EqualTo(key.PublicKeyBlob));
                 Assert.That(loaded.Comment,           Is.EqualTo("round-trip"));
                 Assert.That(SshSignature.Verify(loaded.Key.PublicKeyBlob, data, signature), Is.True);
+            });
+
+        }
+
+        #endregion
+
+        #region WriteKeyPairAsync_RestrictsThePrivateKeyToItsOwner
+
+        /// <summary>
+        /// OpenSSH refuses a private key that anybody but its owner can read, so the file we write must
+        /// carry mode 0600 / a protected single-ACE DACL — checked here without needing an ssh-keygen.
+        /// </summary>
+        [Test]
+        [CancelAfter(30000)]
+        public async Task WriteKeyPairAsync_RestrictsThePrivateKeyToItsOwner(CancellationToken CancellationToken)
+        {
+
+            var path = Path.Combine(Path.GetTempPath(), "hermod_perm_" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+
+                await SshKeyGenerator.WriteKeyPairAsync(SshHostKey.GenerateEd25519(), path, "permissions", CancellationToken);
+
+                if (OperatingSystem.IsWindows())
+                    AssertOwnerOnlyDacl(path);
+
+                else
+                    Assert.That(File.GetUnixFileMode(path), Is.EqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite));
+
+                // ... and the key must of course still be readable by us.
+                var loaded = SshKeyGenerator.LoadPrivateKey(await File.ReadAllTextAsync(path, CancellationToken));
+                Assert.That(loaded.Comment, Is.EqualTo("permissions"));
+
+            }
+            finally
+            {
+                try { File.Delete(path);          } catch { }
+                try { File.Delete(path + ".pub"); } catch { }
+            }
+
+        }
+
+        [SupportedOSPlatform("windows")]
+        private static void AssertOwnerOnlyDacl(String Path)
+        {
+
+            using var identity = WindowsIdentity.GetCurrent();
+
+            var security  = new FileInfo(Path).GetAccessControl(AccessControlSections.Access);
+            var rules     = security.GetAccessRules(true, true, typeof(SecurityIdentifier))
+                                    .Cast<FileSystemAccessRule>()
+                                    .ToArray();
+
+            Assert.Multiple(() => {
+                Assert.That(security.AreAccessRulesProtected, Is.True,                 "inherited ACEs must not apply to a private key");
+                Assert.That(rules,                           Has.Length.EqualTo(1),    "only the owner may be granted access");
+                Assert.That(rules[0].IdentityReference,      Is.EqualTo(identity.User));
             });
 
         }
