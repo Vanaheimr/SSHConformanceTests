@@ -351,10 +351,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
         }
 
         internal ValueTask WriteAsync(String Handle, Int64 Offset, ReadOnlyMemory<Byte> Data, CancellationToken CancellationToken)
-        {
-            var data = Data.ToArray();
-            return ExpectOkAsync(SftpPacketType.Write, (ref SshPacketWriter w) => { w.WriteString(Handle); w.WriteUInt64((UInt64) Offset); w.WriteBinaryString(data); }, CancellationToken);
-        }
+            // The body-writer runs synchronously inside RoundtripAsync, before the first await, so the
+            // caller's buffer can be written straight through — copying it here cost a full chunk per
+            // WRITE and was the largest single overhead on the upload path.
+            => ExpectOkAsync(SftpPacketType.Write,
+                             (ref SshPacketWriter w) => { w.WriteString(Handle); w.WriteUInt64((UInt64) Offset); w.WriteBinaryString(Data.Span); },
+                             CancellationToken);
 
         internal ValueTask CloseAsync(String Handle, CancellationToken CancellationToken)
             => ExpectOkAsync(SftpPacketType.Close, (ref SshPacketWriter w) => w.WriteString(Handle), CancellationToken);
@@ -403,10 +405,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
             w.WriteByte((Byte) Type);
             w.WriteUInt32(id);
             Write(ref w);
-            var packet = abw.WrittenSpan.ToArray();
 
             await sendGate.WaitAsync(CancellationToken).ConfigureAwait(false);
-            try     { await SftpServer.SendAsync(channel, packet, CancellationToken).ConfigureAwait(false); }
+            try     { await SftpServer.SendAsync(channel, abw.WrittenMemory, CancellationToken).ConfigureAwait(false); }
             finally { sendGate.Release(); }
 
             await using (CancellationToken.Register(static state => ((TaskCompletionSource<Byte[]>) state!).TrySetCanceled(), tcs).ConfigureAwait(false))

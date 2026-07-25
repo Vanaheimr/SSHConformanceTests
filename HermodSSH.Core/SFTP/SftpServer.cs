@@ -541,12 +541,22 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP
             return await Channel.ReadExactAsync((Int32) length, CancellationToken).ConfigureAwait(false);
         }
 
-        internal static ValueTask SendAsync(ISftpDuplex Channel, Byte[] Body, CancellationToken CancellationToken)
+        internal static async ValueTask SendAsync(ISftpDuplex Channel, ReadOnlyMemory<Byte> Body, CancellationToken CancellationToken)
         {
-            var framed = new Byte[4 + Body.Length];
-            BinaryPrimitives.WriteUInt32BigEndian(framed, (UInt32) Body.Length);
-            Body.CopyTo(framed, 4);
-            return Channel.SendAsync(framed, CancellationToken);
+
+            // Rent rather than allocate: on a bulk upload this runs once per 30 KiB chunk, and a fresh
+            // array each time was a full copy of the transfer's worth of garbage.
+            var framed = ArrayPool<Byte>.Shared.Rent(4 + Body.Length);
+            try
+            {
+                BinaryPrimitives.WriteUInt32BigEndian(framed, (UInt32) Body.Length);
+                Body.CopyTo(framed.AsMemory(4));
+                await Channel.SendAsync(framed.AsMemory(0, 4 + Body.Length), CancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                ArrayPool<Byte>.Shared.Return(framed);
+            }
         }
 
         #endregion
