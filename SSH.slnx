@@ -9,4 +9,5 @@
   <Project Path="HermodSSHTests/HermodSSHTests.csproj" />
   <Project Path="HermodSSHDemo/HermodSSHDemo.csproj" />
   <Project Path="HermodSSHInteropReport/HermodSSHInteropReport.csproj" />
+  <Project Path="HermodSSHBenchmarks/HermodSSHBenchmarks.csproj" />
 </Solution>

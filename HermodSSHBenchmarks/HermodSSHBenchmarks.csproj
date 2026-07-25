@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- BenchmarkDotNet needs an optimized build to produce meaningful numbers. -->
+    <Optimize Condition="'$(Configuration)' == 'Release'">true</Optimize>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HermodSSH.Core\HermodSSH.Core.csproj" />
+    <ProjectReference Include="..\HermodSSH.Client\HermodSSH.Client.csproj" />
+    <ProjectReference Include="..\HermodSSH.Server\HermodSSH.Server.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
+  </ItemGroup>
+
+</Project>
