@@ -54,18 +54,22 @@ error margin as no result.
 
 One SSH record through the transport (framing, padding, encryption, MAC/AEAD) and back.
 
+Measured across two full-job runs; the machine was busier during the second, so **the "vs AES-GCM"
+column is the figure to compare** — it is measured within a single run and survives that drift.
+
 | Cipher | 32 KiB record | Throughput | vs AES-GCM | Allocated |
 |---|---:|---:|---:|---:|
-| `aes256-gcm@openssh.com` | 37.3 µs ±1.8 % | **878 MB/s** | 1.0× | 96.2 KB |
-| `chacha20-poly1305@openssh.com` (SIMD) | 247.9 µs ±10.4 % | **132 MB/s** | **6.6×** | 96.8 KB |
-| `aes256-ctr` + `hmac-sha2-256-etm` | 2,417 µs ±14.2 % | 13.6 MB/s | 64.7× | 448.9 KB |
+| `aes256-gcm@openssh.com` | 37.3 µs | 878 MB/s | 1.0× | 96.2 KB |
+| `chacha20-poly1305@openssh.com` (SIMD) | 247.9 µs | **132 MB/s** | **6.6×** | 96.8 KB |
+| `aes256-ctr` + `hmac-sha2-256-etm` (batched) | 171.6 µs | **191 MB/s** | **2.5×** | 101.8 KB |
 
-AES-GCM leads because it delegates to the BCL's `AesGcm`, i.e. to AES-NI. **The ChaCha20 gap is now
-6.6×, down from 14.5× before the SIMD core** — and on the ARM devices this project targets that
-comparison inverts, since there is no AES acceleration there for AES-GCM to exploit.
+AES-GCM leads because it delegates to the BCL's `AesGcm`, i.e. to AES-NI. **The ChaCha20 gap is 6.6×,
+down from 14.5× before the SIMD core** — and on the ARM devices this project targets that comparison
+inverts, since there is no AES acceleration there for AES-GCM to exploit.
 
-`aes256-ctr` + EtM is the outlier at 64.7× slower: correctness-complete, entirely unoptimised, and the
-same scalar-versus-vectorised story that ChaCha20 just went through.
+**`aes256-ctr` went from 64.7× to 2.5× off AES-GCM — a ~26× relative improvement** (§3, round 4). It is
+now the second-fastest cipher, and its allocation dropped to the shared framing baseline, i.e. its
+cipher-specific allocation is gone.
 
 ## 2. SFTP throughput (loopback, in-memory file system)
 
@@ -130,6 +134,25 @@ one a `chacha20-poly1305` case. The nonce parameter was a `UInt64`, and OpenSSH 
 two little-endian words while the sequence number is written big-endian into those bytes — so the
 numeric form silently changed both byte order and word placement. The API now takes bytes.
 
+### Round 4 — batch the AES-CTR keystream
+
+`EncryptEcb` was being called **once per 16-byte block** — 2,048 separate AES invocations for a 32 KiB
+record. The per-call overhead dominated, AES-NI never saw a run of blocks long enough to pipeline, and
+the ~220 B each call allocated internally accounted for the 449 KB per record. The keystream is now
+generated 64 blocks at a time in a single call, and the XOR runs 8 bytes at a time instead of one.
+
+| | Before | After |
+|---|---:|---:|
+| Ratio to AES-GCM, same run | 64.7× slower | **2.5× slower** (~26× better) |
+| 32 KiB record | 2,417 µs | 171.6 µs |
+| Allocated | 448.9 KB | 101.8 KB (the framing baseline) |
+
+The correctness question batching raises is counter continuity: pre-computing keystream for blocks the
+current record may not consume would corrupt every later packet if the remainder were not carried over.
+It is — `keystreamPosition` persists across calls exactly as before, so batching is semantically
+identical, just chunkier. Real OpenSSH interop over `aes256-ctr` + `hmac-sha2-256-etm` exercises
+precisely that, since any carry-over error breaks the second packet.
+
 ### Round 3 — remove the SFTP write path's per-chunk copies
 
 Every 30 KiB WRITE chunk was copied four times on the way out, while a READ request is ~30 bytes and
@@ -165,12 +188,13 @@ standout number in this table.
 
 ## What to do next
 
-1. **`aes256-ctr` + EtM at 13.6 MB/s** — 64.7× off AES-GCM, and the same scalar-versus-vectorised
-   situation ChaCha20 was in. Worth it only if a non-default cipher justifies the effort.
-2. **`sntrup761x25519` at 75 ms/handshake**, still a listed default.
-3. **Framing allocation** — ~96 KB per 32 KiB record and ~300–430 MB per 32 MiB transfer is now the
-   largest remaining allocation source, shared by every cipher.
-4. **Re-measure the 8 MiB download allocation** anomaly in §2.
+1. **`sntrup761x25519` at 75 ms/handshake**, still a listed default — now the largest single outlier in
+   these measurements.
+2. **Framing allocation** — ~96–102 KB per 32 KiB record and ~300–430 MB per 32 MiB transfer is now the
+   largest remaining allocation source, shared by every cipher, and no longer masked by any one of them.
+3. **Re-measure the 8 MiB download allocation** anomaly in §2. A second such artifact appeared in the
+   latest cipher run, where AES-GCM at 32 KiB reported *zero* bytes allocated — impossible, and the same
+   class of `MemoryDiagnoser` glitch.
 
 The cipher **default order is deliberately unchanged**: ChaCha20-first is correct for this project's ARM
 device fleet, which has no AES acceleration — the very reason OpenSSH chose that default. The x86

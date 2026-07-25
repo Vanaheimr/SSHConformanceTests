@@ -17,6 +17,7 @@
 
 #region Usings
 
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 
 #endregion
@@ -41,9 +42,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>The AES block / counter size in bytes.</summary>
         public const Int32  CounterLength = 16;
 
+        // How many counter blocks are encrypted per AES call. One block per call meant 2048 separate
+        // EncryptEcb invocations for a 32 KiB record — the per-call overhead dominated everything, and
+        // AES-NI never got a run of blocks long enough to pipeline. Batching amortises both.
+        private const Int32 BatchBlocks = 64;               // 1 KiB of keystream per AES call
+
         private readonly Aes     aes;
         private readonly Byte[]  counter;
-        private readonly Byte[]  keystream;
+        private readonly Byte[]  counterBlocks;             // BatchBlocks successive counters
+        private readonly Byte[]  keystream;                 // their encryption
         private          Int32   keystreamPosition;
 
         #endregion
@@ -80,8 +87,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             this.aes.Key            = Key.ToArray();
 
             this.counter            = InitialCounter.ToArray();
-            this.keystream          = new Byte[CounterLength];
-            this.keystreamPosition  = CounterLength;   // force a fresh keystream block on first use
+            this.counterBlocks      = new Byte[BatchBlocks * CounterLength];
+            this.keystream          = new Byte[BatchBlocks * CounterLength];
+            this.keystreamPosition  = BatchBlocks * CounterLength;   // force a refill on first use
 
         }
 
@@ -111,19 +119,59 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         private void Process(ReadOnlySpan<Byte> Input, Span<Byte> Output)
         {
 
-            for (var i = 0; i < Input.Length; i++)
+            var offset = 0;
+
+            while (offset < Input.Length)
             {
 
-                if (keystreamPosition == CounterLength)
-                {
-                    aes.EncryptEcb(counter, keystream, PaddingMode.None);
-                    IncrementCounter();
-                    keystreamPosition = 0;
-                }
+                if (keystreamPosition == keystream.Length)
+                    Refill();
 
-                Output[i] = (Byte) (Input[i] ^ keystream[keystreamPosition++]);
+                // The keystream is one continuous stream whose position carries across packets, so
+                // generating it in batches is exactly equivalent to generating it a block at a time —
+                // any blocks left over at the end of a record are consumed by the next one.
+                var take = Math.Min(Input.Length - offset, keystream.Length - keystreamPosition);
+
+                Xor(Input.Slice(offset, take),
+                    keystream.AsSpan(keystreamPosition, take),
+                    Output.Slice(offset, take));
+
+                offset             += take;
+                keystreamPosition  += take;
 
             }
+
+        }
+
+        // Encrypt BatchBlocks successive counter values in a single AES call.
+        private void Refill()
+        {
+
+            for (var block = 0; block < BatchBlocks; block++)
+            {
+                counter.CopyTo(counterBlocks.AsSpan(block * CounterLength, CounterLength));
+                IncrementCounter();
+            }
+
+            aes.EncryptEcb(counterBlocks, keystream, PaddingMode.None);
+            keystreamPosition = 0;
+
+        }
+
+        // XOR eight bytes at a time; the byte-wise loop was a measurable share of the remaining cost
+        // once the AES calls were batched.
+        private static void Xor(ReadOnlySpan<Byte> A, ReadOnlySpan<Byte> B, Span<Byte> Destination)
+        {
+
+            var a64 = MemoryMarshal.Cast<Byte, UInt64>(A);
+            var b64 = MemoryMarshal.Cast<Byte, UInt64>(B);
+            var d64 = MemoryMarshal.Cast<Byte, UInt64>(Destination);
+
+            for (var i = 0; i < d64.Length; i++)
+                d64[i] = a64[i] ^ b64[i];
+
+            for (var i = d64.Length * sizeof(UInt64); i < A.Length; i++)
+                Destination[i] = (Byte) (A[i] ^ B[i]);
 
         }
 
@@ -149,6 +197,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         {
             aes.Dispose();
             CryptographicOperations.ZeroMemory(counter);
+            CryptographicOperations.ZeroMemory(counterBlocks);
             CryptographicOperations.ZeroMemory(keystream);
             base.Dispose();
         }
