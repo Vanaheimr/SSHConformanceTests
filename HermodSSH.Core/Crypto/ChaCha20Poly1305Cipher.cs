@@ -22,7 +22,6 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 
 using Org.BouncyCastle.Crypto.Macs;
-using Org.BouncyCastle.Crypto.Engines;
 using Org.BouncyCastle.Crypto.Parameters;
 
 #endregion
@@ -54,8 +53,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>The Poly1305 tag length in bytes.</summary>
         public const Int32  TagLen      = 16;
 
-        private readonly KeyParameter  mainKey;     // key[0..32]  — payload + Poly1305 key
-        private readonly KeyParameter  headerKey;   // key[32..64] — the 4-byte packet length
+        private readonly Byte[]  mainKey;     // key[0..32]  — payload + Poly1305 key
+        private readonly Byte[]  headerKey;   // key[32..64] — the 4-byte packet length
 
         #endregion
 
@@ -76,8 +75,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             if (Key.Length != KeyLength)
                 throw new ArgumentException($"A chacha20-poly1305@openssh.com key must be {KeyLength} bytes!", nameof(Key));
 
-            this.mainKey    = new KeyParameter(Key[..32].ToArray());
-            this.headerKey  = new KeyParameter(Key[32..].ToArray());
+            this.mainKey    = Key[..32].ToArray();
+            this.headerKey  = Key[32..].ToArray();
 
         }
 
@@ -86,23 +85,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
         #region (private) Nonce(SequenceNumber) / ChaCha(...)
 
-        // The nonce is the 64-bit big-endian sequence number.
-        private static ChaChaEngine ChaCha(KeyParameter Key, UInt32 SequenceNumber)
+        // OpenSSH's construction: the nonce is the packet sequence number, the Poly1305 one-time key is
+        // the first 32 bytes of keystream block 0, and the payload is encrypted from block 1 onwards.
+        private static void DerivePoly1305Key(ReadOnlySpan<Byte> Key, ReadOnlySpan<Byte> Nonce, Span<Byte> PolyKey)
         {
-            Span<Byte> nonce = stackalloc Byte[8];
-            BinaryPrimitives.WriteUInt64BigEndian(nonce, SequenceNumber);
-            var engine = new ChaChaEngine();   // ChaCha20 (20 rounds), 8-byte nonce
-            engine.Init(true, new ParametersWithIV(Key, nonce.ToArray()));
-            return engine;
-        }
-
-        // Derive the Poly1305 one-time key: the first 32 bytes of the main keystream at block counter 0.
-        // Processing the whole 64-byte block-0 also advances the engine to block counter 1 for the payload.
-        private static void DerivePoly1305Key(ChaChaEngine MainEngine, Span<Byte> PolyKey)
-        {
-            Span<Byte> block = stackalloc Byte[64];
-            block.Clear();
-            MainEngine.ProcessBytes(block, block);
+            Span<Byte> block = stackalloc Byte[ChaCha20.BlockSize];
+            ChaCha20.Keystream(Key, Nonce, 0, block);
             block[..32].CopyTo(PolyKey);
             CryptographicOperations.ZeroMemory(block);
         }
@@ -137,6 +125,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                 paddingLength += 8;
             var packetLength   = 1 + Payload.Length + paddingLength;
 
+            Span<Byte> nonce = stackalloc Byte[ChaCha20.NonceSize];
+            BinaryPrimitives.WriteUInt64BigEndian(nonce, SequenceNumber);
+
             var plaintext = ArrayPool<Byte>.Shared.Rent(packetLength);
             try
             {
@@ -150,15 +141,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
                 // Encrypted length (header key), written straight into the output.
                 Span<Byte> lengthBytes = stackalloc Byte[4];
                 BinaryPrimitives.WriteUInt32BigEndian(lengthBytes, (UInt32) packetLength);
-                ChaCha(headerKey, SequenceNumber).ProcessBytes(lengthBytes, output[..4]);
+                ChaCha20.Xor(headerKey, nonce, 0, lengthBytes, output[..4]);
 
                 // Poly1305 key + encrypted payload (main key, counter 0 then 1). The ciphertext goes
                 // directly into the output buffer — a separate array here would be a full copy of every
                 // packet, which is what made this cipher allocate ~5x the payload per record.
                 Span<Byte> polyKey = stackalloc Byte[32];
-                var mainEngine     = ChaCha(mainKey, SequenceNumber);
-                DerivePoly1305Key(mainEngine, polyKey);
-                mainEngine.ProcessBytes(plaintext.AsSpan(0, packetLength), output.Slice(4, packetLength));
+                DerivePoly1305Key(mainKey, nonce, polyKey);
+                ChaCha20.Xor(mainKey, nonce, 1, plaintext.AsSpan(0, packetLength), output.Slice(4, packetLength));
 
                 // Poly1305 tag over the encrypted length and the ciphertext, also written in place.
                 Poly1305Tag(polyKey, output[..4], output.Slice(4, packetLength), output.Slice(4 + packetLength, TagLen));
@@ -182,8 +172,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
         /// <summary>Decrypt the 4-byte packet length field (header key) so the caller can read the rest.</summary>
         public UInt32 DecryptLength(UInt32 SequenceNumber, ReadOnlySpan<Byte> EncryptedLength)
         {
+            Span<Byte> nonce = stackalloc Byte[ChaCha20.NonceSize];
+            BinaryPrimitives.WriteUInt64BigEndian(nonce, SequenceNumber);
+
             Span<Byte> lengthBytes = stackalloc Byte[4];
-            ChaCha(headerKey, SequenceNumber).ProcessBytes(EncryptedLength[..4], lengthBytes);
+            ChaCha20.Xor(headerKey, nonce, 0, EncryptedLength[..4], lengthBytes);
             return BinaryPrimitives.ReadUInt32BigEndian(lengthBytes);
         }
 
@@ -202,9 +195,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
             var ciphertext    = CiphertextAndTag[..packetLength];
             var receivedTag   = CiphertextAndTag[packetLength..];
 
-            var mainEngine     = ChaCha(mainKey, SequenceNumber);
+            Span<Byte> nonce = stackalloc Byte[ChaCha20.NonceSize];
+            BinaryPrimitives.WriteUInt64BigEndian(nonce, SequenceNumber);
+
             Span<Byte> polyKey = stackalloc Byte[32];
-            DerivePoly1305Key(mainEngine, polyKey);
+            DerivePoly1305Key(mainKey, nonce, polyKey);
 
             // Authenticate before decrypting — and before allocating anything for the plaintext.
             Span<Byte> expectedTag = stackalloc Byte[TagLen];
@@ -216,7 +211,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
             // Decrypt straight into the result; the old ToArray() copied every packet first.
             var plaintext = new Byte[packetLength];
-            mainEngine.ProcessBytes(ciphertext, plaintext);
+            ChaCha20.Xor(mainKey, nonce, 1, ciphertext, plaintext);
             return plaintext;
 
         }

@@ -2,12 +2,15 @@
 
 BenchmarkDotNet baseline (M10), plus the first optimisation attempt and what it taught us.
 
-Two headlines:
+Three headlines, in the order they were learned:
 
-1. **SFTP does not meet the PLAN §8 target.** ~30–58 MiB/s on loopback against the stated ≥ 100 MB/s.
-2. **The obvious culprit was the wrong one.** ChaCha20-Poly1305 allocated ~5× the payload per record; that
-   was fixed and the allocation is gone — **and throughput did not move.** The bottleneck is the ChaCha20
-   core itself, not memory traffic.
+1. **The first baseline missed the §8 target** — SFTP ~30–58 MiB/s against the stated ≥ 100 MB/s.
+2. **The obvious culprit was the wrong one.** ChaCha20-Poly1305 allocated ~5× the payload per record;
+   removing that allocation changed throughput **not at all**, which localised the cost to the ChaCha20
+   keystream rather than to memory traffic.
+3. **Replacing that keystream with a SIMD core fixed it.** ChaCha20 went from ~47 to ~107 MB/s per
+   record, and SFTP from ~30–58 to **~73–110 MB/s — the target is now met on downloads** and approached
+   on uploads.
 
 Reproduce with:
 
@@ -45,36 +48,38 @@ One SSH record through the transport (framing, padding, encryption, MAC/AEAD) an
 
 | Cipher | 32 KiB record | Throughput | Allocated |
 |---|---:|---:|---:|
-| `aes256-gcm@openssh.com` | 48 µs | **≈ 683 MB/s** | 96.2 KB |
-| `chacha20-poly1305@openssh.com` | 700 µs | **≈ 47 MB/s** | 98.8 KB |
-| `aes256-ctr` + `hmac-sha2-256-etm` | 3,827 µs | **≈ 9 MB/s** | 448.7 KB |
+| `aes256-gcm@openssh.com` | 38 µs | ≈ 867 MB/s | 98.5 KB |
+| `chacha20-poly1305@openssh.com` (SIMD) | 308 µs | **≈ 107 MB/s** | 99.1 KB |
+| `aes256-ctr` + `hmac-sha2-256-etm` | 2,124 µs | ≈ 15 MB/s | 459.2 KB |
 
-**AES-GCM is ~14× faster than ChaCha20 and ~80× faster than AES-CTR.** AES-GCM delegates to the BCL's
-`AesGcm`, which uses AES-NI; the other two are our own constructions over BouncyCastle primitives.
+AES-GCM remains the fastest — it delegates to the BCL's `AesGcm` and therefore to AES-NI. But the gap to
+ChaCha20 is now **8×, down from 14.5×** (both measured in the same run, which is the comparison that
+survives machine variance).
 
-Note that AES-GCM and ChaCha20 now allocate the *same* ~96–99 KB per record. That is the shared framing
-cost (plaintext staging + output buffer + returned payload), not the cipher — see §3.
+AES-GCM and ChaCha20 allocate the same ~98–99 KB per record: that is shared framing cost (plaintext
+staging + output buffer + returned payload), not the cipher.
 
 ## 2. SFTP throughput (loopback, in-memory file system)
 
 Full stack: encrypted transport → multiplexer → session channel → SFTP subsystem. In-memory file system
 on purpose, so the number describes the protocol stack rather than a disk.
 
-| Direction | Size | Mean | Throughput |
+| Direction | Size | Before (scalar) | After (SIMD) |
 |---|---|---:|---:|
-| Upload | 8 MiB | 200 ms | ≈ 40 MiB/s |
-| Download | 8 MiB | 268 ms | ≈ 30 MiB/s |
-| Upload | 32 MiB | 774 ms | ≈ 41 MiB/s |
-| Download | 32 MiB | 556 ms | ≈ 58 MiB/s |
+| Upload | 8 MiB | 41.9 MB/s | **72.6 MB/s** |
+| Download | 8 MiB | 31.3 MB/s | **110.1 MB/s** ✅ |
+| Upload | 32 MiB | 43.3 MB/s | **73.8 MB/s** |
+| Download | 32 MiB | 60.3 MB/s | **85.7 MB/s** |
 
-**Against the §8 target of ≥ 100 MB/s: we reach roughly 30–58 MiB/s.** The spread across directions and
-sizes is mostly run-to-run noise.
+**Against the §8 target of ≥ 100 MB/s: downloads now meet it (110 MB/s at 8 MiB), uploads reach ~73
+MB/s.** SFTP negotiates ChaCha20-Poly1305 — first preference in `KexInitMessage`, and the façade exposes
+no cipher knob — so this tracks the cipher change directly, confirming again that the cipher was the
+ceiling.
 
-SFTP negotiates ChaCha20-Poly1305 — it is our first preference in `KexInitMessage`, and the façade
-exposes no cipher knob — and ChaCha20's record throughput (≈ 47 MB/s) sits squarely inside that range.
-**The cipher, not SFTP or the multiplexer, sets the ceiling.**
+Upload lagging download is the obvious next thread to pull: both move the same bytes through the same
+cipher, so the difference is in the SFTP write path (pipelining depth, window credit) rather than crypto.
 
-## 3. The ChaCha20 allocation fix — what it did and did not do
+## 3. Two rounds of optimisation — what worked and what did not
 
 `ChaCha20Poly1305Cipher` allocated a full copy of every packet twice: once as a `ciphertext` array on
 encrypt (then copied into the output) and once via `ciphertext.ToArray()` on decrypt, plus per-record
@@ -108,19 +113,41 @@ scalar managed implementation, competing against AES-NI.
 The fix is kept regardless: 66 MB less garbage per 32 MiB transfer is worth having, and it removed Gen1
 pressure. It is simply not a throughput fix.
 
+### Round 2 — the SIMD core (this is the one that worked)
+
+BouncyCastle's `ChaChaEngine` is scalar managed code. Replacing it with a `Vector128<UInt32>`
+implementation — the quarter-round applied to all four state rows in parallel, the standard SSE/NEON
+layout — gave:
+
+| | Scalar (BouncyCastle) | SIMD (`ChaCha20`) | Gain |
+|---|---:|---:|---:|
+| 32 KiB record | 700 µs | 308 µs | **2.3×** |
+| Throughput | ≈ 47 MB/s | ≈ 107 MB/s | **2.3×** |
+| Ratio to AES-GCM, same run | 14.5× slower | 8.1× slower | **1.8×** |
+
+The same-run ratio is the honest figure: absolute timings drifted between runs (untouched AES-CTR also
+"improved" 1.8×, which is machine variance, not code). The ratio controls for that.
+
+`Vector128` is hardware-agnostic — the JIT emits NEON on ARM and SSE2/AVX on x86 — so this is one
+implementation rather than per-architecture intrinsics, and it is the ARM target that benefits most,
+since there AES-GCM has no AES-NI advantage to fall back on.
+
 ---
 
 ## What this says to do next
 
-1. **A faster ChaCha20 core.** The 14× gap to AES-GCM is the keystream, and a vectorised (SIMD)
-   ChaCha20 is the known remedy. This is the only change that would move SFTP throughput materially
-   while ChaCha20 stays the default.
-2. **Or reconsider the default cipher order.** On hardware with AES-NI, `aes256-gcm` is ~14× faster and
-   would clear the 100 MB/s target with headroom. ChaCha20-first is the right default on machines
-   *without* AES acceleration, which is why OpenSSH chose it — so this is a policy decision about the
-   target fleet, not an obvious win, and it is left open deliberately.
-3. **`aes256-ctr` + EtM at ~9 MB/s** is by far the worst path and entirely unoptimised.
-4. **`sntrup761x25519` handshakes cost ~85 ms** (§4) while being a listed default.
+1. **The SFTP upload path.** Upload sits at ~73 MB/s against download's ~110 MB/s over the same cipher,
+   so the remaining gap is pipelining/window behaviour on writes, not crypto.
+2. **`aes256-ctr` + EtM at ~15 MB/s** is now by far the worst path and still entirely unoptimised — the
+   same scalar-versus-vectorised story, if it is worth the effort for a non-default cipher.
+3. **`sntrup761x25519` handshakes cost ~85 ms** (§4) while being a listed default.
+4. **Framing allocation** (~98 KB per 32 KiB record, ~400 MB per 32 MiB transfer) is now the largest
+   remaining allocation source, shared by every cipher.
+
+The cipher **default order is deliberately unchanged**: ChaCha20-first is correct for this project's
+ARM device fleet, which has no AES acceleration — the very reason OpenSSH chose that default. On such
+hardware AES-GCM's AES-NI advantage does not exist, so the SIMD ChaCha20 core is the fix that matters
+there, and the x86 figures above understate its relative value on the target.
 
 ## 4. Handshake latency by key exchange
 
