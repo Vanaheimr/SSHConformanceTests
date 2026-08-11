@@ -1,4 +1,4 @@
-# HermodSSH
+# SSH Conformance & Interoperability Test Suite
 
 A modern, fully asynchronous **SSH2 client and server** implementation for **C# / .NET 10**,
 including **SFTP**, **post-quantum hybrid key exchange**, **public-key authentication** and
