@@ -103,7 +103,24 @@ Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the
 
 ### Optional follow-ups (non-blocking technical debt)
 
-- ⬜ **Hermod `SSHFP(Stream)` ctor does not consume RDLENGTH** — the base `ADNSResourceRecord(Stream, Type)` has that read commented out, unlike `SSHFP(DomainName, Stream)` (the one the response parser actually picks, and the one that is correct). The single-`Stream` ctor is currently unused, so this is latent; fixing it settles a contract shared by **every** record type, hence deliberately left alone in Hermod `160cd023`.
+- ⬜ **Hermod's single-`Stream` record constructors are inconsistent about RDLENGTH** *(surveyed 2026-08-12 — the
+  earlier note called this "the `SSHFP(Stream)` ctor" and understated it)*. Neither base ctor consumes
+  RDLENGTH — the read is commented out in `ADNSResourceRecord(Stream, Type)` **and** in
+  `ADNSResourceRecord(DomainName/DNSServiceName, Type, Stream)` — so by contract each record type reads it
+  itself, and whether it does depends on the record:
+
+  | Constructor family | Consumes RDLENGTH | Used by the response parser |
+  |---|---|---|
+  | `(DomainName, Stream)` / `(DNSServiceName, Stream)` | **39 of 39** | ✅ the only ones `DNSInfo`'s reflection registers |
+  | `(Stream)` | **28 of 39** — missing in `A`, `AAAA`, `CNAME`, `DNAME`, `MX`, `NAPTR`, `NS`, `PTR`, `SOA`, `SRV`, `SSHFP` | ⬜ **no callers anywhere in the repository** |
+
+  So the live path is uniformly correct and this cannot affect a parsed response today; the eleven wrong
+  ones are dead code. What makes it worth recording is that they are *public* and look usable: a caller
+  picking `new A(stream)` gets a stream desynchronised by two bytes, while `new TLSA(stream)` works —
+  a coin-flip API. Two honest fixes: add the missing read to the eleven, or delete the whole `(Stream)`
+  family (dead, and duplicated by the `(DomainName, Stream)` twin). Deleting is the better shape but
+  removes public API from a library other GraphDefined projects consume, so it is a decision, not a
+  cleanup. Left alone since Hermod `160cd023`.
 
 ---
 
