@@ -95,6 +95,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
             ("agent",            "ssh-agent"),
             ("certificate",      "Certificates"),
             ("cert",             "Certificates"),
+            ("winadj",           "Channel requests & flow control"),
             ("transport",        "Transport & key exchange"),
             ("keyexchange",      "Transport & key exchange"),
             ("kex",              "Transport & key exchange"),

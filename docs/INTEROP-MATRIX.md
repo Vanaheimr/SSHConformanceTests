@@ -1,29 +1,30 @@
 # HermodSSH — interoperability matrix
 
 Generated from the interop test run — do not edit by hand.
-Run at 2026-08-11 20:56:56 UTC.
+Run at 2026-08-11 21:21:30 UTC.
 
 ## Summary
 
-**65 passed · 0 failed · 1 not exercised** across 6 peer(s).
+**76 passed · 0 failed · 1 not exercised** across 7 peer(s).
 
 > All exercised tests agreed. Some peers were unavailable on the machine that produced this run, so their rows record no evidence rather than success.
 
 ## Capability × peer
 
-| Capability | AsyncSSH | Dropbear | OpenSSH | Paramiko | SSH.NET | TinySSH |
-|---|---|---|---|---|---|---|
-| Algorithm negotiation | – | – | – | ✅ 1 | ✅ 1 | – |
-| Authentication | – | – | ✅ 3 | – | – | – |
-| Certificates | – | – | ✅ 2 | – | – | – |
-| Host-key rotation (hostkeys-00) | – | – | ✅ 1 | – | – | – |
-| Host-key verification | ✅ 1 | ✅ 2 | – | ✅ 1 | ✅ 1 | ✅ 1 |
-| Key formats (openssh-key-v1, PEM) | – | ✅ 1 | ✅ 8 | – | – | – |
-| Remote command execution | ✅ 2 | ✅ 3 | ✅ 2 | ✅ 2 | ✅ 3 | – |
-| SFTP | ✅ 1 | – | ✅ 1 | ✅ 1 | ✅ 1 | – |
-| SSHFP DNS records | – | – | ✅ 3 | – | – | – |
-| Transport & key exchange | ✅ 1 | ✅ 6 | ✅ 12 | ✅ 2 | – | ✅ 2 |
-| ssh-agent | – | – | ⚪ | – | – | – |
+| Capability | AsyncSSH | Dropbear | OpenSSH | Paramiko | PuTTY | SSH.NET | TinySSH |
+|---|---|---|---|---|---|---|---|
+| Algorithm negotiation | – | – | – | ✅ 1 | – | ✅ 1 | – |
+| Authentication | – | – | ✅ 3 | – | – | – | – |
+| Certificates | – | – | ✅ 2 | – | – | – | – |
+| Channel requests & flow control | – | – | – | – | ✅ 1 | – | – |
+| Host-key rotation (hostkeys-00) | – | – | ✅ 1 | – | – | – | – |
+| Host-key verification | ✅ 1 | ✅ 2 | – | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 |
+| Key formats (openssh-key-v1, PEM) | – | ✅ 1 | ✅ 8 | – | ✅ 1 | – | – |
+| Remote command execution | ✅ 2 | ✅ 3 | ✅ 2 | ✅ 2 | ✅ 2 | ✅ 3 | – |
+| SFTP | ✅ 1 | – | ✅ 1 | ✅ 1 | – | ✅ 1 | – |
+| SSHFP DNS records | – | – | ✅ 3 | – | – | – | – |
+| Transport & key exchange | ✅ 1 | ✅ 6 | ✅ 12 | ✅ 2 | ✅ 6 | – | ✅ 2 |
+| ssh-agent | – | – | ⚪ | – | – | – | – |
 
 ## Detail
 
@@ -95,6 +96,20 @@ Run at 2026-08-11 20:56:56 UTC.
 - ✅ `Paramiko_TransfersFiles_OverOurSftpSubsystem` — SFTP
 - ✅ `Paramiko_CompletesClassicalTransport` — Transport & key exchange
 - ✅ `Paramiko_FailsCleanly_WhenNoKeyExchangeIsShared` — Transport & key exchange
+
+### PuTTY
+
+- ✅ `Plink_TransfersLargeOutput_AndAnyWinadjIsAnswered` — Channel requests & flow control
+- ✅ `Plink_RejectsAWrongHostKey` — Host-key verification
+- ✅ `PuttyGen_ReadsOurPrivateKey` — Key formats (openssh-key-v1, PEM)
+- ✅ `Plink_RunsCommand_OnOurServer("fail",42)` — Remote command execution
+- ✅ `Plink_RunsCommand_OnOurServer("hello",0)` — Remote command execution
+- ✅ `Plink_CompletesTransport_WithOurServer("curve25519-sha256")` — Transport & key exchange
+- ✅ `Plink_CompletesTransport_WithOurServer("diffie-hellman-group14-sha256")` — Transport & key exchange
+- ✅ `Plink_CompletesTransport_WithOurServer("ecdh-sha2-nistp256")` — Transport & key exchange
+- ✅ `Plink_CompletesTransport_WithOurServer("ecdh-sha2-nistp521")` — Transport & key exchange
+- ✅ `Plink_CompletesTransport_WithOurServer("mlkem768x25519-sha256")` — Transport & key exchange
+- ✅ `Plink_CompletesTransport_WithOurServer("sntrup761x25519-sha512")` — Transport & key exchange
 
 ### SSH.NET
 

@@ -12,6 +12,29 @@ ecosystem.
 > feature set and the interoperability test program live in [PLAN.md](PLAN.md); repository conventions
 > are in [CLAUDE.md](CLAUDE.md). Progress is tracked with ✅ / 🔶 / ⬜ markers.
 
+## Interoperability
+
+Every feature has to work against implementations that share no code with ours. Seven do so today —
+**76 checks pass, none fail** — and the generated per-test detail is in
+[docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md). What is *not* covered is listed just as plainly,
+because a matrix that only shows green teaches nothing.
+
+| Peer | Version | Direction | Covered | Not covered yet |
+|---|---|---|---|---|
+| **OpenSSH** | 10.2p1 / 10.0p2 | their client → our server | transport matrix (11 combinations), auth (ed25519/ecdsa/rsa), certificates, key formats, SFTP, SSHFP records, host-key rotation | our client → their `sshd`; ssh-agent needs a running agent, else skipped |
+| **Dropbear** | 2025.89 | **both** | 6 key exchanges, exec + exit status, host-key refusal, key format via `dropbearconvert`, **our client runs a command on their server** | no SFTP (Dropbear ships no SFTP client) |
+| **PuTTY** (`plink`) | 0.83 | their client → our server | 6 key exchanges incl. ML-KEM, exec, host-key pinning, key format via `puttygen`, 256 KB through their flow control | `psftp`; the `winadj` quirk is watched for but plink 0.83 does not send one — the contract itself is pinned in the library's own suite |
+| **AsyncSSH** | 2.24.0 | their client → our server | post-quantum `mlkem768x25519-sha256`, exec, SFTP, host-key refusal | certificates, which AsyncSSH could also issue |
+| **Paramiko** | 5.0.0 | their client → our server | classical key exchange, exec, SFTP, host-key refusal, **clean failure when no algorithm is shared** | no post-quantum support exists in Paramiko to test |
+| **SSH.NET** | 2026.0.0 | their client → our server (**in-process**) | ML-KEM negotiation, exec, SFTP, host-key refusal, several sessions on one connection | — (runs everywhere, so it gates every commit) |
+| **TinySSH** | 20250601 | **our client** → their server | `sntrup761x25519-sha512` and `curve25519-sha256` on the most minimal server there is, host-key verification | authentication: TinySSH only reads the real `~/.ssh/authorized_keys`, and no test may write a usable key into a developer's account |
+
+**Known gaps.** Certificates are so far only proven against OpenSSH. Go `x/crypto/ssh`, curl/libssh,
+WinSCP, FileZilla and Apache MINA SSHD are planned but not wired in. Everything above runs on a
+developer machine today; the **nightly CI matrix is the one piece still missing**, waiting on a runner
+decision (PLAN §13.5). Peers that are absent are **skipped with a precise reason**, never silently
+counted as passing — the matrix distinguishes "disagreed" from "no evidence either way".
+
 ## Features
 
 - ✅ **Transport** — version exchange, KEXINIT negotiation, strict-KEX (Terrapin), rekeying;
@@ -35,9 +58,7 @@ ecosystem.
   `TimeProvider`-driven timeouts, constant-time comparisons
 - ✅ **High-level façade** — `SshClient`/`SshServer` over a connection multiplexer: exec, SFTP,
   `direct-tcpip` and remote `-R` all concurrent on one connection; host-key rotation (`hostkeys-00@openssh.com`)
-- ✅ **IPv6 first-class**, and **interoperability testing against six independent implementations** —
-  OpenSSH, AsyncSSH, Paramiko and SSH.NET drive our server; our client drives TinySSH; Dropbear does
-  both (see [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md))
+- ✅ **IPv6 first-class**, and interoperability against seven independent implementations (see above)
 
 ## Projects
 
