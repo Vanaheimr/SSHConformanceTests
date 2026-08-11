@@ -172,6 +172,144 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
+        #region RealSftpClient_CopiesServerSide_AgainstOurServer
+
+        /// <summary>
+        /// The reference client's <c>cp</c> command against our <c>copy-data</c> implementation.
+        ///
+        /// <para>
+        /// This is the test that decides whether our reading of the extension is right at all. The five
+        /// fields — read handle, read offset, length, write handle, write offset — are not
+        /// self-describing on the wire: get their order wrong and the request still parses, it simply
+        /// copies the wrong bytes to the wrong place. Only a peer that encodes them independently can
+        /// say so, and OpenSSH has done exactly that since 9.0.
+        /// </para>
+        /// </summary>
+        [Test]
+        [CancelAfter(40000)]
+        public async Task RealSftpClient_CopiesServerSide_AgainstOurServer(CancellationToken CancellationToken)
+        {
+
+            var sftpCli    = FindOnPathOrSystem("sftp");
+            var sshKeygen  = FindOnPathOrSystem("ssh-keygen");
+            if (sftpCli is null || sshKeygen is null)
+                Assert.Ignore("No 'sftp'/'ssh-keygen' found.");
+
+            var workDir  = Path.Combine(Path.GetTempPath(), "hermod_sftpcp_" + Guid.NewGuid().ToString("N"));
+            var root     = Path.Combine(workDir, "root");
+            Directory.CreateDirectory(root);
+
+            var keyPath    = Path.Combine(workDir, "id");
+            var localSrc   = Path.Combine(workDir, "src.bin");
+            var localDst   = Path.Combine(workDir, "dst.bin");
+            var batch      = Path.Combine(workDir, "batch.txt");
+            var knownHosts = Path.Combine(workDir, "known_hosts");
+            var emptyConf  = Path.Combine(workDir, "empty_conf");
+            File.WriteAllText(emptyConf, "");
+
+            var payload = RandomNumberGenerator.GetBytes(40_000);
+            await File.WriteAllBytesAsync(localSrc, payload, CancellationToken);
+
+            try
+            {
+
+                using (var keygen = Process.Start(new ProcessStartInfo(sshKeygen!) { ArgumentList = { "-t", "ed25519", "-f", keyPath, "-N", "", "-q" }, UseShellExecute = false, CreateNoWindow = true })!)
+                    await keygen.WaitForExitAsync(CancellationToken);
+
+                var publicLine = (await File.ReadAllTextAsync(keyPath + ".pub", CancellationToken)).Split(' ');
+                var publicBlob = Convert.FromBase64String(publicLine[1]);
+
+                var authenticator = SshUserAuthenticator.ForAuthorizedKeys(publicBlob);
+                var hostKey       = SshHostKey.GenerateEd25519();
+
+                using var listener = SshTcpListener.Start(new IPSocket(IPv4Address.Localhost, IPPort.Auto));
+                var port = listener.LocalEndPoint.Port.ToInt32();
+
+                Exception? serverError = null;
+                var serverTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var pipe = await listener.AcceptAsync(CancellationToken);
+                        using var transport = await SshTransport.ServerHandshakeAsync(pipe, hostKey, CancellationToken: CancellationToken);
+                        await UserAuthentication.ServerAuthenticateAsync(transport, authenticator, CancellationToken: CancellationToken);
+                        var duplex = await SshConnection.AcceptSubsystemAsync(transport, "sftp", CancellationToken);
+                        await SftpServer.ServeAsync(duplex, new LocalSftpFileSystem(root), CancellationToken: CancellationToken);
+                    }
+                    catch (Exception e) { serverError = e; throw; }
+                }, CancellationToken);
+
+                // Upload once, copy on the server, then fetch the copy: if the copy were wrong, the
+                // downloaded bytes would differ from what was uploaded.
+                await File.WriteAllTextAsync(batch,
+                    $"put {localSrc.Replace('\\', '/')} /original.bin\n" +
+                    "cp /original.bin /server-copy.bin\n" +
+                    $"get /server-copy.bin {localDst.Replace('\\', '/')}\n",
+                    CancellationToken);
+
+                using var client = new Process { StartInfo = new ProcessStartInfo(sftpCli!) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true } };
+                foreach (var arg in new[]
+                {
+                    "-F", emptyConf, "-P", port.ToString(),
+                    "-o", "StrictHostKeyChecking=no", "-o", $"UserKnownHostsFile={knownHosts}",
+                    "-i", keyPath, "-o", "IdentitiesOnly=yes",
+                    "-o", "PreferredAuthentications=publickey", "-o", "PasswordAuthentication=no",
+                    "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-v",
+                    "-b", batch, "hermoduser@127.0.0.1"
+                })
+                    client.StartInfo.ArgumentList.Add(arg);
+
+                client.Start();
+                var stdoutTask = client.StandardOutput.ReadToEndAsync();
+                var stderrTask = client.StandardError.ReadToEndAsync();
+
+                try
+                {
+
+                    await Task.WhenAny(client.WaitForExitAsync(CancellationToken), Task.Delay(TimeSpan.FromSeconds(25), CancellationToken)).ConfigureAwait(false);
+                    if (!client.HasExited)
+                    {
+                        try { client.Kill(true); } catch { }
+                        var stalled = await stderrTask;
+                        Assert.Fail($"sftp did not finish in time — stalled.\nserver error: {serverError}\nsftp -v log:\n{stalled}");
+                    }
+
+                    try { await serverTask; } catch { }
+                    var stderr = await stderrTask;
+                    var stdout = await stdoutTask;
+
+                    // 'cp' arrived in OpenSSH 9.0; an older client cannot exercise this at all.
+                    if ((stderr + stdout).Contains("Invalid command", StringComparison.OrdinalIgnoreCase))
+                        Assert.Ignore("This sftp client does not know the 'cp' command (OpenSSH < 9.0), so copy-data cannot be driven from it.");
+
+                    Assert.Multiple(() => {
+                        Assert.That(client.ExitCode, Is.EqualTo(0), $"sftp should succeed. stderr:\n{stderr}");
+                        Assert.That(File.Exists(Path.Combine(root, "server-copy.bin")), Is.True, "the copy exists under our jail root");
+                        Assert.That(File.ReadAllBytes(Path.Combine(root, "server-copy.bin")), Is.EqualTo(payload), "the server-side copy is byte-for-byte");
+                        Assert.That(File.ReadAllBytes(Path.Combine(root, "original.bin")),   Is.EqualTo(payload), "and the source is untouched");
+                        Assert.That(File.Exists(localDst), Is.True, "the copy was fetched back");
+                        Assert.That(File.ReadAllBytes(localDst), Is.EqualTo(payload), "and it survived the round trip");
+                    });
+
+                }
+                catch (AssertionException) { throw; }
+                catch (Exception e)
+                {
+                    try { if (!client.HasExited) client.Kill(true); } catch { }
+                    var log = await stderrTask;
+                    throw new AssertionException($"OpenSSH sftp copy-data interop failed:\n{e.Message}\nsftp -v log:\n" + log, e);
+                }
+
+            }
+            finally
+            {
+                try { Directory.Delete(workDir, recursive: true); } catch { }
+            }
+
+        }
+
+        #endregion
+
     }
 
 }

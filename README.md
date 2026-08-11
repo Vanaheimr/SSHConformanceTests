@@ -15,7 +15,7 @@ ecosystem.
 ## Interoperability
 
 Every feature has to work against implementations that share no code with ours. Nine do —
-**91 checks pass, none fail** — and the generated per-test detail is in
+**93 checks pass, none fail** — and the generated per-test detail is in
 [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md). What is *not* covered is listed just as plainly,
 because a matrix that only shows green teaches nothing.
 
@@ -24,7 +24,7 @@ Dropbear and TinySSH** — including our SFTP client against OpenSSH's own `sftp
 
 | Peer | Version | Direction | Covered | Not covered yet |
 |---|---|---|---|---|
-| **OpenSSH** | 10.2p1 / 10.0p2 | **both** | *their client → our server:* transport matrix (11 combinations), auth (ed25519/ecdsa/rsa), certificates, key formats, SFTP, SSHFP records, host-key rotation. *our client → their `sshd`:* 5-method key-exchange matrix, exec + exit status, host-key refusal, **our SFTP client against their `sftp-server`** | ssh-agent needs a running agent, else skipped; finite-field DH is untestable in the client role since OpenSSH 10 dropped it from the server defaults |
+| **OpenSSH** | 10.2p1 / 10.0p2 | **both** | *their client → our server:* transport matrix (11 combinations), auth (ed25519/ecdsa/rsa), certificates, key formats, SFTP incl. **server-side `cp` (`copy-data`)**, SSHFP records, host-key rotation. *our client → their `sshd`:* 5-method key-exchange matrix, exec + exit status, host-key refusal, **our SFTP client against their `sftp-server`** | ssh-agent needs a running agent, else skipped; finite-field DH is untestable in the client role since OpenSSH 10 dropped it from the server defaults |
 | **Dropbear** | 2025.89 | **both** | 6 key exchanges, exec + exit status, host-key refusal, key format via `dropbearconvert`, **our client runs a command on their server** | no SFTP (Dropbear ships no SFTP client) |
 | **PuTTY** (`plink`) | 0.83 | their client → our server | 6 key exchanges incl. ML-KEM, exec, host-key pinning, key format via `puttygen`, 256 KB through their flow control | `psftp`; the `winadj` quirk is watched for but plink 0.83 does not send one — the contract itself is pinned in the library's own suite |
 | **AsyncSSH** | 2.24.0 | their client → our server | post-quantum `mlkem768x25519-sha256`, exec, SFTP, host-key refusal | certificates, which AsyncSSH could also issue |

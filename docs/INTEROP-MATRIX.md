@@ -1,11 +1,11 @@
 # HermodSSH — interoperability matrix
 
 Generated from the interop test run — do not edit by hand.
-Run at 2026-08-11 21:57:16 UTC.
+Run at 2026-08-11 23:15:17 UTC.
 
 ## Summary
 
-**91 passed · 0 failed · 1 not exercised** across 9 peer(s).
+**92 passed · 0 failed · 1 not exercised** across 9 peer(s).
 
 > All exercised tests agreed. Some peers were unavailable on the machine that produced this run, so their rows record no evidence rather than success.
 
@@ -21,7 +21,7 @@ Run at 2026-08-11 21:57:16 UTC.
 | Host-key verification | ✅ 1 | ✅ 2 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 |
 | Key formats (openssh-key-v1, PEM) | – | ✅ 1 | – | ✅ 8 | – | ✅ 1 | – | – | – |
 | Remote command execution | ✅ 2 | ✅ 3 | ✅ 2 | ✅ 4 | ✅ 2 | ✅ 2 | ✅ 3 | – | – |
-| SFTP | ✅ 1 | – | – | ✅ 2 | ✅ 1 | – | ✅ 1 | – | ✅ 1 |
+| SFTP | ✅ 1 | – | – | ✅ 3 | ✅ 1 | – | ✅ 1 | – | ✅ 1 |
 | SSHFP DNS records | – | – | – | ✅ 3 | – | – | – | – | – |
 | Transport & key exchange | ✅ 1 | ✅ 6 | ✅ 1 | ✅ 17 | ✅ 2 | ✅ 6 | – | ✅ 2 | – |
 | ssh-agent | – | – | – | ⚪ | – | – | – | – | – |
@@ -80,6 +80,7 @@ Run at 2026-08-11 21:57:16 UTC.
 - ✅ `RealOpenSshClient_RunsCommand_OnOurServer("fail",42)` — Remote command execution
 - ✅ `RealOpenSshClient_RunsCommand_OnOurServer("hello",0)` — Remote command execution
 - ✅ `OurSftpClient_TransfersFiles_WithRealSftpServer` — SFTP
+- ✅ `RealSftpClient_CopiesServerSide_AgainstOurServer` — SFTP
 - ✅ `RealSftpClient_PutsAndGets_AgainstOurServer` — SFTP
 - ✅ `OurSshfpRecords_MatchSshKeygenDashR("ecdsa")` — SSHFP DNS records
 - ✅ `OurSshfpRecords_MatchSshKeygenDashR("ed25519")` — SSHFP DNS records

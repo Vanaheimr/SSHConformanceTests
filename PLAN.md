@@ -508,7 +508,7 @@ Private-key files are always written **owner-only** via `SshPrivateKeyFile` (POS
 | `hardlink@openssh.com` | ⬜ | ⬜ | **decision, not a gap:** `ISftpFileSystem` has no links at all, and a hard link defeats the per-session byte quota (same bytes, counted once) |
 | `lsetstat@openssh.com` | ⬜ | ⬜ | meaningless without symlinks |
 | `expand-path@openssh.com` | ⬜ | ⬜ | cheap, but `~` is `/` in a root jail |
-| `copy-data` | ⬜ | ⬜ | worth having (server-side copy, no bytes over the wire twice) — must be counted by the quota and bandwidth limiters |
+| `copy-data` | ✅ | ✅ `CopyAsync` (paths) / `CopyDataAsync` (handles) | server-side copy, bytes never cross the network. **Metered like the upload it replaces** — the quota sees every written byte and the upload limiter throttles the loop, since a client pays no bandwidth for a copy and an unmetered one would walk around every limit the session has; the read side is *not* also charged to the download limiter, which would bill the same bytes twice. Same handle on both ends is refused (OpenSSH allows non-overlapping ranges; telling those apart needs a length that may be "until EOF"). Validated against OpenSSH `sftp`'s `cp` — the five fields are not self-describing on the wire, so an independent encoder is the only real check |
 | `home-directory`, `users-groups-by-id@openssh.com` | ❌ | ❌ | **deliberately not offered:** both leak host paths / UID-to-name mappings out of a jailed session |
 
 ### Client
