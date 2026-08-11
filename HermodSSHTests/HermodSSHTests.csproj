@@ -22,12 +22,18 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <!-- Test-only reference peer: an independent .NET SSH client lineage driving our server in-process
+         (interop/SshNetInteropTests.cs). -->
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
   </ItemGroup>
 
-  <!-- Only the demo-CLI tests live here: the SSH library and its own test suite moved into the
-       Hermod submodule (Hermod/SSH and HermodTests/SSH), and a submodule cannot reference this
-       repository's demo CLI. -->
+  <!-- The conformance harness: the interoperability suite against real third-party implementations, plus
+       the demo CLI's own tests. The library and its hermetic unit/loopback tests live in the Hermod
+       submodule — everything here needs something the machine has to provide (WSL, OpenSSH binaries,
+       a Python environment), which is exactly what does not belong in Hermod's own test suite. -->
   <ItemGroup>
+    <ProjectReference Include="..\libs\Hermod\Hermod\Hermod.csproj" />
+    <ProjectReference Include="..\libs\Styx\Styx\Styx.csproj" />
     <ProjectReference Include="..\HermodSSHDemo\HermodSSHDemo.csproj" />
   </ItemGroup>
 

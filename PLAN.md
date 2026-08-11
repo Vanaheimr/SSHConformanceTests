@@ -112,7 +112,7 @@ Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the
 | Area | Reference |
 |---|---|
 | Architecture / numbers | RFC 4251, RFC 4250 |
-| Transport / KEX | RFC 4253, RFC 9142 (KEX update), RFC 8268 (DH-SHA2), RFC 5656 (ECDH/ECDSA), RFC 8731 (curve25519-sha256), RFC 4344 (CTR) |
+| Transport / KEX | RFC 4253 (incl. §7.1 `first_kex_packet_follows` — a guessed KEX packet must be discarded when the guess was wrong; Dropbear's `kexguess2@matt.ucc.asn.au` narrows the test to the KEX method), RFC 9142 (KEX update), RFC 8268 (DH-SHA2), RFC 5656 (ECDH/ECDSA), RFC 8731 (curve25519-sha256), RFC 4344 (CTR) |
 | PQ hybrid KEX | draft-ietf-sshm-mlkem-hybrid-kex (`mlkem768x25519-sha256`; verified 2026-08-11: draft-10 approved, sitting in the RFC Editor queue — swap in the RFC number once assigned; names + K-as-string encoding unchanged), **RFC 9941** (`sntrup761x25519-sha512`, 2026-04, registers the bare name next to `@openssh.com`), FIPS 203 (ML-KEM) |
 | Auth | RFC 4252 (incl. §5.4 `SSH_MSG_USERAUTH_BANNER`), RFC 4256 (keyboard-interactive), RFC 8332 (rsa-sha2), RFC 8709 (Ed25519), RFC 8308 (ext-info / server-sig-algs) |
 | ProxyJump | OpenSSH `ssh_config` `ProxyJump`/`-J` (SSH-over-SSH layered on `direct-tcpip`, RFC 4254 §7) |
@@ -144,7 +144,7 @@ Order = default preference. Everything configurable via an options object (enabl
 4. ✅ `ecdh-sha2-nistp256` / `-nistp384` / `-nistp521`
 5. ✅ `diffie-hellman-group14-sha256` (MUST per RFC 9142), `diffie-hellman-group16-sha512`
 6. Later, optional: `mlkem1024nistp384-sha384`
-- Pseudo algorithms: `ext-info-c`/`ext-info-s` (RFC 8308), `kex-strict-c-v00@openssh.com`/`kex-strict-s-v00@openssh.com` (Terrapin)
+- Pseudo algorithms: `ext-info-c`/`ext-info-s` (RFC 8308), `kex-strict-c-v00@openssh.com`/`kex-strict-s-v00@openssh.com` (Terrapin), `kexguess2@matt.ucc.asn.au` (Dropbear's guessed-KEX rule — sent by **both** roles under the same name, so it must be filtered out of the negotiation candidates)
 
 > **Interop trap:** for the PQ hybrid KEX methods the shared secret K is encoded as an SSH `string` (hash output); for all classic KEX methods it is an `mpint`. This is the single most common interop bug — it gets its own test cases.
 
@@ -228,19 +228,29 @@ SSH/                            ← this repository: the conformance harness
 │   │   │   ├── Auth/           auth policy/methods, TOTP, audit event model + ISshAuditSink
 │   │   │   ├── Client/         SshClient façade  ┐ layering is a source convention now:
 │   │   │   └── Server/         SshServer façade  ┘ Client → foundation ← Server, never each other
-│   │   └── HermodTests/SSH/    ← the NUnit suite (unit, loopback, interop)
-│   │       └── interop/        interop harness assets: scripts, Dockerfiles, peer configs
+│   │   └── HermodTests/SSH/    ← the HERMETIC suite: unit + loopback, runnable anywhere
 │   └── Styx/                   Vanaheimr Styx — base utilities (Illias)
 ├── HermodSSHDemo/              ← the `hermod-ssh` CLI (references Hermod + Styx)
-├── HermodSSHTests/             ← demo-CLI tests only; the rest lives in the submodule, which
-│                                 cannot reference this repository
+├── HermodSSHTests/             ← the CONFORMANCE suite: everything that needs software the machine
+│   ├── interop/                  must provide — WSL, ssh binaries, a Python venv, a NuGet peer.
+│   │   ├── python/               Peer drivers (AsyncSSH, Paramiko) speaking a JSON contract
+│   │   ├── setup-wsl.sh          Provisioning; .venv-interop/ is created next to it (git-ignored)
+│   │   └── docker/               Dockerfiles per peer + version, for the CI matrix (planned)
+│   └── CLI/                      demo-CLI tests
 ├── HermodSSHBenchmarks/        ← BenchmarkDotNet suite → docs/BENCHMARKS.md
 └── HermodSSHInteropReport/     ← TRX → docs/INTEROP-MATRIX.md generator
 ```
 
-Consequence for day-to-day work: a library or test change is **two commits** — the submodule first, then the
-pointer bump here (push order in §13.5). Running only the SSH tests:
-`dotnet test libs/Hermod/HermodTests/HermodTests.csproj --filter FullyQualifiedName~Hermod.SSH.Tests`.
+**The split rule** (settled 2026-08-11 after the interop suite briefly lived in the submodule): a test that
+needs nothing but the code — unit, loopback between our own client and server — belongs in the submodule,
+because Hermod's suite must run anywhere. A test that needs software the machine has to provide — WSL, an
+`ssh` binary, a Python environment, a NuGet peer — belongs in `HermodSSHTests/interop/`. Hermod's suite
+stays hermetic; this repository is where the world gets involved.
+
+Consequence for day-to-day work: a library change is **two commits** — the submodule first, then the
+pointer bump here (push order in §13.5). Running each suite:
+`dotnet test libs/Hermod/HermodTests/HermodTests.csproj --filter FullyQualifiedName~Hermod.SSH.Tests` (hermetic)
+and `dotnet test HermodSSHTests/HermodSSHTests.csproj` (conformance).
 
 **One assembly** (`org.GraphDefined.Vanaheimr.Hermod`, superseding the three-package split of §13.2): transport, crypto, keys and the SFTP protocol sit under the root namespace `org.GraphDefined.Vanaheimr.Hermod.SSH` (SFTP under `….SSH.SFTP`), the high-level APIs under `….SSH.Client` / `….SSH.Server`. **BouncyCastle** (X25519/Ed25519/sntrup761/ChaCha20/…) plus Hermod's DNS/TCP/PKI/logging are available directly — no extra package reference. The harness projects in this repository reference `Hermod.csproj` + `Styx.csproj`.
 
@@ -757,12 +767,12 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 
 | Peer | Roles vs us | Certs | PQ KEX | Why it matters |
 |---|---|---|---|---|
-| Dropbear (`dropbear`/`dbclient`) | both | no | sntrup761 + mlkem768 (≥ 2025.87, both default-on) | embedded-world defaults, small algo set, no ext-info corner cases; SHA-1 disabled by default since 2025.87 |
-| TinySSH (`tinysshd`) | server only | no | sntrup761 only (no ML-KEM as of 20260601) | radically minimal: ed25519 + chacha20 + sntrup761 only — forces our minimal-path negotiation |
+| Dropbear (`dropbear`/`dbclient`) | both ✅ **wired in 2026-08-11** (12 tests, **both roles**) | no | sntrup761 + mlkem768 (≥ 2025.87, both default-on) | embedded-world defaults, small algo set; SHA-1 disabled by default since 2025.87. **Found the `first_kex_packet_follows` defect.** Quirks pinned: guesses via `kexguess2@matt.ucc.asn.au`; `dropbearconvert` needed for its own key format; known_hosts keyed by host name **without** `[host]:port`; walks the whole directory path when checking `authorized_keys` permissions, so scratch space must not sit under `/tmp` |
+| TinySSH (`tinysshd`) | server only ✅ **wired in 2026-08-11** (3 tests, **exercises our client**) | no | sntrup761 only (no ML-KEM as of 20260601) | radically minimal: ed25519 + chacha20 + sntrup761 only — forces our minimal-path negotiation |
 | PuTTY `plink`/`psftp` (Windows + `putty-tools` on Linux) | client only | user certs (≥ 0.78) | sntrup761 (≥ 0.78), ML-KEM (≥ 0.83 ✓; 0.84 current) | independent lineage; famous quirks (`winadj@…`); exercises our **server** |
 | AsyncSSH (Python) | both ✅ **wired in 2026-08-11** (client role; 5 tests) | yes (user+host, can also issue) | mlkem (≥ 2.18; since 2.24 via PyCA cryptography, no liboqs needed — **verified: it completes `mlkem768x25519-sha256` with us**), sntrup761 (still needs liboqs) | most scriptable feature-rich peer; great for cert edge cases + SFTP v4–v6 negotiation |
 | Paramiko (Python) | both ✅ **wired in 2026-08-11** (client role; 7 tests) | client-side certs (partial) | no (✓ through 5.0.0) | very widely deployed; conservative algorithm set; 5.0 drops all SHA-1 KEX + GSSAPI, adds AES-GCM. **Our legacy-refusal counterpart**: it offers CBC/3DES and we must not take them, and its GEX-only offer gives us a real "no common algorithm" case |
-| Go `x/crypto/ssh` (small test harness binaries) | both | yes (first-class) | mlkem768 (≥ v0.38.0, default-first; no sntrup761) | strict, spec-literal implementation — catches sloppiness; harness sources live in `libs/Hermod/HermodTests/SSH/interop/go/` |
+| Go `x/crypto/ssh` (small test harness binaries) | both | yes (first-class) | mlkem768 (≥ v0.38.0, default-first; no sntrup761) | strict, spec-literal implementation — catches sloppiness; harness sources live in `HermodSSHTests/interop/go/` |
 | SSH.NET (NuGet) | client only, **in-process** | no | sntrup761 + mlkem768 (≥ 2025.0.0 ✓ — our in-process test negotiates ML-KEM) | runs directly inside NUnit — zero orchestration cost, fast server-role smoke tests; pinned at 2026.0.0 |
 | curl with libssh/libssh2 (SFTP) | client only | n/a | n/a | exercises our SFTP server through a completely different stack |
 
@@ -781,14 +791,14 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 ### 11.2 Environments
 
 **WSL2 (primary local environment, explicitly in scope):**
-- Ubuntu LTS distro with an idempotent setup script `libs/Hermod/HermodTests/SSH/interop/setup-wsl.sh`: `openssh-server openssh-client dropbear-bin tinysshd putty-tools curl socat` + a Python venv with `asyncssh`/`paramiko` (+ optional Go toolchain for the x/crypto harness)
+- Ubuntu LTS distro with an idempotent setup script `HermodSSHTests/interop/setup-wsl.sh`: `openssh-server openssh-client dropbear-bin tinysshd putty-tools curl socat` + a Python venv with `asyncssh`/`paramiko` (+ optional Go toolchain for the x/crypto harness)
 - Orchestration from NUnit via `wsl.exe -e …`; test instances only (no system sshd): `sshd -D -e -f <tempconfig>` as a non-root user on high ports, per-test host keys/`TrustedUserCAKeys`/`RevokedKeys`
 - **Networking:** Windows → WSL works via `localhost` (localhostForwarding). WSL → Windows host needs the host IP (default route) in NAT mode — or enable `networkingMode=mirrored` in `.wslconfig` (Windows 11) so `localhost` works in both directions. The harness auto-detects both setups.
 - **Key permission gotcha:** private keys on `/mnt/c` appear world-readable → OpenSSH refuses them. The harness always copies key material into the WSL home directory and `chmod 600`s it.
 - `tinysshd` is inetd-style → run it under `socat`/systemd socket activation.
 
 **Docker / Testcontainers (version matrix + CI):**
-- Dockerfiles per peer+version under `libs/Hermod/HermodTests/SSH/interop/docker/`; orchestrated from NUnit via the `Testcontainers` NuGet package
+- Dockerfiles per peer+version under `HermodSSHTests/interop/docker/`; orchestrated from NUnit via the `Testcontainers` NuGet package
 - Covers the OpenSSH version spread (8.9/9.6/9.9/10.x), Dropbear, TinySSH, MINA, AsyncSSH, libssh — reproducible locally and in CI (hosted CI runners have no WSL; containers provide the same peers there)
 
 **Windows native:** Win32-OpenSSH (`ssh`, `sshd`, `sftp`, `ssh-keygen`, `ssh-agent` incl. the named-pipe agent), PuTTY `plink`/`psftp`, WinSCP CLI.
@@ -870,7 +880,13 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 
 **And it immediately earned its keep — a real defect:** every AsyncSSH login hung. AsyncSSH pads authentication with `SSH_MSG_IGNORE` to blunt traffic analysis; RFC 4253 §11 lets a peer send that (and `SSH_MSG_DEBUG`/`SSH_MSG_UNIMPLEMENTED`) **at any time** and requires the receiver to skip it — our authentication loop treated the first one as a protocol violation. They are now consumed centrally in `SshTransport.ReceivePacketAsync`, so every reader benefits instead of each having to remember. The exception is deliberate and tested: while a key exchange is in flight, **strict KEX refuses them**, because tolerating an ignorable packet there is precisely what let Terrapin shift the sequence numbers. Pinned by `Transport/IgnoreMessageTests.cs` (3 loopback tests) so it holds on machines without WSL. **Two further defects fell out of the same investigation:** `SshServer` swallowed *every* connection-handling exception and never closed the pipe, so any protocol error left the peer waiting until its own timeout and leaked the socket — it now sends a DISCONNECT, closes the connection, and reports the detail to the audit sink (the peer gets a generic reason; it may not be authenticated); and the auth loop's error did not name the message it actually found, which is what made the diagnosis slow.
 
-⬜ still: the remaining Tier-2 peers (Dropbear, TinySSH, PuTTY, Go `x/crypto/ssh`, curl+libssh) — the WSL harness now exists for them and Dropbear/TinySSH are provisioned; CI still needs the decision in §13.5 | audit catalog tests (envelope/sequence/overflow) ✅; keystroke-timing decorrelation deterministic ✅; nightly matrix job = CI todo | M–L |
+**Dropbear + TinySSH wired in ✅ (2026-08-11)** — and with them the **first coverage of our client against third-party servers**. Dropbear is exercised in both directions: `dbclient` drives our server (exec + exit status, host-key refusal, a six-method key-exchange matrix), and **our client authenticates to and runs a command on a real `dropbear`** — `dropbearconvert` reading our `openssh-key-v1` file is itself a key-format proof from a third parser. TinySSH, being server-only and the most minimal implementation in existence (one host-key type, one cipher, two key exchanges), forces our client's narrow path: it completes `sntrup761x25519-sha512@openssh.com` **and** `curve25519-sha256`, which makes this the first test where **our client drives the post-quantum hybrid** rather than answering one. Its authentication is out of scope by design — TinySSH reads only `~/.ssh/authorized_keys` of the account it runs as, with no equivalent of Dropbear's `-D`, and no test may write a usable key into a developer's real account. **15 tests, all green.**
+
+**A second real defect, and a worse one than the first:** `first_kex_packet_follows` (RFC 4253 §7.1). A peer may append a *guessed* key-exchange packet to its KEXINIT, and the receiver must read and discard it when the guess was wrong. We parsed the field and never acted on it — so with Dropbear, which guesses on every connection, **six of seven key exchanges failed**: we fed a packet meant for another algorithm into the exchange hash, and the symptom was `Bad hostkey signature` at the far end. Only sntrup761 worked, because that is what Dropbear happens to guess. The fix also required implementing Dropbear's **`kexguess2@matt.ucc.asn.au`**, which narrows the RFC's guess test to the key exchange alone (the RFC also demands the host-key algorithm match, which a client can rarely predict); without advertising it, Dropbear re-sends the packet and *that* desynchronises the stream instead. Advertising it brings a hazard the RFC markers do not have — both peers send the identical name, so it could be "negotiated" as the key exchange itself — hence marker filtering in `AlgorithmNegotiation`. Pinned by `Transport/KexGuessTests.cs` (6 unit tests) plus the Dropbear key-exchange matrix. **Nobody else caught this:** OpenSSH, PuTTY, AsyncSSH, Paramiko and SSH.NET all set the flag to false. Textbook §11 — breadth catches what the reference forgives.
+
+Two diagnostics landed with it, both earned the hard way: `SshServer` now emits `KexCompletedEvent` (the audit catalog had defined it while nothing ever raised it), and the KEX/auth failures name the message they actually found instead of only what they expected.
+
+⬜ still: the remaining Tier-2 peers (PuTTY, Go `x/crypto/ssh`, curl+libssh) — the WSL harness now covers process-driven peers in both roles; CI still needs the decision in §13.5 | audit catalog tests (envelope/sequence/overflow) ✅; keystroke-timing decorrelation deterministic ✅; nightly matrix job = CI todo | M–L |
 | **M10** | 🔶 | **Demo CLI ✅** (`hermod-ssh`: `keygen`/`scan`/`ca`/`exec`/`serve`/**`connect`**/**`sftp`**/**`forward`**/**`play`** working end-to-end — client verbs driven through the `SshClient`/`SshServer` façade; `serve` offers exec + `--sftp-root` SFTP + loopback forwarding at once; `play` replays an asciicast v2 recording with real inter-event timing (`--speed`/`--max-idle`/`--instant`, exit status propagated); verified against a live server: exec+connect stream, sftp put/ls/get round-trips byte-for-byte, forward `-L` binds+tunnels, play honors timing + exit code). **README updated ✅** (feature status + CLI examples). XML docs land per file as written. **BenchmarkDotNet baseline ✅** (`HermodSSHBenchmarks`, separate project as §8 requires: handshake latency per KEX, per-cipher record throughput, SFTP throughput; results in [docs/BENCHMARKS.md](docs/BENCHMARKS.md)). **The baseline does *not* meet the §8 target — and pinpoints why**: SFTP reaches ≈33–44 MiB/s against the stated **≥100 MB/s** (~40 %). The per-cipher numbers explain it: a 32 KiB record runs at **≈504 MB/s on `aes256-gcm`** but only **≈46 MB/s on `chacha20-poly1305`** (our first preference, and the façade exposes no cipher knob) and **≈7 MB/s on `aes256-ctr`+EtM** — and ChaCha20's 46 MB/s lands right on the measured SFTP figure, so **the cipher is the bottleneck, not SFTP/mux/window**. **Target now met on downloads after a SIMD ChaCha20 core ✅** (`ChaCha20`, `Vector128<UInt32>` — NEON on ARM, SSE/AVX on x86, one implementation): ChaCha20 record throughput **47 → 132 MB/s**, now **6.6× off AES-GCM (was 14.5×)**, and SFTP **31–60 → 87–111 MB/s**, i.e. **8 MiB downloads clear the §8 ≥100 MB/s target** (111 MB/s) with the rest at 87–96. A fourth round batched the **AES-CTR** keystream (one `EncryptEcb` per 16-byte block → 64 blocks per call, plus a wide XOR): **64.7× → 2.5× off AES-GCM, ~26× better**, 13.6 → 191 MB/s, allocation 449 → 102 KB. A third round had removed three per-chunk copies from the SFTP **write** path (`Data.ToArray()`, `WrittenSpan.ToArray()`, and the framing buffer — now pooled), saving **96 MB per 32 MiB upload** exactly as predicted and closing the upload/download gap from ~34 % to 9–17 %. All figures from a **full-fidelity job**; the earlier short-run numbers proved unreliable (see the doc's "Reading these numbers"). Validated against **RFC 8439 §2.3.2 + §2.4.2 vectors** and real OpenSSH. The default cipher order stays ChaCha20-first: correct for the ARM device fleet, where AES-GCM has no AES-NI advantage. Getting there took two rounds — **cause was the ChaCha20 core, *not* allocation; the first hypothesis was wrong and the allocation fix disproved it**: `ChaCha20Poly1305Cipher` was rewritten onto BouncyCastle's span overloads to encrypt/decrypt in place, removing **64 KB per record / 66 MB per 32 MiB transfer** (exactly the predicted 1024×64 KB) — and **throughput did not move**. The 14× gap to AES-GCM is BouncyCastle's scalar `ChaChaEngine` versus AES-NI. Remedies: a vectorised ChaCha20, or reconsidering the ChaCha20-first default on AES-NI hardware (a fleet policy decision, left open). Also corrected: an earlier "AES-GCM allocates 630 B" figure was a short-run artifact (the same unmodified code later measured 96 KB) — single short-run numbers are hints, not evidence. Handshake (full job): `curve25519` **0.64 ms**, `mlkem768x25519` **1.50 ms (2.35×)**, `ecdh-nistp256` 6.7 ms, **`sntrup761x25519` 75 ms (118×, and a listed default)**. *Correction:* a short run had put ML-KEM at 1.3× and this line called PQ "nearly free" — the full job says **2.35×**; still cheap in absolute terms (1.5 ms/connection, 50× cheaper than the other PQ hybrid) so ML-KEM stays the default, but the framing was a measurement artifact. Recorded as a baseline to optimise against, not fixed in the same breath. ⬜ still: NuGet packaging (deferred by decision — see §13) | demo keygen→scan→ca pipeline test ✅; exec/connect/sftp/forward + serve E2E via façade ✅; play replay smoke-tested ✅ | S–M |
 
 \* Rough relations: S ≈ a few days, M ≈ 1–2 weeks, L ≈ 2–4 weeks (single person, focused). Realistic overall frame **5–7 months** including the extended interop program (the matrix infrastructure adds ~2–4 weeks spread across milestones); a working modern core (M0–M5: transport + PQ + keys + certs) is reachable around the halfway mark.
@@ -911,5 +927,5 @@ Ordering logic: first the **narrow modern path** (Ed25519 + Curve25519 + AES-GCM
 1. ✅ Create `SSH.slnx` + `HermodSSH.Core`/`.Client`/`.Server` (net10.0) + `HermodSSHTests` (NUnit) + `HermodSSHDemo`, Hermod/Styx submodules referenced on Core, adopting the sibling-project conventions *(that layout held until 2026-08-11, when the library and its tests moved into the Hermod submodule — see §5)*
 2. ✅ Implement `Core/SshPacketReader|Writer` + constants (`SshMessageNumber`, `DisconnectReason`)
 3. ✅ NUnit suite for the wire format incl. error cases (38 tests green)
-4. ✅ Set up WSL prerequisites (`libs/Hermod/HermodTests/SSH/interop/setup-wsl.sh`, idempotent, syntax-checked under WSL) so the M1 interop harness has a target from day one; `.gitattributes` keeps `*.sh` LF
+4. ✅ Set up WSL prerequisites (`HermodSSHTests/interop/setup-wsl.sh`, idempotent, syntax-checked under WSL) so the M1 interop harness has a target from day one; `.gitattributes` keeps `*.sh` LF
 5. ⬜ Then straight into M1: version exchange + KEXINIT, compared against a local OpenSSH server

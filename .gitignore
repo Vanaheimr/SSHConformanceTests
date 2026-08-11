@@ -262,3 +262,7 @@ __pycache__/
 
 # BenchmarkDotNet run artifacts (results are recorded in docs/BENCHMARKS.md instead)
 BenchmarkDotNet.Artifacts/
+
+# The interop harness provisions its Python peers (AsyncSSH, Paramiko) into a local virtual
+# environment next to setup-wsl.sh — a few thousand machine-specific files.
+.venv-interop/

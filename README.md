@@ -42,9 +42,9 @@ assembly. This repository is the harness around it: demo CLI, benchmarks and the
 | Location                         | Description                                                     |
 |----------------------------------|-----------------------------------------------------------------|
 | `libs/Hermod/Hermod/SSH/`        | The implementation — wire format, crypto, keys, transport, SFTP, plus `Client/` and `Server/` |
-| `libs/Hermod/HermodTests/SSH/`   | NUnit test suite (unit, loopback, interop)                      |
+| `libs/Hermod/HermodTests/SSH/`   | Hermetic tests: unit + loopback, needing nothing but the code    |
 | `HermodSSHDemo/`                 | The `hermod-ssh` CLI to set up a server and connect clients     |
-| `HermodSSHTests/`                | Tests for the demo CLI (the rest moved into the submodule)      |
+| `HermodSSHTests/interop/`        | Conformance tests against real peers — OpenSSH, Dropbear, TinySSH, AsyncSSH, Paramiko, SSH.NET |
 | `HermodSSHBenchmarks/`           | BenchmarkDotNet suite (see [docs/BENCHMARKS.md](docs/BENCHMARKS.md)) |
 | `HermodSSHInteropReport/`        | Turns an interop test run into [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md) |
 | `libs/Hermod`                    | Vanaheimr Hermod submodule (SSH, DNS, TCP, PKI, logging; BouncyCastle) |
@@ -61,10 +61,18 @@ dotnet test  SSH.slnx
 Cloning **must** use `--recurse-submodules`: the implementation and its tests live in `libs/Hermod`,
 which also provides BouncyCastle and Hermod's DNS/TCP/PKI/logging.
 
-`dotnet test SSH.slnx` runs the whole Hermod test suite. To run only the SSH tests:
+There are two suites. The hermetic one lives with the library and runs anywhere:
 
 ```bash
 dotnet test libs/Hermod/HermodTests/HermodTests.csproj --filter FullyQualifiedName~Hermod.SSH.Tests
+```
+
+The conformance suite drives real third-party implementations and needs them present — see
+[interop/README.md](HermodSSHTests/interop/README.md). Whatever is missing is **skipped with a precise
+reason**, never failed:
+
+```bash
+dotnet test HermodSSHTests/HermodSSHTests.csproj
 ```
 
 ## Demo CLI
