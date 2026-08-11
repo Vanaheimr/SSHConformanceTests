@@ -1,31 +1,39 @@
 # HermodSSH — interoperability matrix
 
 Generated from the interop test run — do not edit by hand.
-Run at 2026-07-24 23:49:06 UTC.
+Run at 2026-08-11 19:31:40 UTC.
 
 ## Summary
 
-**38 passed · 0 failed · 1 not exercised** across 2 peer(s).
+**49 passed · 1 failed · 1 not exercised** across 4 peer(s).
 
-> All exercised tests agreed. Some peers were unavailable on the machine that produced this run, so their rows record no evidence rather than success.
+> ⚠ 1 interop test(s) failed — see the detail below.
 
 ## Capability × peer
 
-| Capability | OpenSSH | SSH.NET |
-|---|---|---|
-| Algorithm negotiation | – | ✅ 1 |
-| Authentication | ✅ 3 | – |
-| Certificates | ✅ 2 | – |
-| Host-key rotation (hostkeys-00) | ✅ 1 | – |
-| Host-key verification | – | ✅ 1 |
-| Key formats (openssh-key-v1, PEM) | ✅ 8 | – |
-| Remote command execution | ✅ 2 | ✅ 3 |
-| SFTP | ✅ 1 | ✅ 1 |
-| SSHFP DNS records | ✅ 3 | – |
-| Transport & key exchange | ✅ 12 | – |
-| ssh-agent | ⚪ | – |
+| Capability | AsyncSSH | OpenSSH | Paramiko | SSH.NET |
+|---|---|---|---|---|
+| Algorithm negotiation | – | – | ✅ 1 | ✅ 1 |
+| Authentication | – | ✅ 3 | – | – |
+| Certificates | – | ✅ 2 | – | – |
+| Host-key rotation (hostkeys-00) | – | ❌ 1/1 | – | – |
+| Host-key verification | ✅ 1 | – | ✅ 1 | ✅ 1 |
+| Key formats (openssh-key-v1, PEM) | – | ✅ 8 | – | – |
+| Remote command execution | ✅ 2 | ✅ 2 | ✅ 2 | ✅ 3 |
+| SFTP | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 |
+| SSHFP DNS records | – | ✅ 3 | – | – |
+| Transport & key exchange | ✅ 1 | ✅ 12 | ✅ 2 | – |
+| ssh-agent | – | ⚪ | – | – |
 
 ## Detail
+
+### AsyncSSH
+
+- ✅ `AsyncSsh_RejectsAWrongHostKey` — Host-key verification
+- ✅ `AsyncSsh_RunsCommand_OnOurServer("fail",42)` — Remote command execution
+- ✅ `AsyncSsh_RunsCommand_OnOurServer("hello",0)` — Remote command execution
+- ✅ `AsyncSsh_TransfersFiles_OverOurSftpSubsystem` — SFTP
+- ✅ `AsyncSsh_CompletesPostQuantumTransport` — Transport & key exchange
 
 ### OpenSSH
 
@@ -34,7 +42,7 @@ Run at 2026-07-24 23:49:06 UTC.
 - ✅ `OurServer_AuthenticatesRealOpenSshClient_WithPublicKey("rsa")` — Authentication
 - ✅ `SshKeygenReads_OurCertificate` — Certificates
 - ✅ `WeValidate_SshKeygenSignedCertificate` — Certificates
-- ✅ `RealOpenSshClient_LearnsOurRotatedInHostKey` — Host-key rotation (hostkeys-00)
+- ❌ `RealOpenSshClient_LearnsOurRotatedInHostKey` — Host-key rotation (hostkeys-00) — OpenSSH host-key rotation interop failed.
 - ✅ `SshKeygenReads_OurOpenSshPrivateKey("ecdsa-sha2-nistp256")` — Key formats (openssh-key-v1, PEM)
 - ✅ `SshKeygenReads_OurOpenSshPrivateKey("ssh-ed25519")` — Key formats (openssh-key-v1, PEM)
 - ✅ `SshKeygenReads_OurOpenSshPrivateKey("ssh-rsa")` — Key formats (openssh-key-v1, PEM)
@@ -62,6 +70,16 @@ Run at 2026-07-24 23:49:06 UTC.
 - ✅ `OurServer_CompletesTransport_WithRealOpenSshClient("sntrup761x25519-sha512","ssh-ed25519","chacha20-poly1305@openssh.com","hmac-sha2-256","chacha20-poly1305@openssh.com")` — Transport & key exchange
 - ✅ `OurServer_SendsExtInfo_RealOpenSshClientReceivesServerSigAlgs` — Transport & key exchange
 - ⚪ `RealAgent_ListsAndSigns` — ssh-agent — No ssh-agent reachable: The operation was canceled.
+
+### Paramiko
+
+- ✅ `Paramiko_NegotiatesModernAlgorithms_WithoutPostQuantum` — Algorithm negotiation
+- ✅ `Paramiko_RejectsAWrongHostKey` — Host-key verification
+- ✅ `Paramiko_RunsCommand_OnOurServer("fail",42)` — Remote command execution
+- ✅ `Paramiko_RunsCommand_OnOurServer("hello",0)` — Remote command execution
+- ✅ `Paramiko_TransfersFiles_OverOurSftpSubsystem` — SFTP
+- ✅ `Paramiko_CompletesClassicalTransport` — Transport & key exchange
+- ✅ `Paramiko_FailsCleanly_WhenNoKeyExchangeIsShared` — Transport & key exchange
 
 ### SSH.NET
 
