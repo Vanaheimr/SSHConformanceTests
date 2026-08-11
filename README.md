@@ -97,4 +97,5 @@ are covered by the loopback + interop test suites.
 
 ## License
 
-Apache License 2.0 — see the header of each source file. © 2010-2026 GraphDefined GmbH.
+Apache License 2.0 — the full text is in [LICENSE](LICENSE), and every source file carries the matching
+header. © 2010-2026 GraphDefined GmbH.
