@@ -53,7 +53,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 | `HermodSSHDemo`    | Demo CLI | `org.GraphDefined.Vanaheimr.Hermod.SSH.CLI` |
 
 Dependency direction: `Client` → `Core` ← `Server` (Client and Server never reference each other).
-`Core` references the `libs/Hermod` + `libs/Styx` submodules, which bring **BouncyCastle** (2.6.2) and
+`Core` references the `libs/Hermod` + `libs/Styx` submodules, which bring **BouncyCastle** (2.7.0) and
 Hermod's DNS/TCP/PKI/logging transitively — do **not** add a direct `BouncyCastle.Cryptography` package.
 
 ## Other conventions
