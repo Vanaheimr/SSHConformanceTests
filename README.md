@@ -14,14 +14,17 @@ ecosystem.
 
 ## Interoperability
 
-Every feature has to work against implementations that share no code with ours. Eight do —
-**80 checks pass, none fail** — and the generated per-test detail is in
+Every feature has to work against implementations that share no code with ours. Nine do —
+**91 checks pass, none fail** — and the generated per-test detail is in
 [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md). What is *not* covered is listed just as plainly,
 because a matrix that only shows green teaches nothing.
 
+Both directions matter and both are covered: peers drive our server, and **our client drives OpenSSH,
+Dropbear and TinySSH** — including our SFTP client against OpenSSH's own `sftp-server`.
+
 | Peer | Version | Direction | Covered | Not covered yet |
 |---|---|---|---|---|
-| **OpenSSH** | 10.2p1 / 10.0p2 | their client → our server | transport matrix (11 combinations), auth (ed25519/ecdsa/rsa), certificates, key formats, SFTP, SSHFP records, host-key rotation | our client → their `sshd`; ssh-agent needs a running agent, else skipped |
+| **OpenSSH** | 10.2p1 / 10.0p2 | **both** | *their client → our server:* transport matrix (11 combinations), auth (ed25519/ecdsa/rsa), certificates, key formats, SFTP, SSHFP records, host-key rotation. *our client → their `sshd`:* 5-method key-exchange matrix, exec + exit status, host-key refusal, **our SFTP client against their `sftp-server`** | ssh-agent needs a running agent, else skipped; finite-field DH is untestable in the client role since OpenSSH 10 dropped it from the server defaults |
 | **Dropbear** | 2025.89 | **both** | 6 key exchanges, exec + exit status, host-key refusal, key format via `dropbearconvert`, **our client runs a command on their server** | no SFTP (Dropbear ships no SFTP client) |
 | **PuTTY** (`plink`) | 0.83 | their client → our server | 6 key exchanges incl. ML-KEM, exec, host-key pinning, key format via `puttygen`, 256 KB through their flow control | `psftp`; the `winadj` quirk is watched for but plink 0.83 does not send one — the contract itself is pinned in the library's own suite |
 | **AsyncSSH** | 2.24.0 | their client → our server | post-quantum `mlkem768x25519-sha256`, exec, SFTP, host-key refusal | certificates, which AsyncSSH could also issue |
@@ -29,9 +32,10 @@ because a matrix that only shows green teaches nothing.
 | **SSH.NET** | 2026.0.0 | their client → our server (**in-process**) | ML-KEM negotiation, exec, SFTP, host-key refusal, several sessions on one connection | — (runs everywhere, so it gates every commit) |
 | **TinySSH** | 20250601 | **our client** → their server | `sntrup761x25519-sha512` and `curve25519-sha256` on the most minimal server there is, host-key verification | authentication: TinySSH only reads the real `~/.ssh/authorized_keys`, and no test may write a usable key into a developer's account |
 | **Go `x/crypto/ssh`** | v0.54.0 | their client → our server | post-quantum `mlkem768x25519-sha256`, exec + exit status, host-key refusal, and our `openssh-key-v1` read with **no conversion step** | SFTP (a separate module), certificates; the harness in `Tests/interop/go/` needs a Go toolchain and is compiled on demand |
+| **curl / libssh2** | 8.14.1 / 1.11.1 | their client → our server | SFTP upload + download byte-for-byte through a third C lineage, host-key pinning via `--hostpubsha256` | no exec — curl speaks SFTP, not sessions |
 
-**Known gaps.** Certificates are so far only proven against OpenSSH. curl/libssh,
-WinSCP, FileZilla and Apache MINA SSHD are planned but not wired in. Everything above runs on a
+**Known gaps.** Certificates are so far only proven against OpenSSH, and only in the direction where we
+validate theirs. WinSCP, FileZilla and Apache MINA SSHD are candidates but not wired in. Everything above runs on a
 developer machine today; the **nightly CI matrix is the one piece still missing**, waiting on a runner
 decision (PLAN §13.5). Peers that are absent are **skipped with a precise reason**, never silently
 counted as passing — the matrix distinguishes "disagreed" from "no evidence either way".

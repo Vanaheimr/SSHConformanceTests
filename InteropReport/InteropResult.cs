@@ -113,6 +113,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
             ("hostkey",          "Host-key verification"),
             ("auth",             "Authentication"),
             ("exec",             "Remote command execution"),
+            ("exitstatus",       "Remote command execution"),
             ("command",          "Remote command execution"),
             ("session",          "Remote command execution")
         ];

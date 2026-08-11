@@ -1,30 +1,30 @@
 # HermodSSH — interoperability matrix
 
 Generated from the interop test run — do not edit by hand.
-Run at 2026-08-11 21:45:12 UTC.
+Run at 2026-08-11 21:57:16 UTC.
 
 ## Summary
 
-**80 passed · 0 failed · 1 not exercised** across 8 peer(s).
+**91 passed · 0 failed · 1 not exercised** across 9 peer(s).
 
 > All exercised tests agreed. Some peers were unavailable on the machine that produced this run, so their rows record no evidence rather than success.
 
 ## Capability × peer
 
-| Capability | AsyncSSH | Dropbear | Go x/crypto/ssh | OpenSSH | Paramiko | PuTTY | SSH.NET | TinySSH |
-|---|---|---|---|---|---|---|---|---|
-| Algorithm negotiation | – | – | – | – | ✅ 1 | – | ✅ 1 | – |
-| Authentication | – | – | – | ✅ 3 | – | – | – | – |
-| Certificates | – | – | – | ✅ 2 | – | – | – | – |
-| Channel requests & flow control | – | – | – | – | – | ✅ 1 | – | – |
-| Host-key rotation (hostkeys-00) | – | – | – | ✅ 1 | – | – | – | – |
-| Host-key verification | ✅ 1 | ✅ 2 | ✅ 1 | – | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 |
-| Key formats (openssh-key-v1, PEM) | – | ✅ 1 | – | ✅ 8 | – | ✅ 1 | – | – |
-| Remote command execution | ✅ 2 | ✅ 3 | ✅ 2 | ✅ 2 | ✅ 2 | ✅ 2 | ✅ 3 | – |
-| SFTP | ✅ 1 | – | – | ✅ 1 | ✅ 1 | – | ✅ 1 | – |
-| SSHFP DNS records | – | – | – | ✅ 3 | – | – | – | – |
-| Transport & key exchange | ✅ 1 | ✅ 6 | ✅ 1 | ✅ 12 | ✅ 2 | ✅ 6 | – | ✅ 2 |
-| ssh-agent | – | – | – | ⚪ | – | – | – | – |
+| Capability | AsyncSSH | Dropbear | Go x/crypto/ssh | OpenSSH | Paramiko | PuTTY | SSH.NET | TinySSH | curl / libssh |
+|---|---|---|---|---|---|---|---|---|---|
+| Algorithm negotiation | – | – | – | – | ✅ 1 | – | ✅ 1 | – | – |
+| Authentication | – | – | – | ✅ 3 | – | – | – | – | – |
+| Certificates | – | – | – | ✅ 2 | – | – | – | – | – |
+| Channel requests & flow control | – | – | – | – | – | ✅ 1 | – | – | – |
+| Host-key rotation (hostkeys-00) | – | – | – | ✅ 1 | – | – | – | – | – |
+| Host-key verification | ✅ 1 | ✅ 2 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 |
+| Key formats (openssh-key-v1, PEM) | – | ✅ 1 | – | ✅ 8 | – | ✅ 1 | – | – | – |
+| Remote command execution | ✅ 2 | ✅ 3 | ✅ 2 | ✅ 4 | ✅ 2 | ✅ 2 | ✅ 3 | – | – |
+| SFTP | ✅ 1 | – | – | ✅ 2 | ✅ 1 | – | ✅ 1 | – | ✅ 1 |
+| SSHFP DNS records | – | – | – | ✅ 3 | – | – | – | – | – |
+| Transport & key exchange | ✅ 1 | ✅ 6 | ✅ 1 | ✅ 17 | ✅ 2 | ✅ 6 | – | ✅ 2 | – |
+| ssh-agent | – | – | – | ⚪ | – | – | – | – | – |
 
 ## Detail
 
@@ -66,6 +66,7 @@ Run at 2026-08-11 21:45:12 UTC.
 - ✅ `SshKeygenReads_OurCertificate` — Certificates
 - ✅ `WeValidate_SshKeygenSignedCertificate` — Certificates
 - ✅ `RealOpenSshClient_LearnsOurRotatedInHostKey` — Host-key rotation (hostkeys-00)
+- ✅ `OurClient_RejectsAWrongOpenSshHostKey` — Host-key verification
 - ✅ `SshKeygenReads_OurOpenSshPrivateKey("ecdsa-sha2-nistp256")` — Key formats (openssh-key-v1, PEM)
 - ✅ `SshKeygenReads_OurOpenSshPrivateKey("ssh-ed25519")` — Key formats (openssh-key-v1, PEM)
 - ✅ `SshKeygenReads_OurOpenSshPrivateKey("ssh-rsa")` — Key formats (openssh-key-v1, PEM)
@@ -74,12 +75,20 @@ Run at 2026-08-11 21:45:12 UTC.
 - ✅ `WeLoad_SshKeygenKeys_Unencrypted("ecdsa")` — Key formats (openssh-key-v1, PEM)
 - ✅ `WeLoad_SshKeygenKeys_Unencrypted("ed25519")` — Key formats (openssh-key-v1, PEM)
 - ✅ `WeLoad_SshKeygenKeys_Unencrypted("rsa")` — Key formats (openssh-key-v1, PEM)
+- ✅ `OurClient_RunsCommand_OnRealOpenSshServer` — Remote command execution
+- ✅ `OurClient_SeesRemoteExitStatus_FromRealOpenSshServer` — Remote command execution
 - ✅ `RealOpenSshClient_RunsCommand_OnOurServer("fail",42)` — Remote command execution
 - ✅ `RealOpenSshClient_RunsCommand_OnOurServer("hello",0)` — Remote command execution
+- ✅ `OurSftpClient_TransfersFiles_WithRealSftpServer` — SFTP
 - ✅ `RealSftpClient_PutsAndGets_AgainstOurServer` — SFTP
 - ✅ `OurSshfpRecords_MatchSshKeygenDashR("ecdsa")` — SSHFP DNS records
 - ✅ `OurSshfpRecords_MatchSshKeygenDashR("ed25519")` — SSHFP DNS records
 - ✅ `OurSshfpRecords_MatchSshKeygenDashR("rsa")` — SSHFP DNS records
+- ✅ `OurClient_CompletesTransport_WithRealOpenSshServer("curve25519-sha256")` — Transport & key exchange
+- ✅ `OurClient_CompletesTransport_WithRealOpenSshServer("ecdh-sha2-nistp256")` — Transport & key exchange
+- ✅ `OurClient_CompletesTransport_WithRealOpenSshServer("ecdh-sha2-nistp521")` — Transport & key exchange
+- ✅ `OurClient_CompletesTransport_WithRealOpenSshServer("mlkem768x25519-sha256")` — Transport & key exchange
+- ✅ `OurClient_CompletesTransport_WithRealOpenSshServer("sntrup761x25519-sha512@openssh.com")` — Transport & key exchange
 - ✅ `OurServer_CompletesTransport_WithRealOpenSshClient("curve25519-sha256","ecdsa-sha2-nistp256","aes256-gcm@openssh.com","hmac-sha2-256","aes256-gcm@openssh.com")` — Transport & key exchange
 - ✅ `OurServer_CompletesTransport_WithRealOpenSshClient("curve25519-sha256","rsa-sha2-512","aes256-gcm@openssh.com","hmac-sha2-256","aes256-gcm@openssh.com")` — Transport & key exchange
 - ✅ `OurServer_CompletesTransport_WithRealOpenSshClient("curve25519-sha256","ssh-ed25519","aes256-ctr","hmac-sha2-256-etm@openssh.com","aes256-ctr")` — Transport & key exchange
@@ -132,6 +141,11 @@ Run at 2026-08-11 21:45:12 UTC.
 - ✅ `OurClient_RejectsAWrongTinySshHostKey` — Host-key verification
 - ✅ `OurClient_CompletesTransport_WithTinySshServer("curve25519-sha256")` — Transport & key exchange
 - ✅ `OurClient_CompletesTransport_WithTinySshServer("sntrup761x25519-sha512@openssh.com")` — Transport & key exchange
+
+### curl / libssh
+
+- ✅ `Curl_RejectsAWrongHostKey` — Host-key verification
+- ✅ `Curl_UploadsAndDownloads_OverOurSftpSubsystem` — SFTP
 
 ## Legend
 
