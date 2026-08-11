@@ -73,7 +73,7 @@ assembly. This repository is the harness around it: demo CLI, benchmarks and the
 
 | Location                         | Description                                                     |
 |----------------------------------|-----------------------------------------------------------------|
-| `libs/Hermod/Hermod/SSH/`      | The implementation — wire format, crypto, keys, transport, SFTP, plus `Client/` and `Server/` |
+| [`libs/Hermod/Hermod/SSH/`](libs/Hermod/Hermod/SSH/README.md) | The implementation — wire format, crypto, keys, transport, SFTP, plus `Client/` and `Server/` |
 | `libs/Hermod/HermodTests/SSH/` | Hermetic tests: unit + loopback, needing nothing but the code   |
 | `Tests/interop/`               | Conformance tests against real peers, plus the drivers that run them |
 | `Demo/`                        | The `hermod-ssh` CLI to set up a server and connect clients     |
