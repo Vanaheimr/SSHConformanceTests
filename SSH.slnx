@@ -4,8 +4,8 @@
     <Project Path="libs/Hermod/HermodTests/HermodTests.csproj" />
     <Project Path="libs/Styx/Styx/Styx.csproj" />
   </Folder>
-  <Project Path="HermodSSHTests/HermodSSHTests.csproj" />
-  <Project Path="HermodSSHDemo/HermodSSHDemo.csproj" />
-  <Project Path="HermodSSHInteropReport/HermodSSHInteropReport.csproj" />
-  <Project Path="HermodSSHBenchmarks/HermodSSHBenchmarks.csproj" />
+  <Project Path="Tests/Tests.csproj" />
+  <Project Path="Demo/Demo.csproj" />
+  <Project Path="InteropReport/InteropReport.csproj" />
+  <Project Path="Benchmarks/Benchmarks.csproj" />
 </Solution>

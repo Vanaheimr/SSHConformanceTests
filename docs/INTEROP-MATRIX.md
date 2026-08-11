@@ -1,30 +1,30 @@
 # HermodSSH — interoperability matrix
 
 Generated from the interop test run — do not edit by hand.
-Run at 2026-08-11 21:21:30 UTC.
+Run at 2026-08-11 21:38:54 UTC.
 
 ## Summary
 
-**76 passed · 0 failed · 1 not exercised** across 7 peer(s).
+**76 passed · 0 failed · 5 not exercised** across 8 peer(s).
 
 > All exercised tests agreed. Some peers were unavailable on the machine that produced this run, so their rows record no evidence rather than success.
 
 ## Capability × peer
 
-| Capability | AsyncSSH | Dropbear | OpenSSH | Paramiko | PuTTY | SSH.NET | TinySSH |
-|---|---|---|---|---|---|---|---|
-| Algorithm negotiation | – | – | – | ✅ 1 | – | ✅ 1 | – |
-| Authentication | – | – | ✅ 3 | – | – | – | – |
-| Certificates | – | – | ✅ 2 | – | – | – | – |
-| Channel requests & flow control | – | – | – | – | ✅ 1 | – | – |
-| Host-key rotation (hostkeys-00) | – | – | ✅ 1 | – | – | – | – |
-| Host-key verification | ✅ 1 | ✅ 2 | – | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 |
-| Key formats (openssh-key-v1, PEM) | – | ✅ 1 | ✅ 8 | – | ✅ 1 | – | – |
-| Remote command execution | ✅ 2 | ✅ 3 | ✅ 2 | ✅ 2 | ✅ 2 | ✅ 3 | – |
-| SFTP | ✅ 1 | – | ✅ 1 | ✅ 1 | – | ✅ 1 | – |
-| SSHFP DNS records | – | – | ✅ 3 | – | – | – | – |
-| Transport & key exchange | ✅ 1 | ✅ 6 | ✅ 12 | ✅ 2 | ✅ 6 | – | ✅ 2 |
-| ssh-agent | – | – | ⚪ | – | – | – | – |
+| Capability | AsyncSSH | Dropbear | Go x/crypto/ssh | OpenSSH | Paramiko | PuTTY | SSH.NET | TinySSH |
+|---|---|---|---|---|---|---|---|---|
+| Algorithm negotiation | – | – | – | – | ✅ 1 | – | ✅ 1 | – |
+| Authentication | – | – | – | ✅ 3 | – | – | – | – |
+| Certificates | – | – | – | ✅ 2 | – | – | – | – |
+| Channel requests & flow control | – | – | – | – | – | ✅ 1 | – | – |
+| Host-key rotation (hostkeys-00) | – | – | – | ✅ 1 | – | – | – | – |
+| Host-key verification | ✅ 1 | ✅ 2 | ⚪ | – | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 |
+| Key formats (openssh-key-v1, PEM) | – | ✅ 1 | – | ✅ 8 | – | ✅ 1 | – | – |
+| Remote command execution | ✅ 2 | ✅ 3 | ⚪ | ✅ 2 | ✅ 2 | ✅ 2 | ✅ 3 | – |
+| SFTP | ✅ 1 | – | – | ✅ 1 | ✅ 1 | – | ✅ 1 | – |
+| SSHFP DNS records | – | – | – | ✅ 3 | – | – | – | – |
+| Transport & key exchange | ✅ 1 | ✅ 6 | ⚪ | ✅ 12 | ✅ 2 | ✅ 6 | – | ✅ 2 |
+| ssh-agent | – | – | – | ⚪ | – | – | – | – |
 
 ## Detail
 
@@ -50,6 +50,13 @@ Run at 2026-08-11 21:21:30 UTC.
 - ✅ `Dropbear_CompletesTransport_WithOurServer("ecdh-sha2-nistp521")` — Transport & key exchange
 - ✅ `Dropbear_CompletesTransport_WithOurServer("mlkem768x25519-sha256")` — Transport & key exchange
 - ✅ `Dropbear_CompletesTransport_WithOurServer("sntrup761x25519-sha512")` — Transport & key exchange
+
+### Go x/crypto/ssh
+
+- ⚪ `GoCrypto_RejectsAWrongHostKey` — Host-key verification — No Go toolchain inside WSL — install it (interop/setup-wsl.sh installs golang-go).
+- ⚪ `GoCrypto_RunsCommand_OnOurServer("fail",42)` — Remote command execution — No Go toolchain inside WSL — install it (interop/setup-wsl.sh installs golang-go).
+- ⚪ `GoCrypto_RunsCommand_OnOurServer("hello",0)` — Remote command execution — No Go toolchain inside WSL — install it (interop/setup-wsl.sh installs golang-go).
+- ⚪ `GoCrypto_CompletesPostQuantumTransport` — Transport & key exchange — No Go toolchain inside WSL — install it (interop/setup-wsl.sh installs golang-go).
 
 ### OpenSSH
 

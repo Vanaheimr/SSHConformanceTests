@@ -33,6 +33,7 @@ APT_PACKAGES=(
     putty-tools         # plink / psftp / puttygen
     curl                # SFTP via libssh/libssh2 — a different stack
     socat               # run inetd-style tinysshd on a socket
+    golang-go           # builds the golang.org/x/crypto/ssh harness in go/
     openssl             # key/cert plumbing helpers
     ca-certificates
     python3
@@ -99,19 +100,15 @@ report "curl"     curl --version
 report "socat"    socat -V
 
 if [[ -d "${VENV_DIR}" ]]; then
-    # shellcheck disable=SC1091
-    source "${VENV_DIR}/bin/activate"
-    report "AsyncSSH" python3 -c 'import asyncssh; print(asyncssh.__version__)'
-    report "Paramiko" python3 -c 'import paramiko; print(paramiko.__version__)'
-    deactivate
+    # The interpreter is invoked directly rather than through 'activate', which hard-codes the absolute
+    # path the environment was created at — exactly as the tests do it, and so a relocated checkout
+    # still reports the truth instead of a traceback.
+    report "AsyncSSH" "${VENV_DIR}/bin/python3" -c 'import asyncssh; print(asyncssh.__version__)'
+    report "Paramiko" "${VENV_DIR}/bin/python3" -c 'import paramiko; print(paramiko.__version__)'
 else
     printf '  %-12s (python venv not created — run without --check)\n' "AsyncSSH/…"
 fi
 
-if command -v go >/dev/null 2>&1; then
-    report "Go" go version
-else
-    warn "Go toolchain not found (optional): needed only for the golang.org/x/crypto/ssh harness."
-fi
+report "Go" go version
 
 log "Done. The interop suite reaches this shell from NUnit via 'wsl.exe -e'."

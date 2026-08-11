@@ -6,6 +6,9 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <RootNamespace>org.GraphDefined.Vanaheimr.Hermod.SSH.Tests</RootNamespace>
+    <!-- The directory is just "Tests" now; the assembly still has to be recognisable in test logs,
+         TRX files and the interop matrix. -->
+    <AssemblyName>SSHConformanceTests</AssemblyName>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
@@ -34,7 +37,7 @@
   <ItemGroup>
     <ProjectReference Include="..\libs\Hermod\Hermod\Hermod.csproj" />
     <ProjectReference Include="..\libs\Styx\Styx\Styx.csproj" />
-    <ProjectReference Include="..\HermodSSHDemo\HermodSSHDemo.csproj" />
+    <ProjectReference Include="..\Demo\Demo.csproj" />
   </ItemGroup>
 
 </Project>

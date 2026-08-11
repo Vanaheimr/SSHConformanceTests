@@ -14,8 +14,8 @@ ecosystem.
 
 ## Interoperability
 
-Every feature has to work against implementations that share no code with ours. Seven do so today —
-**76 checks pass, none fail** — and the generated per-test detail is in
+Every feature has to work against implementations that share no code with ours. Seven do so on this
+machine — **77 checks pass, none fail** — and the generated per-test detail is in
 [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md). What is *not* covered is listed just as plainly,
 because a matrix that only shows green teaches nothing.
 
@@ -28,8 +28,9 @@ because a matrix that only shows green teaches nothing.
 | **Paramiko** | 5.0.0 | their client → our server | classical key exchange, exec, SFTP, host-key refusal, **clean failure when no algorithm is shared** | no post-quantum support exists in Paramiko to test |
 | **SSH.NET** | 2026.0.0 | their client → our server (**in-process**) | ML-KEM negotiation, exec, SFTP, host-key refusal, several sessions on one connection | — (runs everywhere, so it gates every commit) |
 | **TinySSH** | 20250601 | **our client** → their server | `sntrup761x25519-sha512` and `curve25519-sha256` on the most minimal server there is, host-key verification | authentication: TinySSH only reads the real `~/.ssh/authorized_keys`, and no test may write a usable key into a developer's account |
+| **Go `x/crypto/ssh`** | v0.54.0 | their client → our server | post-quantum `mlkem768x25519-sha256`, exec, host-key refusal, and our `openssh-key-v1` read with no conversion | **skipped until a Go toolchain is installed** — the harness in `Tests/interop/go/` is compiled on demand |
 
-**Known gaps.** Certificates are so far only proven against OpenSSH. Go `x/crypto/ssh`, curl/libssh,
+**Known gaps.** Certificates are so far only proven against OpenSSH. curl/libssh,
 WinSCP, FileZilla and Apache MINA SSHD are planned but not wired in. Everything above runs on a
 developer machine today; the **nightly CI matrix is the one piece still missing**, waiting on a runner
 decision (PLAN §13.5). Peers that are absent are **skipped with a precise reason**, never silently
@@ -68,14 +69,14 @@ assembly. This repository is the harness around it: demo CLI, benchmarks and the
 
 | Location                         | Description                                                     |
 |----------------------------------|-----------------------------------------------------------------|
-| `libs/Hermod/Hermod/SSH/`        | The implementation — wire format, crypto, keys, transport, SFTP, plus `Client/` and `Server/` |
-| `libs/Hermod/HermodTests/SSH/`   | Hermetic tests: unit + loopback, needing nothing but the code    |
-| `HermodSSHDemo/`                 | The `hermod-ssh` CLI to set up a server and connect clients     |
-| `HermodSSHTests/interop/`        | Conformance tests against real peers — OpenSSH, Dropbear, TinySSH, AsyncSSH, Paramiko, SSH.NET |
-| `HermodSSHBenchmarks/`           | BenchmarkDotNet suite (see [docs/BENCHMARKS.md](docs/BENCHMARKS.md)) |
-| `HermodSSHInteropReport/`        | Turns an interop test run into [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md) |
-| `libs/Hermod`                    | Vanaheimr Hermod submodule (SSH, DNS, TCP, PKI, logging; BouncyCastle) |
-| `libs/Styx`                      | Vanaheimr Styx submodule (base utilities; BouncyCastle)         |
+| `libs/Hermod/Hermod/SSH/`      | The implementation — wire format, crypto, keys, transport, SFTP, plus `Client/` and `Server/` |
+| `libs/Hermod/HermodTests/SSH/` | Hermetic tests: unit + loopback, needing nothing but the code   |
+| `Tests/interop/`               | Conformance tests against real peers, plus the drivers that run them |
+| `Demo/`                        | The `hermod-ssh` CLI to set up a server and connect clients     |
+| `Benchmarks/`                  | BenchmarkDotNet suite (see [docs/BENCHMARKS.md](docs/BENCHMARKS.md)) |
+| `InteropReport/`               | Turns an interop test run into [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md) |
+| `libs/Hermod`                  | Vanaheimr Hermod submodule (SSH, DNS, TCP, PKI, logging; BouncyCastle) |
+| `libs/Styx`                    | Vanaheimr Styx submodule (base utilities; BouncyCastle)         |
 
 ## Build & test
 
@@ -95,16 +96,16 @@ dotnet test libs/Hermod/HermodTests/HermodTests.csproj --filter FullyQualifiedNa
 ```
 
 The conformance suite drives real third-party implementations and needs them present — see
-[interop/README.md](HermodSSHTests/interop/README.md). Whatever is missing is **skipped with a precise
+[interop/README.md](Tests/interop/README.md). Whatever is missing is **skipped with a precise
 reason**, never failed:
 
 ```bash
-dotnet test HermodSSHTests/HermodSSHTests.csproj
+dotnet test Tests/Tests.csproj
 ```
 
 ## Demo CLI
 
-The `hermod-ssh` tool (project `HermodSSHDemo`) drives the library from a terminal:
+The `hermod-ssh` tool (project `Demo`) drives the library from a terminal:
 
 ```bash
 # Generate a key, inspect it, issue a certificate

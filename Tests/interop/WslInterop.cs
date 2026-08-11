@@ -546,6 +546,30 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             if (!File.Exists(driverPath))
                 throw new FileNotFoundException($"Peer driver '{Driver}' not found.", driverPath);
 
+            return await RunPeerAsync(Driver,
+                                      [ "-e", ToWslPath(venvPython), ToWslPath(driverPath) ],
+                                      Configuration,
+                                      CancellationToken).ConfigureAwait(false);
+
+        }
+
+        #endregion
+
+        #region RunPeerAsync(Name, Command, Configuration, CancellationToken)
+
+        /// <summary>
+        /// Run any peer driver that speaks the JSON contract — the Python ones, the compiled Go harness,
+        /// whatever comes next — and parse its verdict.
+        /// </summary>
+        /// <param name="Name">The driver's name, for error messages.</param>
+        /// <param name="Command">The <c>wsl.exe</c> arguments that launch it; the config path is appended.</param>
+        /// <param name="Configuration">The driver configuration, serialised to JSON.</param>
+        public static async Task<PeerRunResult> RunPeerAsync(String                                Name,
+                                                             IReadOnlyList<String>                 Command,
+                                                             IReadOnlyDictionary<String, Object?>  Configuration,
+                                                             CancellationToken                     CancellationToken)
+        {
+
             var configurationPath = Path.Combine(Path.GetTempPath(), "hermod_peer_" + Guid.NewGuid().ToString("N") + ".json");
 
             try
@@ -555,23 +579,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                              JsonSerializer.Serialize(Configuration),
                                              CancellationToken).ConfigureAwait(false);
 
-                var (exitCode, stdout, stderr) = await RunAsync([
-                                                     "-e",
-                                                     ToWslPath(venvPython),
-                                                     ToWslPath(driverPath),
-                                                     ToWslPath(configurationPath)
-                                                 ], CancellationToken).ConfigureAwait(false);
+                var (exitCode, stdout, stderr) = await RunAsync([ .. Command, ToWslPath(configurationPath) ],
+                                                               CancellationToken).ConfigureAwait(false);
 
-                // The driver reports a failed *SSH operation* as ok=false with exit code 0; a non-zero exit
+                // A driver reports a failed *SSH operation* as ok=false with exit code 0; a non-zero exit
                 // means the driver itself broke, which is a harness bug and must be loud.
                 if (exitCode != 0)
                     throw new InvalidOperationException(
-                              $"The '{Driver}' peer driver failed (exit {exitCode}).\nstdout:\n{stdout}\nstderr:\n{stderr}");
+                              $"The '{Name}' peer driver failed (exit {exitCode}).\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
-                var result = JsonSerializer.Deserialize<PeerRunResult>(stdout, jsonOptions)
-                                 ?? throw new InvalidOperationException($"The '{Driver}' peer driver produced no JSON.\nstdout:\n{stdout}");
-
-                return result;
+                return JsonSerializer.Deserialize<PeerRunResult>(stdout, jsonOptions)
+                           ?? throw new InvalidOperationException($"The '{Name}' peer driver produced no JSON.\nstdout:\n{stdout}");
 
             }
             finally

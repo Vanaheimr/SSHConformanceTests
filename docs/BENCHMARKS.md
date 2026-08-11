@@ -17,7 +17,7 @@ Where things stand:
 Reproduce with:
 
 ```bash
-dotnet run --project HermodSSHBenchmarks -c Release -- --filter "*"
+dotnet run --project Benchmarks -c Release -- --filter "*"
 ```
 
 Release is required — BenchmarkDotNet refuses a debug build. Add `--job short` for a quick look, but see
