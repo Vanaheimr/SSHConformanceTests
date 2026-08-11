@@ -198,46 +198,55 @@ Principle: **no self-implemented crypto primitives** — in-house code only for 
 
 Following the conventions of the sibling projects (own git repo, `.slnx`, `net10.0`, `Nullable`, `ImplicitUsings`, `LangVersion latest`, block-scoped namespaces per the GraphDefined template, logging via `Microsoft.Extensions.Logging` + Serilog):
 
+**Relocated 2026-08-11:** the implementation and its test suite moved **into the `libs/Hermod` submodule**.
+SSH is now a folder of the `Hermod` project — peer to `DNS/`, `HTTP/`, `SMTP/`, `TCP/` — and ships in the
+`org.GraphDefined.Vanaheimr.Hermod` assembly. This repository became the harness around it: demo CLI,
+benchmarks, conformance report. The `Client`/`Server` layering survives as a source convention rather than
+an assembly boundary (superseding decision §13.2).
+
 ```
-SSH/
-├── SSH.slnx
+SSH/                            ← this repository: the conformance harness
+├── SSH.slnx                    (/Dependencies/ folder: Hermod.csproj, HermodTests.csproj, Styx.csproj)
 ├── libs/                       ← git submodules (same pattern as the sibling projects)
 │   ├── Hermod/                 Vanaheimr Hermod — networking stack incl. DNS client (SSHFP!),
-│   │                           TCP server infrastructure, PKI, logging
+│   │   │                       TCP server infrastructure, PKI, logging … and now SSH:
+│   │   ├── Hermod/SSH/         ← THE IMPLEMENTATION
+│   │   │   ├── Core/           wire format (reader/writer), constants, message numbers,
+│   │   │   │                   name-list negotiation, error/disconnect codes
+│   │   │   ├── Crypto/         ISshCryptoProvider, KEX implementations (incl. PQ hybrid),
+│   │   │   │                   cipher/MAC/AEAD, key derivation (KDF), registry
+│   │   │   ├── Keys/           SshPublicKey/SshPrivateKey (Ed25519/ECDSA/RSA), SshKeyGenerator,
+│   │   │   │                   formats: openssh-key-v1 (+bcrypt_pbkdf), PKCS#8/PEM, RFC 4716,
+│   │   │   │                   authorized_keys, known_hosts, OpenSshCertificate (+builder = mini-CA),
+│   │   │   │                   revocation
+│   │   │   ├── Transport/      version exchange, binary packet protocol (Pipelines), KEX state machine,
+│   │   │   │                   rekeying, strict KEX, ext-info  (symmetric — shared by both roles)
+│   │   │   ├── Connection/     channels + window/flow control, channel/global requests, NetworkAcl
+│   │   │   ├── Forwarding/     direct-tcpip, tcpip-forward, ProxyJump, ssh-agent, SSHFP
+│   │   │   ├── SFTP/           SFTP protocol types (packets, attrs, status), client + server
+│   │   │   ├── Recording/      asciicast v2 writer/reader, session + SFTP transcript recorders
+│   │   │   ├── Auth/           auth policy/methods, TOTP, audit event model + ISshAuditSink
+│   │   │   ├── Client/         SshClient façade  ┐ layering is a source convention now:
+│   │   │   └── Server/         SshServer façade  ┘ Client → foundation ← Server, never each other
+│   │   └── HermodTests/SSH/    ← the NUnit suite (unit, loopback, interop)
+│   │       └── interop/        interop harness assets: scripts, Dockerfiles, peer configs
 │   └── Styx/                   Vanaheimr Styx — base utilities (Illias)
-├── HermodSSH.Core/            ← shared foundation; both client and server depend on it
-│   ├── Core/                   wire format (reader/writer), constants, message numbers,
-│   │                           name-list negotiation, error/disconnect codes
-│   ├── Crypto/                 ISshCryptoProvider, KEX implementations (incl. PQ hybrid),
-│   │                           cipher/MAC/AEAD, key derivation (KDF), registry
-│   ├── Keys/                   SshPublicKey/SshPrivateKey (Ed25519/ECDSA/RSA), SshKeyGenerator,
-│   │                           formats: openssh-key-v1 (+bcrypt_pbkdf), PKCS#8/PEM, RFC 4716,
-│   │                           authorized_keys, known_hosts, OpenSshCertificate (+builder = mini-CA),
-│   │                           revocation
-│   ├── Transport/              version exchange, binary packet protocol (Pipelines), KEX state machine,
-│   │                           rekeying, strict KEX, ext-info  (symmetric — shared by both roles)
-│   ├── Connection/             channels + window/flow control, channel/global requests, NetworkAcl
-│   ├── Sftp/                   SFTP protocol types (packets, attrs, status)  — shared
-│   └── Audit/                  SshAuditEvent model + ISshAuditSink
-├── HermodSSH.Client/          ← depends on Core
-│   ├── SshClient, SshCommand, host key verification/policies, SshAgentClient, ProxyJump,
-│   └── client auth methods, SftpClient, client-side forwarding
-├── HermodSSH.Server/          ← depends on Core
-│   ├── SshServer, auth pipeline (authorized_keys, certs, TOTP), access profiles, banner,
-│   └── SftpSubsystem, ISftpFileSystem (local with root jail, in-memory), session recording
-├── HermodSSHTests/             ← NUnit (unit, loopback, interop)
-│   └── interop/                interop harness assets: scripts, Dockerfiles, peer configs
-└── HermodSSHDemo/              ← CLI to set up a server and connect clients (references Client + Server)
+├── HermodSSHDemo/              ← the `hermod-ssh` CLI (references Hermod + Styx)
+├── HermodSSHTests/             ← demo-CLI tests only; the rest lives in the submodule, which
+│                                 cannot reference this repository
+├── HermodSSHBenchmarks/        ← BenchmarkDotNet suite → docs/BENCHMARKS.md
+└── HermodSSHInteropReport/     ← TRX → docs/INTEROP-MATRIX.md generator
 ```
 
-`SSH.slnx` references the submodule projects in a `/Dependencies/` solution folder
-(`libs/Hermod/Hermod/Hermod.csproj`, `libs/Styx/Styx/Styx.csproj`) — exactly like SMTPServer.
+Consequence for day-to-day work: a library or test change is **two commits** — the submodule first, then the
+pointer bump here (push order in §13.5). Running only the SSH tests:
+`dotnet test libs/Hermod/HermodTests/HermodTests.csproj --filter FullyQualifiedName~Hermod.SSH.Tests`.
 
-**Three packages** (`HermodSSH.Core` / `.Client` / `.Server`): the transport, crypto, keys and SFTP protocol are shared and live in **Core** (root namespace `org.GraphDefined.Vanaheimr.Hermod.SSH`, SFTP under `….SSH.SFTP`); the high-level client and server APIs live in **Client** (`….SSH.Client`) and **Server** (`….SSH.Server`), each depending only on Core. **BouncyCastle** (X25519/Ed25519/sntrup761/ChaCha20/…) plus Hermod's DNS/TCP/PKI/logging arrive **transitively through the `libs/Hermod` + `libs/Styx` submodule references on Core** — no direct package reference.
+**One assembly** (`org.GraphDefined.Vanaheimr.Hermod`, superseding the three-package split of §13.2): transport, crypto, keys and the SFTP protocol sit under the root namespace `org.GraphDefined.Vanaheimr.Hermod.SSH` (SFTP under `….SSH.SFTP`), the high-level APIs under `….SSH.Client` / `….SSH.Server`. **BouncyCastle** (X25519/Ed25519/sntrup761/ChaCha20/…) plus Hermod's DNS/TCP/PKI/logging are available directly — no extra package reference. The harness projects in this repository reference `Hermod.csproj` + `Styx.csproj`.
 
 ### Code conventions
 
-Every `.cs` file follows the GraphDefined template (verbatim header in `CLAUDE.md`): Apache-2.0 license header (© 2010-2026 GraphDefined GmbH, "This file is part of Vanaheimr Hermod" — this repo is part of that ecosystem), `#region Usings` block, **block-scoped** namespace. Namespaces: `org.GraphDefined.Vanaheimr.Hermod.SSH` (library), `….SSH.SFTP` (SFTP), `….SSH.Tests` (NUnit), `….SSH.CLI` (demo). Project folders keep their names (`HermodSSH`, `HermodSSHTests`, `HermodSSHDemo`) with `<RootNamespace>` set accordingly. All code, XML docs, comments and commit messages in English.
+Every `.cs` file follows the GraphDefined template (verbatim header in `CLAUDE.md`): Apache-2.0 license header (© 2010-2026 GraphDefined GmbH, "This file is part of Vanaheimr Hermod" — this repo is part of that ecosystem), `#region Usings` block, **block-scoped** namespace. Namespaces: `org.GraphDefined.Vanaheimr.Hermod.SSH` (library), `….SSH.SFTP` (SFTP), `….SSH.Tests` (NUnit), `….SSH.CLI` (demo) — unchanged by the 2026-08-11 relocation, since they were always nested under `Hermod`. The header line "This file is part of Vanaheimr Hermod" is now literally true. All code, XML docs, comments and commit messages in English.
 
 ### Layer model
 
@@ -753,7 +762,7 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 | PuTTY `plink`/`psftp` (Windows + `putty-tools` on Linux) | client only | user certs (≥ 0.78) | sntrup761 (≥ 0.78), ML-KEM (≥ 0.83 ✓; 0.84 current) | independent lineage; famous quirks (`winadj@…`); exercises our **server** |
 | AsyncSSH (Python) | both | yes (user+host, can also issue) | mlkem (≥ 2.18; since 2.24 via PyCA cryptography, no liboqs needed), sntrup761 (still needs liboqs) | most scriptable feature-rich peer; great for cert edge cases + SFTP v4–v6 negotiation |
 | Paramiko (Python) | both | client-side certs (partial) | no (✓ through 5.0.0) | very widely deployed; conservative algorithm set; 5.0 drops all SHA-1 KEX + GSSAPI, adds AES-GCM |
-| Go `x/crypto/ssh` (small test harness binaries) | both | yes (first-class) | mlkem768 (≥ v0.38.0, default-first; no sntrup761) | strict, spec-literal implementation — catches sloppiness; harness sources live in `HermodSSHTests/interop/go/` |
+| Go `x/crypto/ssh` (small test harness binaries) | both | yes (first-class) | mlkem768 (≥ v0.38.0, default-first; no sntrup761) | strict, spec-literal implementation — catches sloppiness; harness sources live in `libs/Hermod/HermodTests/SSH/interop/go/` |
 | SSH.NET (NuGet) | client only, **in-process** | no | sntrup761 + mlkem768 (≥ 2025.0.0 ✓ — our in-process test negotiates ML-KEM) | runs directly inside NUnit — zero orchestration cost, fast server-role smoke tests; pinned at 2026.0.0 |
 | curl with libssh/libssh2 (SFTP) | client only | n/a | n/a | exercises our SFTP server through a completely different stack |
 
@@ -772,14 +781,14 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 ### 11.2 Environments
 
 **WSL2 (primary local environment, explicitly in scope):**
-- Ubuntu LTS distro with an idempotent setup script `HermodSSHTests/interop/setup-wsl.sh`: `openssh-server openssh-client dropbear-bin tinysshd putty-tools curl socat` + a Python venv with `asyncssh`/`paramiko` (+ optional Go toolchain for the x/crypto harness)
+- Ubuntu LTS distro with an idempotent setup script `libs/Hermod/HermodTests/SSH/interop/setup-wsl.sh`: `openssh-server openssh-client dropbear-bin tinysshd putty-tools curl socat` + a Python venv with `asyncssh`/`paramiko` (+ optional Go toolchain for the x/crypto harness)
 - Orchestration from NUnit via `wsl.exe -e …`; test instances only (no system sshd): `sshd -D -e -f <tempconfig>` as a non-root user on high ports, per-test host keys/`TrustedUserCAKeys`/`RevokedKeys`
 - **Networking:** Windows → WSL works via `localhost` (localhostForwarding). WSL → Windows host needs the host IP (default route) in NAT mode — or enable `networkingMode=mirrored` in `.wslconfig` (Windows 11) so `localhost` works in both directions. The harness auto-detects both setups.
 - **Key permission gotcha:** private keys on `/mnt/c` appear world-readable → OpenSSH refuses them. The harness always copies key material into the WSL home directory and `chmod 600`s it.
 - `tinysshd` is inetd-style → run it under `socat`/systemd socket activation.
 
 **Docker / Testcontainers (version matrix + CI):**
-- Dockerfiles per peer+version under `HermodSSHTests/interop/docker/`; orchestrated from NUnit via the `Testcontainers` NuGet package
+- Dockerfiles per peer+version under `libs/Hermod/HermodTests/SSH/interop/docker/`; orchestrated from NUnit via the `Testcontainers` NuGet package
 - Covers the OpenSSH version spread (8.9/9.6/9.9/10.x), Dropbear, TinySSH, MINA, AsyncSSH, libssh — reproducible locally and in CI (hosted CI runners have no WSL; containers provide the same peers there)
 
 **Windows native:** Win32-OpenSSH (`ssh`, `sshd`, `sftp`, `ssh-keygen`, `ssh-agent` incl. the named-pipe agent), PuTTY `plink`/`psftp`, WinSCP CLI.
@@ -882,21 +891,21 @@ Ordering logic: first the **narrow modern path** (Ed25519 + Curve25519 + AES-GCM
 | Scope creep (SSH is huge) | non-goals list, milestone gates, legacy only as opt-in |
 
 ### Open decisions (please confirm/decide)
-1. ✅ **Naming — resolved (2026-07-23):** namespace `org.GraphDefined.Vanaheimr.Hermod.SSH` (+ `.SFTP`/`.Tests`/`.CLI`) with the GraphDefined Apache-2.0 file header on every `.cs` file (template in `CLAUDE.md`). Project folders stay `HermodSSH`/`HermodSSHTests`/`HermodSSHDemo` with `<RootNamespace>` set.
-2. ✅ **Package split — resolved (2026-07-23):** three packages `HermodSSH.Core` / `.Client` / `.Server` (shared foundation in Core, high-level APIs in Client/Server), not one assembly.
-3. ✅ **BouncyCastle — resolved (2026-07-23):** yes, used, and it arrives **transitively via the `libs/Hermod` + `libs/Styx` submodules** (both reference `BouncyCastle.Cryptography` 2.7.0 — bumped 2026-08 for the 2.7.0 security release) — Core references the submodules, no direct package needed.
+1. ✅ **Naming — resolved (2026-07-23):** namespace `org.GraphDefined.Vanaheimr.Hermod.SSH` (+ `.SFTP`/`.Tests`/`.CLI`) with the GraphDefined Apache-2.0 file header on every `.cs` file (template in `CLAUDE.md`). The namespaces survived the 2026-08-11 relocation into the Hermod submodule unchanged — they were always nested under `Hermod`.
+2. ✅ **Package split — resolved (2026-07-23), superseded (2026-08-11):** the original decision was three packages `HermodSSH.Core` / `.Client` / `.Server`. The implementation has since **moved into the `libs/Hermod` submodule** as `Hermod/SSH/` (with `Client/` and `Server/` as subfolders) and now ships **inside the `org.GraphDefined.Vanaheimr.Hermod` assembly**, like DNS, HTTP, SMTP and TCP. The layering is preserved as a source convention. No separate HermodSSH NuGet packages — which also settles the packaging item left open in M10.
+3. ✅ **BouncyCastle — resolved (2026-07-23):** yes, used; `libs/Hermod` + `libs/Styx` both reference `BouncyCastle.Cryptography` 2.7.0 (bumped 2026-08 for the 2.7.0 security release). Since the SSH code now lives inside Hermod itself, that reference is direct rather than transitive — still no extra package on our side.
 4. ✅ **Demo CLI — resolved (2026-07-23):** yes, `HermodSSHDemo` is a wanted first-class deliverable for standing up a server and connecting clients (command design in §5). Scaffolded in M0, grows with the features, polished in M10.
 5. ⬜ **CI provider** for the nightly interop matrix — *the original blocker ("repo is local-only") no longer applies (2026-07-24):* the repo is published to **two self-hosted remotes**, `origin` = `git.graphdefined.com:5001` and the `git2` mirror on `:5002` (same pair for the `libs/Hermod` + `libs/Styx` submodules; both must be pushed, submodule before parent). No CI configuration exists yet in this repo or in either submodule. Remote merge commits use GitLab's default message format, so a **self-hosted GitLab CI** is presumably available — please confirm, versus GitHub Actions on the public `github.com/Vanaheimr` mirrors. Practical constraints either way, from §11.6: a **Linux runner** (Docker/apt for the Tier-2 peers — Dropbear, TinySSH, AsyncSSH, Paramiko, Go `x/crypto/ssh`) **plus a Windows runner** (Win32-OpenSSH, `plink`); the checkout must be **recursive**, and reaching the internal submodule URLs needs a deploy key. Note SSH.NET runs **in-process inside NUnit**, so that Tier-2 peer needs no CI infrastructure at all and can land before this is decided.
 6. ⬜ Tier 3 peers: any that matter specifically to you (e.g. WinSCP because your users use it)? Commercial peers (Rebex) only if a license exists
-7. ✅ **Hermod DNS integration — resolved (2026-07-23):** Vanaheimr Hermod + Styx are vendored as git submodules under `libs/` (internal `git.graphdefined.com` URLs, same as SMTPServer). The SSHFP adapter binds to the Hermod DNS client and lives in this repo; HermodSSH core still only depends on `ISshfpResolver`.
+7. ✅ **Hermod DNS integration — resolved (2026-07-23):** Vanaheimr Hermod + Styx are vendored as git submodules under `libs/` (internal `git.graphdefined.com` URLs, same as SMTPServer). The SSHFP adapter binds to the Hermod DNS client; the SSH core still only depends on `ISshfpResolver`. Since 2026-08-11 both live in the same repository and assembly.
 
 ---
 
 ## 14. First Concrete Steps (M0)
 
 0. ✅ Git repo on `master` + `.gitignore`, `libs/Hermod` & `libs/Styx` submodules, conventions (`CLAUDE.md`: file template, namespace)
-1. ✅ Create `SSH.slnx` + `HermodSSH.Core`/`.Client`/`.Server` (net10.0) + `HermodSSHTests` (NUnit) + `HermodSSHDemo`, Hermod/Styx submodules referenced on Core, adopting the sibling-project conventions
+1. ✅ Create `SSH.slnx` + `HermodSSH.Core`/`.Client`/`.Server` (net10.0) + `HermodSSHTests` (NUnit) + `HermodSSHDemo`, Hermod/Styx submodules referenced on Core, adopting the sibling-project conventions *(that layout held until 2026-08-11, when the library and its tests moved into the Hermod submodule — see §5)*
 2. ✅ Implement `Core/SshPacketReader|Writer` + constants (`SshMessageNumber`, `DisconnectReason`)
 3. ✅ NUnit suite for the wire format incl. error cases (38 tests green)
-4. ✅ Set up WSL prerequisites (`HermodSSHTests/interop/setup-wsl.sh`, idempotent, syntax-checked under WSL) so the M1 interop harness has a target from day one; `.gitattributes` keeps `*.sh` LF
+4. ✅ Set up WSL prerequisites (`libs/Hermod/HermodTests/SSH/interop/setup-wsl.sh`, idempotent, syntax-checked under WSL) so the M1 interop harness has a target from day one; `.gitattributes` keeps `*.sh` LF
 5. ⬜ Then straight into M1: version exchange + KEXINIT, compared against a local OpenSSH server

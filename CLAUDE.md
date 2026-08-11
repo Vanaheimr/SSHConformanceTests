@@ -43,18 +43,28 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH
 
 ## Namespaces
 
-| Project | Area | Namespace |
-|---|---|---|
-| `HermodSSH.Core`   | Shared foundation (wire format, crypto, keys, transport, connection) | `org.GraphDefined.Vanaheimr.Hermod.SSH` |
-| `HermodSSH.Core`   | SFTP protocol types | `org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP` |
-| `HermodSSH.Client` | High-level client API | `org.GraphDefined.Vanaheimr.Hermod.SSH.Client` |
-| `HermodSSH.Server` | High-level server API | `org.GraphDefined.Vanaheimr.Hermod.SSH.Server` |
-| `HermodSSHTests`   | NUnit tests | `org.GraphDefined.Vanaheimr.Hermod.SSH.Tests` |
-| `HermodSSHDemo`    | Demo CLI | `org.GraphDefined.Vanaheimr.Hermod.SSH.CLI` |
+**The SSH implementation lives in the `libs/Hermod` submodule** (moved there 2026-08-11): it is a folder
+of the `Hermod` project, exactly like `DNS/`, `HTTP/`, `SMTP/` and `TCP/`, and ships in the
+`org.GraphDefined.Vanaheimr.Hermod` assembly. This repository is the conformance harness around it.
 
-Dependency direction: `Client` → `Core` ← `Server` (Client and Server never reference each other).
-`Core` references the `libs/Hermod` + `libs/Styx` submodules, which bring **BouncyCastle** (2.7.0) and
-Hermod's DNS/TCP/PKI/logging transitively — do **not** add a direct `BouncyCastle.Cryptography` package.
+| Location | Area | Namespace |
+|---|---|---|
+| `libs/Hermod/Hermod/SSH/`         | Foundation (wire format, crypto, keys, transport, connection) | `org.GraphDefined.Vanaheimr.Hermod.SSH` |
+| `libs/Hermod/Hermod/SSH/SFTP/`    | SFTP protocol types | `org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP` |
+| `libs/Hermod/Hermod/SSH/Client/`  | High-level client API | `org.GraphDefined.Vanaheimr.Hermod.SSH.Client` |
+| `libs/Hermod/Hermod/SSH/Server/`  | High-level server API | `org.GraphDefined.Vanaheimr.Hermod.SSH.Server` |
+| `libs/Hermod/HermodTests/SSH/`    | NUnit tests (unit, loopback, interop) | `org.GraphDefined.Vanaheimr.Hermod.SSH.Tests` |
+| `HermodSSHDemo/`                  | Demo CLI | `org.GraphDefined.Vanaheimr.Hermod.SSH.CLI` |
+| `HermodSSHTests/`                 | Demo-CLI tests only (a submodule cannot reference this repo) | `org.GraphDefined.Vanaheimr.Hermod.SSH.Tests` |
+| `HermodSSHBenchmarks/`            | BenchmarkDotNet suite | `org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks` |
+| `HermodSSHInteropReport/`         | TRX → interop-matrix generator | `org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport` |
+
+Layering inside `SSH/`: `Client/` → foundation ← `Server/` (Client and Server never reference each other) —
+now a source convention rather than an assembly boundary. **BouncyCastle** (2.7.0) and Hermod's
+DNS/TCP/PKI/logging are available directly — do **not** add a direct `BouncyCastle.Cryptography` package.
+
+Because the library and its tests moved into the submodule, a change to either usually means **two
+commits** (submodule first, then the pointer bump here) — see the push order in [PLAN.md](PLAN.md) §13.5.
 
 ## Other conventions
 

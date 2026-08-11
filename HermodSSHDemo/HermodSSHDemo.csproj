@@ -10,10 +10,10 @@
     <AssemblyName>hermod-ssh</AssemblyName>
   </PropertyGroup>
 
+  <!-- The SSH implementation (client, server, SFTP) lives in the Hermod submodule under Hermod/SSH. -->
   <ItemGroup>
-    <ProjectReference Include="..\HermodSSH.Core\HermodSSH.Core.csproj" />
-    <ProjectReference Include="..\HermodSSH.Client\HermodSSH.Client.csproj" />
-    <ProjectReference Include="..\HermodSSH.Server\HermodSSH.Server.csproj" />
+    <ProjectReference Include="..\libs\Hermod\Hermod\Hermod.csproj" />
+    <ProjectReference Include="..\libs\Styx\Styx\Styx.csproj" />
   </ItemGroup>
 
 </Project>

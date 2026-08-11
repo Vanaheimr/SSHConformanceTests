@@ -22,13 +22,12 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="SSH.NET" Version="2026.0.0" />
   </ItemGroup>
 
+  <!-- Only the demo-CLI tests live here: the SSH library and its own test suite moved into the
+       Hermod submodule (Hermod/SSH and HermodTests/SSH), and a submodule cannot reference this
+       repository's demo CLI. -->
   <ItemGroup>
-    <ProjectReference Include="..\HermodSSH.Core\HermodSSH.Core.csproj" />
-    <ProjectReference Include="..\HermodSSH.Client\HermodSSH.Client.csproj" />
-    <ProjectReference Include="..\HermodSSH.Server\HermodSSH.Server.csproj" />
     <ProjectReference Include="..\HermodSSHDemo\HermodSSHDemo.csproj" />
   </ItemGroup>
 

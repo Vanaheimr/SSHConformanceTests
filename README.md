@@ -35,15 +35,20 @@ ecosystem.
 
 ## Projects
 
-| Project             | Description                                                       |
-|---------------------|------------------------------------------------------------------|
-| `HermodSSH.Core`    | Shared foundation — wire format, crypto, keys, transport, SFTP    |
-| `HermodSSH.Client`  | High-level client API (depends on Core)                          |
-| `HermodSSH.Server`  | High-level server API (depends on Core)                          |
-| `HermodSSHTests`    | NUnit test suite (unit, loopback, interop)                       |
-| `HermodSSHDemo`     | The `hermod-ssh` CLI to set up a server and connect clients      |
-| `libs/Hermod`       | Vanaheimr Hermod submodule (DNS, TCP, PKI, logging; BouncyCastle) |
-| `libs/Styx`         | Vanaheimr Styx submodule (base utilities; BouncyCastle)          |
+The SSH implementation itself lives in the **Hermod submodule** — it is a folder of the `Hermod`
+project, like `DNS/`, `HTTP/` and `TCP/`, and ships inside the `org.GraphDefined.Vanaheimr.Hermod`
+assembly. This repository is the harness around it: demo CLI, benchmarks and the conformance report.
+
+| Location                         | Description                                                     |
+|----------------------------------|-----------------------------------------------------------------|
+| `libs/Hermod/Hermod/SSH/`        | The implementation — wire format, crypto, keys, transport, SFTP, plus `Client/` and `Server/` |
+| `libs/Hermod/HermodTests/SSH/`   | NUnit test suite (unit, loopback, interop)                      |
+| `HermodSSHDemo/`                 | The `hermod-ssh` CLI to set up a server and connect clients     |
+| `HermodSSHTests/`                | Tests for the demo CLI (the rest moved into the submodule)      |
+| `HermodSSHBenchmarks/`           | BenchmarkDotNet suite (see [docs/BENCHMARKS.md](docs/BENCHMARKS.md)) |
+| `HermodSSHInteropReport/`        | Turns an interop test run into [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md) |
+| `libs/Hermod`                    | Vanaheimr Hermod submodule (SSH, DNS, TCP, PKI, logging; BouncyCastle) |
+| `libs/Styx`                      | Vanaheimr Styx submodule (base utilities; BouncyCastle)         |
 
 ## Build & test
 
@@ -53,8 +58,14 @@ dotnet build SSH.slnx
 dotnet test  SSH.slnx
 ```
 
-`HermodSSH.Core` references the `libs/Hermod` and `libs/Styx` submodules, which provide BouncyCastle
-and Hermod's DNS/TCP/PKI/logging transitively — clone with `--recurse-submodules`.
+Cloning **must** use `--recurse-submodules`: the implementation and its tests live in `libs/Hermod`,
+which also provides BouncyCastle and Hermod's DNS/TCP/PKI/logging.
+
+`dotnet test SSH.slnx` runs the whole Hermod test suite. To run only the SSH tests:
+
+```bash
+dotnet test libs/Hermod/HermodTests/HermodTests.csproj --filter FullyQualifiedName~Hermod.SSH.Tests
+```
 
 ## Demo CLI
 
