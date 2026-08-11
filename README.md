@@ -14,8 +14,8 @@ ecosystem.
 
 ## Interoperability
 
-Every feature has to work against implementations that share no code with ours. Seven do so on this
-machine — **77 checks pass, none fail** — and the generated per-test detail is in
+Every feature has to work against implementations that share no code with ours. Eight do —
+**80 checks pass, none fail** — and the generated per-test detail is in
 [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md). What is *not* covered is listed just as plainly,
 because a matrix that only shows green teaches nothing.
 
@@ -28,7 +28,7 @@ because a matrix that only shows green teaches nothing.
 | **Paramiko** | 5.0.0 | their client → our server | classical key exchange, exec, SFTP, host-key refusal, **clean failure when no algorithm is shared** | no post-quantum support exists in Paramiko to test |
 | **SSH.NET** | 2026.0.0 | their client → our server (**in-process**) | ML-KEM negotiation, exec, SFTP, host-key refusal, several sessions on one connection | — (runs everywhere, so it gates every commit) |
 | **TinySSH** | 20250601 | **our client** → their server | `sntrup761x25519-sha512` and `curve25519-sha256` on the most minimal server there is, host-key verification | authentication: TinySSH only reads the real `~/.ssh/authorized_keys`, and no test may write a usable key into a developer's account |
-| **Go `x/crypto/ssh`** | v0.54.0 | their client → our server | post-quantum `mlkem768x25519-sha256`, exec, host-key refusal, and our `openssh-key-v1` read with no conversion | **skipped until a Go toolchain is installed** — the harness in `Tests/interop/go/` is compiled on demand |
+| **Go `x/crypto/ssh`** | v0.54.0 | their client → our server | post-quantum `mlkem768x25519-sha256`, exec + exit status, host-key refusal, and our `openssh-key-v1` read with **no conversion step** | SFTP (a separate module), certificates; the harness in `Tests/interop/go/` needs a Go toolchain and is compiled on demand |
 
 **Known gaps.** Certificates are so far only proven against OpenSSH. curl/libssh,
 WinSCP, FileZilla and Apache MINA SSHD are planned but not wired in. Everything above runs on a
@@ -59,7 +59,7 @@ counted as passing — the matrix distinguishes "disagreed" from "no evidence ei
   `TimeProvider`-driven timeouts, constant-time comparisons
 - ✅ **High-level façade** — `SshClient`/`SshServer` over a connection multiplexer: exec, SFTP,
   `direct-tcpip` and remote `-R` all concurrent on one connection; host-key rotation (`hostkeys-00@openssh.com`)
-- ✅ **IPv6 first-class**, and interoperability against seven independent implementations (see above)
+- ✅ **IPv6 first-class**, and interoperability against eight independent implementations (see above)
 
 ## Projects
 

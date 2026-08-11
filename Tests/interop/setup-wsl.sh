@@ -57,14 +57,20 @@ if [[ "${CHECK_ONLY}" -eq 0 ]]; then
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${APT_PACKAGES[@]}"
 
     log "Creating the Python virtual environment for AsyncSSH / Paramiko ..."
-    if [[ ! -d "${VENV_DIR}" ]]; then
-        python3 -m venv "${VENV_DIR}"
+
+    # --copies, because symlinks do not survive a move across the /mnt boundary.
+    if [[ ! -x "${VENV_DIR}/bin/python3" ]]; then
+        rm -rf "${VENV_DIR}"
+        python3 -m venv --copies "${VENV_DIR}"
     fi
-    # shellcheck disable=SC1091
-    source "${VENV_DIR}/bin/activate"
-    pip install --quiet --upgrade pip
-    pip install --quiet asyncssh paramiko
-    deactivate
+
+    # The interpreter is invoked directly rather than through 'activate'. That script hard-codes the
+    # absolute path the environment was created at, so after the checkout is moved or renamed it
+    # silently points nowhere — 'pip' then resolves to the system one and Debian rejects it with
+    # "externally-managed-environment" (PEP 668). Going through the venv's own python3 cannot miss.
+    "${VENV_DIR}/bin/python3" -m pip install --quiet --upgrade pip
+    "${VENV_DIR}/bin/python3" -m pip install --quiet asyncssh paramiko
+
 fi
 
 # ---------------------------------------------------------------------------------------------------
