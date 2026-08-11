@@ -55,7 +55,7 @@ counted as passing — the matrix distinguishes "disagreed" from "no evidence ei
   keepalive + idle timeouts, session recording (asciicast v2 + SFTP transcript)
 - ✅ **SFTP v3** — client + server, pipelined transfers, seekable `SftpFileStream`, root-jailed local FS,
   least-privilege **access profiles** (upload-only / download-only), **quotas & bandwidth** limits,
-  OpenSSH extensions (posix-rename / statvfs / limits@…); validated against the real `sftp` CLI
+  OpenSSH extensions (posix-rename / statvfs / fstatvfs / fsync / limits@…); validated against the real `sftp` CLI
 - ✅ **Port forwarding** — `direct-tcpip` tunnels and remote `-R` (`tcpip-forward`) with a **NetworkAcl**
   engine + `ForwardingPolicy` presets (loopback / private / subnet, DNS-rebinding safe),
   **ProxyJump** (SSH-over-SSH)
