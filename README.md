@@ -5,10 +5,12 @@ including **SFTP**, **post-quantum hybrid key exchange**, **public-key authentic
 **OpenSSH certificates**. Part of the [Vanaheimr Hermod](https://www.github.com/Vanaheimr/Hermod)
 ecosystem.
 
-> **Status:** the modern core is working and validated against real OpenSSH. Milestones **M0–M8**
-> are complete (M8 bar remote `-R` forwarding), **M9/M10** are largely in place. The full design,
-> feature set, milestones (M0–M10) and the interoperability test program live in [PLAN.md](PLAN.md);
-> repository conventions are in [CLAUDE.md](CLAUDE.md). Progress is tracked with ✅ / 🔶 / ⬜ markers.
+> **Status:** milestones **M0–M8 are complete** — transport, post-quantum key exchange, authentication,
+> keys and certificates, the connection layer, SFTP v3 and forwarding, all validated against real
+> implementations. **M9** (hardening, audit stream, fuzz suite, security review) and **M10** (demo CLI,
+> benchmarks) are in place bar the nightly CI matrix, which needs a runner decision. The full design,
+> feature set and the interoperability test program live in [PLAN.md](PLAN.md); repository conventions
+> are in [CLAUDE.md](CLAUDE.md). Progress is tracked with ✅ / 🔶 / ⬜ markers.
 
 ## Features
 
@@ -26,12 +28,16 @@ ecosystem.
 - ✅ **SFTP v3** — client + server, pipelined transfers, seekable `SftpFileStream`, root-jailed local FS,
   least-privilege **access profiles** (upload-only / download-only), **quotas & bandwidth** limits,
   OpenSSH extensions (posix-rename / statvfs / limits@…); validated against the real `sftp` CLI
-- ✅ **Port forwarding** — `direct-tcpip` tunnels with a **NetworkAcl** engine + `ForwardingPolicy`
-  presets (loopback / private / subnet, DNS-rebinding safe), **ProxyJump** (SSH-over-SSH)
+- ✅ **Port forwarding** — `direct-tcpip` tunnels and remote `-R` (`tcpip-forward`) with a **NetworkAcl**
+  engine + `ForwardingPolicy` presets (loopback / private / subnet, DNS-rebinding safe),
+  **ProxyJump** (SSH-over-SSH)
 - ✅ **Hardening & observability** — typed audit event stream (SIEM-ready), keystroke-timing obfuscation,
   `TimeProvider`-driven timeouts, constant-time comparisons
-- 🔶 remote `-R` forwarding (`tcpip-forward`) and a high-level `SshClient`/`SshServer` façade are in progress
-- ✅ **IPv6 first-class**, broad **interoperability testing** against OpenSSH (client & server, `ssh-keygen`, `sftp`)
+- ✅ **High-level façade** — `SshClient`/`SshServer` over a connection multiplexer: exec, SFTP,
+  `direct-tcpip` and remote `-R` all concurrent on one connection; host-key rotation (`hostkeys-00@openssh.com`)
+- ✅ **IPv6 first-class**, and **interoperability testing against six independent implementations** —
+  OpenSSH, AsyncSSH, Paramiko and SSH.NET drive our server; our client drives TinySSH; Dropbear does
+  both (see [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md))
 
 ## Projects
 
@@ -92,8 +98,15 @@ hermod-ssh serve -a ./authorized_keys -p 2222 &
 hermod-ssh exec  -i ./id_ed25519 -p 2222 demo@127.0.0.1 "uname -a"
 ```
 
-`connect`, `sftp`, `forward` and `play` are planned; the library APIs behind them already exist and
-are covered by the loopback + interop test suites.
+`connect`, `sftp`, `forward` and `play` work too: an interactive session, SFTP put/ls/get, a local
+`-L` tunnel, and replaying a recorded session with its original timing.
+
+```bash
+hermod-ssh connect -i ./id_ed25519 -p 2222 demo@127.0.0.1
+hermod-ssh sftp    -i ./id_ed25519 -p 2222 demo@127.0.0.1 put ./firmware.bin /firmware.bin
+hermod-ssh forward -i ./id_ed25519 -p 2222 -L 8080:example.com:80 demo@127.0.0.1
+hermod-ssh play    ./session.cast --speed 2
+```
 
 ## License
 
