@@ -1,7 +1,7 @@
 # HermodSSH — interoperability matrix
 
 Generated from the interop test run — do not edit by hand.
-Run at 2026-08-11 23:15:17 UTC.
+Run at 2026-08-12 23:29:18 UTC.
 
 ## Summary
 
