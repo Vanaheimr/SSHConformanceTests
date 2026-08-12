@@ -103,24 +103,29 @@ Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the
 
 ### Optional follow-ups (non-blocking technical debt)
 
-- ⬜ **Hermod's single-`Stream` record constructors are inconsistent about RDLENGTH** *(surveyed 2026-08-12 — the
-  earlier note called this "the `SSHFP(Stream)` ctor" and understated it)*. Neither base ctor consumes
-  RDLENGTH — the read is commented out in `ADNSResourceRecord(Stream, Type)` **and** in
-  `ADNSResourceRecord(DomainName/DNSServiceName, Type, Stream)` — so by contract each record type reads it
-  itself, and whether it does depends on the record:
+- ✅ **Hermod's single-`Stream` record constructors — resolved 2026-08-12 by deleting them** (Hermod
+  `f1debe5c`, PR #10). The survey that prompted it: neither base ctor consumes RDLENGTH — the read is
+  commented out in `ADNSResourceRecord(Stream, Type)` **and** in
+  `ADNSResourceRecord(DomainName/DNSServiceName, Type, Stream)` — so by contract each record type read it
+  itself, and whether it did depended on the record:
 
-  | Constructor family | Consumes RDLENGTH | Used by the response parser |
+  | Constructor family | Consumed RDLENGTH | Used by the response parser |
   |---|---|---|
   | `(DomainName, Stream)` / `(DNSServiceName, Stream)` | **39 of 39** | ✅ the only ones `DNSInfo`'s reflection registers |
-  | `(Stream)` | **28 of 39** — missing in `A`, `AAAA`, `CNAME`, `DNAME`, `MX`, `NAPTR`, `NS`, `PTR`, `SOA`, `SRV`, `SSHFP` | ⬜ **no callers anywhere in the repository** |
+  | `(Stream)` | **28 of 39** — missing in `A`, `AAAA`, `CNAME`, `DNAME`, `MX`, `NAPTR`, `NS`, `PTR`, `SOA`, `SRV`, `SSHFP` | ⬜ **no callers anywhere** |
 
-  So the live path is uniformly correct and this cannot affect a parsed response today; the eleven wrong
-  ones are dead code. What makes it worth recording is that they are *public* and look usable: a caller
-  picking `new A(stream)` gets a stream desynchronised by two bytes, while `new TLSA(stream)` works —
-  a coin-flip API. Two honest fixes: add the missing read to the eleven, or delete the whole `(Stream)`
-  family (dead, and duplicated by the `(DomainName, Stream)` twin). Deleting is the better shape but
-  removes public API from a library other GraphDefined projects consume, so it is a decision, not a
-  cleanup. Left alone since Hermod `160cd023`.
+  The live path was uniformly correct, so no parsed response was ever affected — but the eleven broken
+  ones were *public* and looked usable: `new TLSA(stream)` worked, `new A(stream)` left the stream two
+  bytes out of step, a coin-flip API. Fixing the eleven would have preserved a family nobody called and
+  no test could meaningfully cover, so the whole family went instead: **41 files, 1012 deletions, zero
+  insertions**, and every record type keeps its `(DomainName|DNSServiceName, Stream)` twin. Verified
+  here after the bump — 244 DNS tests, 321 hermetic SSH tests, 93 interop checks, all green.
+
+  Worth remembering for whoever touches this next: DNS is the one Hermod subsystem still parsing from
+  `Stream` (1 of 88 files mentions `Span`, and only to *send* a UDP payload), where SSH is at 40 of 103
+  and QUIC at 61 of 90 with a `ref struct BufferReader`. A span reader that hands each record an
+  RDLENGTH-bounded slice would make this class of bug unexpressible rather than merely absent — the
+  right shape if DNS parsing is ever revisited, but a migration, not a fix.
 
 ---
 
