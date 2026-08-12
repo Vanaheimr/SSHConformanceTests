@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Manual runs from the Actions tab ("Run workflow"), same as Hermod's own CI.
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    # The same two legs as libs/Hermod/.github/workflows/ci.yml, for the same reasons:
+    #
+    #  * Windows, because that is where this harness is developed, and because a second,
+    #    older OpenSSH build judges us there. Note what this leg is NOT: the developer box
+    #    runs the fullest suite because WSL gives it the Linux peers, and a hosted Windows
+    #    runner has no WSL — so CI is a subset of what a local Windows run covers.
+    #  * Debian 13, because that is what Hermod runs on in production. GitHub offers no
+    #    Debian runner image, so this leg runs on an Ubuntu runner inside a debian:13
+    #    container. Deliberately NOT the official .NET SDK image: that one is still
+    #    Debian-12-based with OpenSSL 3.0, and the X25519MlKem768 hybrid key exchange
+    #    needs OpenSSL 3.5+ — on the SDK image the post-quantum checks could only skip.
+    #
+    # fail-fast is off on purpose: "red on exactly one platform" is the most valuable
+    # signal this matrix produces, so one leg must not cancel the other.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+          - os: ubuntu-latest
+            container: debian:13
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    steps:
+
+      # This runs BEFORE the checkout, which is the unusual part — and it has to.
+      # actions/checkout only produces a git clone when it finds a git binary; without one
+      # it silently falls back to downloading a source tarball over the REST API, and that
+      # path cannot fetch submodules at all. Here that would not even fail loudly: since
+      # libs/Hermod IS the library under test, a tarball checkout would just build nothing
+      # and skip everything. So git comes first.
+      #
+      # The rest is what a bare debian:13 needs before setup-dotnet can install the SDK:
+      # curl for the install script, ICU and tzdata for globalization, libssl3t64 (3.5 —
+      # this is what makes ML-KEM work) for crypto, ca-certificates for NuGet over HTTPS.
+      # Package names verified on trixie.
+      #
+      # openssh-client is the one addition beyond Hermod's list, and it is the entire point
+      # of running interop on this leg: ten fixtures start ssh, sftp and ssh-keygen directly
+      # through Process.Start and locate them on PATH alone. Measured in a local Debian 13
+      # with an otherwise identical tree — 7 of 94 checks run without the package, 40 with
+      # it. The other 33 report "No 'ssh'/'ssh-keygen' found." and skip.
+      #
+      # Trixie ships OpenSSH 10.0p2 against OpenSSL 3.5.6, and that combination is why this
+      # leg is the one that actually proves the post-quantum work: both hybrid key exchanges
+      # complete against the real client here — mlkem768x25519-sha256 and
+      # sntrup761x25519-sha512 — where an older client would negotiate neither.
+      #
+      # Deliberately NOT installed, because neither would unlock a single check:
+      #
+      #  * openssl — the command-line tool. Nothing under Tests/ invokes it; its only
+      #    mention anywhere in this repository is a comment in interop/setup-wsl.sh. The
+      #    OpenSSL *library* is a different matter and is present above as libssl3t64.
+      #  * python3-paramiko — ParamikoInteropTests reaches its peer through
+      #    interop/WslInterop.cs, whose Locate() answers "The WSL harness only applies on
+      #    Windows." before it looks at any peer at all, so the fixture skips on Linux no
+      #    matter what is installed. And on Windows it does not want a Debian package but
+      #    the virtualenv at interop/.venv-interop/, built by interop/setup-wsl.sh.
+      #  * dropbear-bin, tinysshd, putty-tools, golang-go, socat — same story: every one of
+      #    their fixtures is WSL-gated. See the comment on the test step below.
+      - name: Install git and the .NET prerequisites (Debian container)
+        if: runner.os == 'Linux'
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata openssh-client
+
+      # Unlike Hermod's own CI, which checks Styx out as a sibling directory because nothing
+      # pins it, this repository carries both dependencies as submodules — so the checkout
+      # has to recurse, and the build is reproducible at the pinned commits. Both .gitmodules
+      # URLs are public (https://github.com/Vanaheimr/...), which is what lets this work with
+      # no deploy key and no URL rewriting.
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      # ssh-agent is an interop peer in its own right, not merely a convenience:
+      # OpenSshAgentInteropTests drives our SshAgentClient against the real OpenSSH agent —
+      # listing its identities and verifying a signature it produced. That needs a reachable
+      # agent holding at least one key, and a fresh container has neither, so the check would
+      # report "No ssh-agent reachable: SSH_AUTH_SOCK is not set" and skip.
+      #
+      # ssh-agent forks into the background, so it outlives this step; SSH_AUTH_SOCK travels
+      # to the later ones through $GITHUB_ENV. The key is generated here and dies with the
+      # job — it authenticates nothing and exists only to be signed with.
+      #
+      # Not done on the Windows leg: there the agent is a system service that is disabled by
+      # default, and starting it is a service-management step that has not been verified on a
+      # hosted runner. So this single check stays skipped on Windows — deliberately, rather
+      # than by adding an unverified step.
+      - name: Start an ssh-agent holding one throwaway identity (Debian container)
+        if: runner.os == 'Linux'
+        run: |
+          eval "$(ssh-agent -s)"
+          ssh-keygen -t ed25519 -f "${RUNNER_TEMP}/ci-agent-key" -N "" -q
+          ssh-add -q "${RUNNER_TEMP}/ci-agent-key"
+          echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "${GITHUB_ENV}"
+
+      - name: Build
+        run: dotnet build Tests/Tests.csproj --configuration Release
+
+      # What this gate does and does not cover.
+      #
+      # Ten fixtures drive real OpenSSH binaries in-process and run on both legs:
+      # OpenSshAuth, OpenSshCertificate, OpenSshExec, OpenSshHostKeyRotation,
+      # OpenSshKeyFormat, OpenSshSftp, OpenSshSshfp, OpenSshTransport (all needing
+      # openssh-client), OpenSshAgent (needing the agent above) and SshNet — the last one a
+      # pure-managed NuGet peer that needs nothing installed at all.
+      #
+      # Eight fixtures skip on Linux and say so: AsyncSsh, CurlLibSsh, Dropbear,
+      # GoCryptoSsh, OpenSshServer, Paramiko, Plink and TinySsh all reach their peer through
+      # interop/WslInterop.cs, which is a wsl.exe harness and refuses outright on anything
+      # that is not Windows. Installing their peers here would change nothing — the gate is
+      # the harness, not the package. Giving WslInterop a native Linux path would flip all
+      # eight in one move and is the obvious next step for this workflow; until then their
+      # "The WSL harness only applies on Windows." is expected output, not a defect.
+      #
+      # The Windows leg reaches those eight no further: GitHub's hosted Windows images have
+      # no WSL. What it does add is the Windows-bundled OpenSSH, a genuinely different build
+      # — and a notably older one, which is the point. Where the Debian client negotiates
+      # both hybrid key exchanges, an older Windows client advertises neither, and the
+      # transport fixtures then say so by name rather than quietly passing. Two legs, two
+      # different clients, one suite.
+      #
+      # Measured on Debian 13 with everything above in place: 41 of 94 checks run, 53 skip,
+      # none fail. The suite itself takes seconds; the time goes into the build.
+      - name: Test
+        timeout-minutes: 20
+        run: dotnet test Tests/Tests.csproj --configuration Release --no-build --logger "console;verbosity=normal"
