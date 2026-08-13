@@ -112,9 +112,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var subsystem = WithSftp ? "-o Subsystem=\"sftp /usr/lib/openssh/sftp-server\" " : "";
 
+            // The mkdir rides inside the command substitution: run as root, sshd refuses to start
+            // without the privilege-separation directory /run/sshd, and /run is a tmpfs — a fresh CI
+            // container or a rebooted machine has no /run/sshd until something creates it. Run as an
+            // ordinary user the mkdir fails (silently, hence 2>/dev/null), and an unprivileged sshd
+            // does not want the directory in the first place.
             var daemon = await WslInterop.StartServerAsync(
                              port =>
-                                 $"$(command -v sshd || echo /usr/sbin/sshd) -D -e -p {port} " +
+                                 $"$(mkdir -p /run/sshd 2>/dev/null; command -v sshd || echo /usr/sbin/sshd) -D -e -p {port} " +
                                  $"-h {wslRoot}/hostkey " +
                                  $"-o AuthorizedKeysFile={wslRoot}/authorized_keys " +
                                  $"-o StrictModes=no -o UsePAM=no -o PidFile=none " +

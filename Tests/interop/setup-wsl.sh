@@ -10,8 +10,9 @@
 # Usage:   ./setup-wsl.sh            # install everything
 #          ./setup-wsl.sh --check    # only report what is present, install nothing
 #
-# Requires sudo for the apt packages — run it from an interactive shell, since sudo will normally
-# ask for a password and a non-interactive caller just gets a failure. The Python peers go into a
+# Requires root for the apt packages — as sudo from an interactive shell (it will normally ask for
+# a password, so a non-interactive caller just gets a failure), or directly when the caller already
+# is root, as inside a CI container, where no sudo binary exists at all. The Python peers go into a
 # local virtual environment (.venv-interop next to this script), which needs no privileges at all,
 # so '--check' and the venv half work fine unattended.
 
@@ -33,6 +34,7 @@ APT_PACKAGES=(
     putty-tools         # plink / psftp / puttygen
     curl                # SFTP via libssh/libssh2 — a different stack
     socat               # run inetd-style tinysshd on a socket
+    procps              # ps/pkill — the peer-lifecycle test's evidence; absent in the debian:13 container image
     golang-go           # builds the golang.org/x/crypto/ssh harness in go/
     openssl             # key/cert plumbing helpers
     ca-certificates
@@ -51,10 +53,16 @@ if ! command -v apt-get >/dev/null 2>&1; then
     exit 1
 fi
 
+# Root needs no sudo — and a CI container has none to offer.
+SUDO="sudo"
+if [[ "$(id -u)" -eq 0 ]]; then
+    SUDO=""
+fi
+
 if [[ "${CHECK_ONLY}" -eq 0 ]]; then
-    log "Installing interop peers via apt (sudo required) ..."
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${APT_PACKAGES[@]}"
+    log "Installing interop peers via apt (root required) ..."
+    ${SUDO} apt-get update -qq
+    ${SUDO} env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${APT_PACKAGES[@]}"
 
     log "Creating the Python virtual environment for AsyncSSH / Paramiko ..."
 
@@ -117,4 +125,4 @@ fi
 
 report "Go" go version
 
-log "Done. The interop suite reaches this shell from NUnit via 'wsl.exe -e'."
+log "Done. NUnit reaches these peers via 'wsl.exe -e' from Windows, or directly on a Linux host."

@@ -100,6 +100,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// <summary>The port the peer is listening on — chosen by <see cref="WslInterop.StartServerAsync"/>.</summary>
         public Int32 Port { get; }
 
+        /// <summary>
+        /// The identifier under which this peer recorded itself, i.e. the name of its PID file. The
+        /// run directory is shared by every peer this test process starts — and can carry a neighbour's
+        /// file whenever peers overlap or an earlier reap was interrupted — so a test asserting on what
+        /// <i>this</i> peer wrote must address exactly this file rather than glob the directory.
+        /// </summary>
+        internal String RunIdentifier
+            => runIdentifier;
+
         internal WslServer(Process Process, String RunIdentifier, Int32 Port)
         {
 
@@ -244,6 +253,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         // second test run on this machine gets a different one, which is what lets InteropPeerCleanup
         // sweep our leftovers without touching peers that another run is still using.
         private static readonly String sessionIdentifier = Guid.NewGuid().ToString("N");
+
+        /// <summary>This test process's own run directory name — see <see cref="WslServer.RunIdentifier"/>.</summary>
+        internal static String SessionIdentifier
+            => sessionIdentifier;
 
         // Set once a peer server has actually been started, so a run that never used WSL — the common
         // case on a machine without it — does not shell out just to sweep nothing.

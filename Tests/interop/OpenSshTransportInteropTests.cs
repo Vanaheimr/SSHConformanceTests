@@ -290,7 +290,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 if (payload.Length > 0 && payload[0] == (Byte) SshMessageNumber.ExtInfo)
                     payload = await transport.ReceivePacketAsync(CancellationToken);
 
-                return (transport.Algorithms, payload);
+                var algorithms = transport.Algorithms;
+
+                // Close the connection from our side. Our EXT_INFO left the wire before this close, and
+                // the client reads in order — so by the time it sees EOF and exits it has processed, and
+                // logged, the EXT_INFO this test asserts on. The previous shape killed the client as soon
+                // as our server had read SERVICE_REQUEST, which races the client's *logging* of the
+                // EXT_INFO: on a saturated CPU the kill regularly won and the -vv log ended mid-handshake.
+                await pipe.Output.CompleteAsync();
+                await pipe.Input.CompleteAsync();
+
+                return (algorithms, payload);
             }, CancellationToken);
 
             var knownHosts = Path.GetTempFileName();
@@ -338,6 +348,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 var (algorithms, payload) = await serverTask;
 
+                // The client ends on its own once it sees our EOF; [CancelAfter] bounds the wait and the
+                // kill in `finally` remains the safety net.
+                try { await ssh.WaitForExitAsync(CancellationToken); } catch (OperationCanceledException) { }
                 try { if (!ssh.HasExited) ssh.Kill(entireProcessTree: true); } catch { }
                 try { stderr = await stderrTask; } catch { }
 
