@@ -198,8 +198,9 @@ jobs:
       #
       # Why this needs no change to the harness: every OpenSSH fixture resolves
       # its binary through PATH — FindOnPathOrSystem("ssh"), and `command -v sshd`
-      # for the server side — so prepending the build directory is the entire
-      # integration. No filter file, no configuration switch, no #if.
+      # for the server side — so prepending the install prefix is the entire
+      # integration. Both bin and sbin, because that `command -v sshd` finds
+      # nothing in bin. No filter file, no configuration switch, no #if.
       #
       # The filter selects the fixtures that drive an OpenSSH binary. The other
       # peers (Dropbear, TinySSH, AsyncSSH, Paramiko, Go, plink, curl, SSH.NET)
@@ -242,7 +243,7 @@ jobs:
           }
 
           echo "::group::build prerequisites"
-          apt-get install -y --no-install-recommends build-essential zlib1g-dev libssl-dev
+          apt-get install -y --no-install-recommends build-essential zlib1g-dev libssl-dev libpam0g-dev
           prereq=$?
           echo "::endgroup::"
           if [ ${prereq} -ne 0 ]; then
@@ -268,22 +269,54 @@ jobs:
           note "- newest upstream release: \`${release}\`"
           note "- this container ships: \`$(ssh -V 2>&1)\`"
 
+          # Configured into a private prefix and actually INSTALLED, rather than run
+          # out of the build directory — and the first real run is what taught us
+          # every word of that. It came back 32 of 43, and the eleven failures were
+          # no disagreement with 10.5p1 at all: every check driven by their ssh
+          # client against our server passed, both hybrid key exchanges included,
+          # while everything needing their sshd died before it ever listened.
+          #
+          #     command-line line 0: Unsupported option UsePAM
+          #     /usr/local/etc/sshd_config: No such file or directory
+          #
+          # Three separate consequences of building the lazy way — and the fixture
+          # owns the sshd command line, so not one of them can be worked around
+          # from in here:
+          #
+          #  * --without-pam makes sshd REJECT `-o UsePAM=no` as an unknown option
+          #    and exit. The fixture passes it unconditionally and is right to,
+          #    because the distribution sshd is built with PAM. Nothing here
+          #    authenticates through PAM; the option merely has to be recognised.
+          #  * With no --prefix, sshd looks for its configuration under
+          #    /usr/local/etc and gives up when it is not there.
+          #  * Since 9.8 sshd re-executes $libexecdir/sshd-session for every
+          #    connection, so even a started sshd would have failed at the first
+          #    one, nothing having been installed anywhere.
+          #
+          # A private prefix answers all three at once and leaves the distribution's
+          # /etc/ssh untouched: configuration, privilege-separation directory and
+          # helper binaries all land under RUNNER_TEMP and die with the runner.
+          # install-nokeys because the fixture brings its own host key with -h, and
+          # generating a set here would only cost seconds nobody gets back.
+          #
           # A subshell so the cd's stay in here and the test below still runs from
           # the workspace. Plain `make`, not a hand-picked target list: the default
           # target is the trodden path, and naming targets invites a parallel build
           # to race on libssh.a.
           echo "::group::build ${release}"
+          prefix="${RUNNER_TEMP}/upstream/prefix"
           ( mkdir -p "${RUNNER_TEMP}/upstream" \
             && cd "${RUNNER_TEMP}/upstream" \
             && curl -sSfL --max-time 300 -O "${base}/${tarball}" \
             && tar xzf "${tarball}" \
             && cd "${release}" \
-            && ./configure --without-pam \
-            && make -j"$(nproc)" )
+            && ./configure --prefix="${prefix}" --with-pam \
+            && make -j"$(nproc)" \
+            && make install-nokeys )
           built=$?
           echo "::endgroup::"
 
-          upstream="${RUNNER_TEMP}/upstream/${release}"
+          upstream="${prefix}/bin"
           if [ ${built} -ne 0 ] || [ ! -x "${upstream}/ssh" ]; then
             note '- **the build produced no ssh binary** — see the group above; nothing was tested'
             emit
@@ -292,7 +325,7 @@ jobs:
           note "- built as: \`$("${upstream}/ssh" -V 2>&1)\`"
 
           echo "::group::OpenSSH fixtures against ${release}"
-          PATH="${upstream}:${PATH}" dotnet test Tests/Tests.csproj --configuration Release --no-build \
+          PATH="${upstream}:${prefix}/sbin:${PATH}" dotnet test Tests/Tests.csproj --configuration Release --no-build \
             --filter "FullyQualifiedName~OpenSsh" \
             --logger "console;verbosity=normal" \
             --logger "trx;LogFileName=${{ matrix.leg }}-upstream.trx" \
