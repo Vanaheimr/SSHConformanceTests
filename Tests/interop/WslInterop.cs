@@ -344,9 +344,23 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// which on Linux would run a real program with an unexpected flag and report whatever it did as
         /// an interop result.
         /// </para>
+        ///
+        /// <para>
+        /// Every argument has its line endings normalised on the way through, which matters for exactly
+        /// one kind of argument and matters a lot: the shell scripts this file passes to <c>bash -c</c>.
+        /// They are written as C# raw string literals, and a raw string literal keeps the line endings of
+        /// the <i>source file</i> — CRLF in a Windows checkout, because <c>.gitattributes</c> only pins
+        /// <c>*.sh</c> to LF and cannot see a script embedded in a <c>.cs</c> file. bash then reads the
+        /// carriage return as part of the last word on each line, which does not fail loudly: it silently
+        /// makes <c>mkdir "$d"</c> and <c>echo &gt; "$d/f"</c> disagree about what <c>$d</c> is, and turns
+        /// a <c>for … ; do</c> header into an outright syntax error. Line endings are a property of the
+        /// boundary being crossed, so they are converted at the boundary, once.
+        /// </para>
         /// </summary>
         private static ProcessStartInfo CreateStartInfo(IEnumerable<String> Arguments)
         {
+
+            Arguments = Arguments.Select(argument => argument.Replace("\r\n", "\n"));
 
             var startInfo = new ProcessStartInfo {
                                 RedirectStandardOutput  = true,
