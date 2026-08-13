@@ -62,10 +62,13 @@ updates:
     # — but it is not what this file was written to do, and leaving it unstated
     # would have been the kind of comment that quietly lies.
     #
-    # Hence the explicit zero. Whether it is honoured here is genuinely open: the
-    # options reference lists gitsubmodule among the ecosystems that do NOT support
-    # cooldown, while the log quoted above proves the default is applied to it all
-    # the same. One of those two is wrong, and the next Dependabot log says which.
+    # Hence the explicit zero — and it is honoured, which settles a contradiction
+    # worth writing down. GitHub's options reference lists gitsubmodule among the
+    # ecosystems that do NOT support cooldown; the run quoted above shows the
+    # default being applied to it regardless, and the run right after this line
+    # was added dropped the filter and opened both pins on the spot (#6 libs/Styx,
+    # #7 libs/Hermod). The reference is wrong about this ecosystem in both
+    # directions at once, so do not "clean up" this key on its authority.
     cooldown:
       default-days: 0
 
