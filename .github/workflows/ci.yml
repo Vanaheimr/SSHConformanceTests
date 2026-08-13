@@ -126,6 +126,30 @@ jobs:
           ssh-add -q "${RUNNER_TEMP}/ci-agent-key"
           echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "${GITHUB_ENV}"
 
+      # Dropbear refuses an authorized-keys file unless its *entire* directory path — every
+      # element from the file up to the root — is owned by the user or root and not writable
+      # by group or others. The runner creates this container's HOME (/github/home) writable
+      # by everyone, so the one Dropbear check that actually authenticates failed here with
+      # "/github/home must be owned by user or root, and not writable by group or others"
+      # while every developer box passed it, their $HOME being 0755. That asymmetry is why
+      # it took a hosted runner to surface it at all.
+      #
+      # The loop rather than a single chmod: reproduced locally that the walk really is the
+      # whole chain — a tight HOME under a 0777 parent fails too, and the log then names the
+      # parent instead.
+      #
+      # Deliberately here and not in setup-wsl.sh: on a developer machine that script would
+      # quietly re-mode the user's own home directory, which is nobody's business but theirs.
+      # A container's directories are this job's to fix.
+      - name: Tighten the container HOME for Dropbear's path check (Debian container)
+        if: runner.os == 'Linux'
+        run: |
+          d="${HOME:?}"
+          while [ "${d}" != "/" ] && [ "${d}" != "." ]; do
+            chmod go-w "${d}"
+            d="$(dirname "${d}")"
+          done
+
       - name: Build
         run: dotnet build Tests/Tests.csproj --configuration Release
 
@@ -141,9 +165,9 @@ jobs:
       # Paramiko, Plink and TinySsh — reach their peers through interop/WslInterop.cs,
       # which runs the same commands through wsl.exe on Windows and natively on Linux.
       # With the provisioning step above, the Debian leg is the first place the entire
-      # suite runs on every commit: 95 of 95 checks, nothing skipped, around 16 seconds
-      # of test time (measured on Debian 13 provisioned exactly this way, as root). What
-      # PLAN §11.6 keeps for a separate nightly job is the *version spread* — the
+      # suite runs on every commit: all 95 checks, nothing skipped — about 30 seconds of
+      # test time on a hosted runner, 17 in a local Debian 13 provisioned the same way.
+      # What PLAN §11.6 keeps for a separate nightly job is the *version spread* — the
       # OpenSSH 8.9/9.6/9.9 containers, the Tier 3 peers — not this suite at trixie's
       # own peer versions, which costs seconds.
       #
