@@ -206,13 +206,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             })
                 ssh.StartInfo.ArgumentList.Add(arg);
 
-            String stderr = "";
+            // stderrTask lives out here so the catch blocks can await the read that is already running
+            // instead of starting a second one on the same stream.
+            String        stderr     = "";
+            Task<String>? stderrTask = null;
 
             try
             {
 
                 ssh.Start();
-                var stderrTask = ssh.StandardError.ReadToEndAsync(CancellationToken);
+                stderrTask = ssh.StandardError.ReadToEndAsync(CancellationToken);
 
                 var (algorithms, payload) = await serverTask;
 
@@ -238,8 +241,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             catch (Exception e)
             {
                 try   { if (!ssh.HasExited) ssh.Kill(entireProcessTree: true); } catch { }
-                try   { stderr = await ssh.StandardError.ReadToEndAsync(CancellationToken); }
-                catch { }
+                // The task that is already reading, never a second read of the same stream: that would
+                // either throw or come back empty, and here it would come back empty and overwrite the
+                // `-vv` log this message exists to carry.
+                if (stderrTask is not null)
+                    try   { stderr = await stderrTask; }
+                    catch { }
                 TestContext.Out.WriteLine("ssh -vv stderr:\n" + stderr);
                 throw new AssertionException($"The OpenSSH transport interop failed:\n{e.Message}\nssh -vv output:\n" + stderr, e);
             }
@@ -318,13 +325,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             })
                 ssh.StartInfo.ArgumentList.Add(arg);
 
-            String stderr = "";
+            // stderrTask lives out here so the catch blocks can await the read that is already running
+            // instead of starting a second one on the same stream.
+            String        stderr     = "";
+            Task<String>? stderrTask = null;
 
             try
             {
 
                 ssh.Start();
-                var stderrTask = ssh.StandardError.ReadToEndAsync(CancellationToken);
+                stderrTask = ssh.StandardError.ReadToEndAsync(CancellationToken);
 
                 var (algorithms, payload) = await serverTask;
 
@@ -347,8 +357,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             }
             catch (Exception e)
             {
-                try   { stderr = await ssh.StandardError.ReadToEndAsync(CancellationToken); }
-                catch { }
+                // Deliberately not a fresh read: the success path above has usually already filled
+                // `stderr` with the -vv log, and re-reading the drained stream would replace it with an
+                // empty string — throwing away the evidence at the one moment it is needed. Awaiting the
+                // completed task again simply returns the same text.
+                if (stderrTask is not null)
+                    try   { stderr = await stderrTask; }
+                    catch { }
                 TestContext.Out.WriteLine("ssh -vv stderr:\n" + stderr);
                 throw new AssertionException($"The OpenSSH ext-info interop failed:\n{e.Message}\nssh -vv output:\n" + stderr, e);
             }

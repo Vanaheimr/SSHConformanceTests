@@ -143,11 +143,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 String stderr = "";
 
+                // Declared out here so the catch can await this very task instead of reading the stream a
+                // second time — which returns empty once the first read has drained it.
+                Task<String>? stderrTask = null;
+
                 try
                 {
 
                     client.Start();
-                    var stderrTask = client.StandardError.ReadToEndAsync(CancellationToken);
+                    stderrTask = client.StandardError.ReadToEndAsync(CancellationToken);
 
                     // Our server returns once the client's signature has been verified — the proof of interop.
                     var result = await serverTask;
@@ -164,8 +168,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 catch (Exception e)
                 {
                     try   { if (!client.HasExited) client.Kill(entireProcessTree: true); } catch { }
-                    try   { stderr = await client.StandardError.ReadToEndAsync(CancellationToken); }
-                    catch { }
+                    if (stderrTask is not null)
+                        try   { stderr = await stderrTask; }
+                        catch { }
                     TestContext.Out.WriteLine("ssh -vv stderr:\n" + stderr);
                     throw new AssertionException($"OpenSSH public-key auth interop failed for {KeyType}:\n{e.Message}\nssh -vv output:\n" + stderr, e);
                 }

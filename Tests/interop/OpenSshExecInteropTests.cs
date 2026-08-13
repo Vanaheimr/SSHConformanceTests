@@ -107,12 +107,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 })
                     client.StartInfo.ArgumentList.Add(arg);
 
+                // Declared out here because the catch below needs this very task — not a second read of
+                // the same stream. See the comment there for what that costs.
+                Task<String>? stderrTask = null;
+
                 try
                 {
 
                     client.Start();
                     var stdoutTask = client.StandardOutput.ReadToEndAsync(CancellationToken);
-                    var stderrTask = client.StandardError.ReadToEndAsync(CancellationToken);
+                    stderrTask     = client.StandardError. ReadToEndAsync(CancellationToken);
 
                     await serverTask;
                     await client.WaitForExitAsync(CancellationToken);
@@ -127,9 +131,23 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 }
                 catch (Exception e)
                 {
+
                     try { if (!client.HasExited) client.Kill(true); } catch { }
-                    var err = await client.StandardError.ReadToEndAsync(CancellationToken);
+
+                    // Await the read that is already in flight rather than starting a second one on the
+                    // same StreamReader. A second ReadToEndAsync either throws "the stream is currently in
+                    // use by a previous operation" — replacing the interop failure with a meaningless one
+                    // — or returns empty because the first read already drained the stream. Both destroy
+                    // exactly the diagnostic this handler exists to produce, and the first one did: a CI
+                    // run reported the InvalidOperationException and nothing about why ssh gave up.
+                    // Awaiting the same Task twice is fine; reading the same stream twice is not.
+                    var err = "";
+                    if (stderrTask is not null)
+                        try   { err = await stderrTask; }
+                        catch { /* the client was killed before it said anything */ }
+
                     throw new AssertionException($"OpenSSH exec interop failed:\n{e.Message}\nssh stderr:\n" + err, e);
+
                 }
                 finally
                 {
