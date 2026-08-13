@@ -98,18 +98,7 @@ jobs:
       # the Go module fetch this workflow already performs.
       - name: Provision the interop peers (Debian container)
         if: runner.os == 'Linux'
-        run: |
-          # Dropbear walks the whole path up to the root before it will read an authorized-keys
-          # file and refuses any directory on the way that is group- or world-writable. The
-          # container's HOME is /github/home, which is exactly that, and the peers keep their
-          # scratch space under it — so Dropbear starts, accepts the connection, and only then
-          # rejects every key with "must be owned by user or root". The peer log says so in as
-          # many words; nothing about it looks like a permissions problem from the outside.
-          #
-          # Deliberately here rather than in setup-wsl.sh: that script also runs on developer
-          # machines, and no test run has any business changing the mode of a real $HOME.
-          chmod go-w "$HOME"
-          bash Tests/interop/setup-wsl.sh
+        run: bash Tests/interop/setup-wsl.sh
 
       - uses: actions/setup-dotnet@v6
         with:
@@ -152,12 +141,24 @@ jobs:
       # Deliberately here and not in setup-wsl.sh: on a developer machine that script would
       # quietly re-mode the user's own home directory, which is nobody's business but theirs.
       # A container's directories are this job's to fix.
+      #
+      # The rule has two clauses, and tightening the modes only satisfied one: with the whole
+      # chain walked and chmod'ed, Dropbear returned the same sentence byte for byte. What it
+      # objects to is therefore the *ownership* — the runner creates /github/home for a uid
+      # that is not the one this container runs as, and "owned by the user or root" then holds
+      # for neither. Hence the chown, and hence the ls on both sides of it: if this ever fails
+      # again the log will say which of the two clauses is still open, instead of leaving the
+      # next person to deduce it from a message that never changes.
       - name: Tighten the container HOME for Dropbear's path check (Debian container)
         if: runner.os == 'Linux'
         run: |
+          id
           d="${HOME:?}"
           while [ "${d}" != "/" ] && [ "${d}" != "." ]; do
+            ls -ld "${d}"
+            chown "$(id -u):$(id -g)" "${d}" || echo "  chown refused for ${d} (bind mount?)"
             chmod go-w "${d}"
+            ls -ld "${d}"
             d="$(dirname "${d}")"
           done
 
