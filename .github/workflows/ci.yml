@@ -98,7 +98,18 @@ jobs:
       # the Go module fetch this workflow already performs.
       - name: Provision the interop peers (Debian container)
         if: runner.os == 'Linux'
-        run: bash Tests/interop/setup-wsl.sh
+        run: |
+          # Dropbear walks the whole path up to the root before it will read an authorized-keys
+          # file and refuses any directory on the way that is group- or world-writable. The
+          # container's HOME is /github/home, which is exactly that, and the peers keep their
+          # scratch space under it — so Dropbear starts, accepts the connection, and only then
+          # rejects every key with "must be owned by user or root". The peer log says so in as
+          # many words; nothing about it looks like a permissions problem from the outside.
+          #
+          # Deliberately here rather than in setup-wsl.sh: that script also runs on developer
+          # machines, and no test run has any business changing the mode of a real $HOME.
+          chmod go-w "$HOME"
+          bash Tests/interop/setup-wsl.sh
 
       - uses: actions/setup-dotnet@v6
         with:
