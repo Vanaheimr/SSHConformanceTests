@@ -76,8 +76,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             try
             {
 
+                // The mkdir keeps a root run working: sshd-as-root insists on /run/sshd, which is
+                // tmpfs-backed and so absent in a fresh container — see OpenSshServerInteropTests.
                 var server = await WslInterop.StartServerAsync(
-                                 $"$(command -v sshd || echo /usr/sbin/sshd) -D -e -p {port} " +
+                                 $"$(mkdir -p /run/sshd 2>/dev/null; command -v sshd || echo /usr/sbin/sshd) -D -e -p {port} " +
                                  $"-h {wslRoot}/hostkey " +
                                  $"-o AuthorizedKeysFile={wslRoot}/authorized_keys " +
                                  $"-o StrictModes=no -o UsePAM=no -o PidFile=none " +
@@ -86,10 +88,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                  CancellationToken);
 
                 // What the peer recorded about itself is the whole basis of reaping it, so read it back
-                // before disposing: if this is wrong, the failure below is about the wrong thing.
+                // before disposing: if this is wrong, the failure below is about the wrong thing. Read
+                // exactly the file this server wrote — the run directory is shared, and under load a
+                // neighbour's file can coexist (a peer whose reap was interrupted leaves one behind), so
+                // a directory glob here would assert on somebody else's record.
                 var (_, recorded, _) = await WslInterop.RunAsync([
                                            "-e", "bash", "-c",
-                                           $"cat \"$HOME/.hermod-interop/run\"/*/*.pid 2>/dev/null | tr '\\n' ' '"
+                                           $"cat \"$HOME/.hermod-interop/run/{WslInterop.SessionIdentifier}/{server.RunIdentifier}.pid\" 2>/dev/null | tr '\\n' ' '"
                                        ], CancellationToken);
 
                 TestContext.Out.WriteLine($"the peer recorded: [{recorded.Trim()}]");
@@ -97,7 +102,21 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 Assert.That(recorded.Trim(), Does.Match(@"^\d+\s+\d+$"),
                             "the peer must record its PID and start time — both, or disposal cannot identify it");
 
+                var identity = recorded.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
                 await server.DisposeAsync();
+
+                // The direct check: the very process the peer recorded — same PID, same start time —
+                // must be gone. This is the reaper's own aliveness test turned into evidence, and it
+                // cannot be fooled by sshd's setproctitle, which hides the command line from `ps`.
+                var (_, liveness, _) = await WslInterop.RunAsync([
+                                           "-e", "bash", "-c",
+                                           $"s=$(cat /proc/{identity[0]}/stat 2>/dev/null) || {{ echo reaped; exit 0; }}; " +
+                                           $"[ \"$(echo \"${{s#*) }}\" | cut -d' ' -f20)\" = \"{identity[1]}\" ] && echo alive || echo reaped"
+                                       ], CancellationToken);
+
+                Assert.That(liveness.Trim(), Is.EqualTo("reaped"),
+                            "disposal must end the very process the peer recorded");
 
                 var (_, listening, _) = await WslInterop.RunAsync([
                                             "-e", "bash", "-c",

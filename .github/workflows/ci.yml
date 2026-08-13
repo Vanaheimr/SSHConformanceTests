@@ -19,7 +19,8 @@ jobs:
     #  * Windows, because that is where this harness is developed, and because a second,
     #    older OpenSSH build judges us there. Note what this leg is NOT: the developer box
     #    runs the fullest suite because WSL gives it the Linux peers, and a hosted Windows
-    #    runner has no WSL — so CI is a subset of what a local Windows run covers.
+    #    runner has no WSL — so this leg is a subset of what a local Windows run covers,
+    #    and it is the Debian leg below that runs the entire suite.
     #  * Debian 13, because that is what Hermod runs on in production. GitHub offers no
     #    Debian runner image, so this leg runs on an Ubuntu runner inside a debian:13
     #    container. Deliberately NOT the official .NET SDK image: that one is still
@@ -58,32 +59,12 @@ jobs:
       # this is what makes ML-KEM work) for crypto, ca-certificates for NuGet over HTTPS.
       # Package names verified on trixie.
       #
-      # openssh-client is the one addition beyond Hermod's list, and it is the entire point
-      # of running interop on this leg: ten fixtures start ssh, sftp and ssh-keygen directly
-      # through Process.Start and locate them on PATH alone. Measured in a local Debian 13
-      # with an otherwise identical tree — 7 of 94 checks run without the package, 40 with
-      # it. The other 33 report "No 'ssh'/'ssh-keygen' found." and skip.
-      #
-      # Trixie ships OpenSSH 10.0p2 against OpenSSL 3.5.6, and that combination is why this
-      # leg is the one that actually proves the post-quantum work: both hybrid key exchanges
-      # complete against the real client here — mlkem768x25519-sha256 and
-      # sntrup761x25519-sha512 — where an older client would negotiate neither.
-      #
-      # Deliberately NOT installed, because neither would unlock a single check:
-      #
-      #  * openssl — the command-line tool. Nothing under Tests/ invokes it; its only
-      #    mention anywhere in this repository is a comment in interop/setup-wsl.sh. The
-      #    OpenSSL *library* is a different matter and is present above as libssl3t64.
-      #  * python3-paramiko — the Paramiko and AsyncSSH fixtures do not want a Debian package
-      #    but the virtualenv at interop/.venv-interop/, which interop/setup-wsl.sh builds and
-      #    .gitignore deliberately keeps out of the checkout.
-      #  * dropbear-bin, tinysshd, putty-tools, golang-go, socat — the peers behind the other
-      #    six Linux fixtures. Since WslInterop grew a native Linux path these would genuinely
-      #    run here, so leaving them out is now a cost decision rather than an impossibility.
-      #    The test step below has the measured figures for both choices.
+      # Deliberately minimal: only what git and the SDK install need. Every SSH peer —
+      # openssh-client included — arrives with the provisioning step after the checkout,
+      # because the script that owns the peer list lives in the repository.
       - name: Install git and the .NET prerequisites (Debian container)
         if: runner.os == 'Linux'
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata openssh-client
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
 
       # Unlike Hermod's own CI, which checks Styx out as a sibling directory because nothing
       # pins it, this repository carries both dependencies as submodules — so the checkout
@@ -93,6 +74,31 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+
+      # The same script a developer runs in WSL2, and that is the point: one provisioning
+      # contract, exercised by CI on every commit, so it cannot silently rot. Running as
+      # root here, it skips the sudo it would use on a developer box (a container has no
+      # sudo binary to offer). It installs the peers behind the eight Linux fixtures —
+      # sshd, Dropbear, TinySSH (under socat), plink, curl, the Go toolchain for the
+      # x/crypto/ssh harness — plus openssh-client for the ten fixtures that drive ssh,
+      # sftp and ssh-keygen directly, and it builds the Python virtualenv at
+      # interop/.venv-interop/ that the AsyncSSH and Paramiko drivers run under.
+      #
+      # Trixie ships OpenSSH 10.0p2 against OpenSSL 3.5.6, and that combination is why this
+      # leg is the one that actually proves the post-quantum work: both hybrid key exchanges
+      # complete against the real client here — mlkem768x25519-sha256 and
+      # sntrup761x25519-sha512 — where an older client would negotiate neither.
+      #
+      # The Python peers come from PyPI rather than apt, and that is a considered choice,
+      # not an oversight: trixie's python3-asyncssh is 2.20, and AsyncSSH only gained the
+      # PyCA-cryptography ML-KEM path in 2.24 — with the apt package, the AsyncSSH
+      # post-quantum check could not pass and the strongest third-party PQ evidence this
+      # suite produces would go red or have to be softened into a skip. The venv keeps it
+      # green, and PyPI is the same class of per-run dependency as the NuGet restore and
+      # the Go module fetch this workflow already performs.
+      - name: Provision the interop peers (Debian container)
+        if: runner.os == 'Linux'
+        run: bash Tests/interop/setup-wsl.sh
 
       - uses: actions/setup-dotnet@v6
         with:
@@ -123,7 +129,7 @@ jobs:
       - name: Build
         run: dotnet build Tests/Tests.csproj --configuration Release
 
-      # What this gate does and does not cover.
+      # What this gate covers.
       #
       # Ten fixtures drive real OpenSSH binaries in-process and run on both legs:
       # OpenSshAuth, OpenSshCertificate, OpenSshExec, OpenSshHostKeyRotation,
@@ -131,35 +137,25 @@ jobs:
       # openssh-client), OpenSshAgent (needing the agent above) and SshNet — the last one a
       # pure-managed NuGet peer that needs nothing installed at all.
       #
-      # Eight fixtures still skip here — AsyncSsh, CurlLibSsh, Dropbear, GoCryptoSsh,
-      # OpenSshServer, Paramiko, Plink and TinySsh — but no longer because they are unable to
-      # run. They reach their peers through interop/WslInterop.cs, which used to refuse
-      # outright on anything that was not Windows and now runs the same commands natively.
-      # What holds them back today is provisioning: interop/.venv-interop is .gitignore'd, so
-      # a checkout carries no Python peers, and the harness treats that as "unprovisioned" and
-      # skips everything depending on it. Measured with exactly the packages above: 41 of 94
-      # run, 53 skip, nothing fails — the same figures as before the native path existed,
-      # which is what makes this workflow safe to leave as it is for now.
+      # The other eight — AsyncSsh, CurlLibSsh, Dropbear, GoCryptoSsh, OpenSshServer,
+      # Paramiko, Plink and TinySsh — reach their peers through interop/WslInterop.cs,
+      # which runs the same commands through wsl.exe on Windows and natively on Linux.
+      # With the provisioning step above, the Debian leg is the first place the entire
+      # suite runs on every commit: 95 of 95 checks, nothing skipped, around 16 seconds
+      # of test time (measured on Debian 13 provisioned exactly this way, as root). What
+      # PLAN §11.6 keeps for a separate nightly job is the *version spread* — the
+      # OpenSSH 8.9/9.6/9.9 containers, the Tier 3 peers — not this suite at trixie's
+      # own peer versions, which costs seconds.
       #
-      # What it would buy is no longer hypothetical. With the peers installed and the
-      # virtualenv built — interop/setup-wsl.sh does both — the identical suite runs 93 of 94
-      # on Debian 13 in 13 seconds, everything except the ssh-agent check that the step above
-      # already covers. That is the full Tier-1/Tier-2 matrix PLAN §11.6 reserves for a
-      # *nightly* job rather than the per-commit gate, so it belongs in a second workflow and
-      # not in this one.
-      #
-      # The Windows leg reaches those eight no further — the hosted images install no WSL distro
-      # — and lands at 40 of 94. What it adds is the Windows OpenSSH: a genuinely different
-      # build against a different TLS stack, driving the same server.
+      # The Windows leg reaches those eight no further — the hosted images install no WSL
+      # distro — and lands at 40 of 95. What it adds is the Windows OpenSSH: a genuinely
+      # different build against a different TLS stack, driving the same server.
       #
       # It is not, however, an older one. That was assumed here at first and the artifacts
       # disproved it: the transport fixture passes 12 of 12 on this leg, both hybrid key
       # exchanges included. The 9.5p2 client that advertises neither is what sits on a typical
       # developer Windows box, where those two cases skip by name — so the version spread this
       # matrix covers is between CI and the desk, not between the two legs.
-      #
-      # Measured on Debian 13 with everything above in place: 41 of 94 checks run, 53 skip,
-      # none fail. The suite itself takes seconds; the time goes into the build.
       - name: Test
         timeout-minutes: 20
         run: dotnet test Tests/Tests.csproj --configuration Release --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
