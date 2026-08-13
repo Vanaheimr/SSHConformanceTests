@@ -80,11 +80,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
 
     /// <summary>
-    /// A peer server running inside WSL for the lifetime of one test.
+    /// A peer server running for the lifetime of one test.
     ///
     /// <para>
-    /// Disposal kills both the <c>wsl.exe</c> side and — via the marker the command was tagged with —
-    /// whatever it started on the Linux side, since the two do not reliably die together.
+    /// Disposal kills the process it started and — via the marker the command was tagged with — whatever
+    /// that process left behind. The marker earns its keep on Windows, where killing <c>wsl.exe</c> does
+    /// not reliably reap the Linux side; on Linux the process tree is already the whole story, and the
+    /// pkill is then a cheap belt to the braces rather than a necessity.
     /// </para>
     /// </summary>
     public sealed class WslServer : IAsyncDisposable
@@ -188,16 +190,35 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
 
     /// <summary>
-    /// Drives the interop peers that only exist inside Linux — AsyncSSH, Paramiko, Dropbear, TinySSH —
-    /// from the Windows-hosted NUnit process through <c>wsl.exe</c>.
+    /// Drives the interop peers that live in Linux — AsyncSSH, Paramiko, Dropbear, TinySSH, plink,
+    /// curl and the Go harness — from wherever NUnit happens to be running.
     ///
     /// <para>
-    /// Two environment facts shape everything here. First, the peers are provisioned by
-    /// <c>interop/setup-wsl.sh</c>, so anything missing is a *setup* problem and must
-    /// <see cref="Assert.Ignore(String)"/> with a precise message rather than fail — an unprovisioned
-    /// machine has produced no evidence either way. Second, under WSL's default NAT networking a server
-    /// hosted on Windows is <b>not</b> reachable at <c>127.0.0.1</c> from inside WSL: the host answers on
-    /// the default gateway address. Tests therefore bind to <c>IPv4Address.Any</c> and ask
+    /// There are two ways to reach them, and the difference is confined to three places. On Windows the
+    /// peers live inside WSL2: every command travels through <c>wsl.exe</c>, paths must be translated
+    /// into <c>/mnt/…</c> form, and a server bound on the Windows side is reached across a network
+    /// boundary. On Linux the peers are ordinary local processes: the command runs directly, a path is
+    /// already the path, and everything shares one loopback. How a peer is started, waited for, killed,
+    /// and how a driver reports back is identical — which is why the platform split lives in
+    /// <see cref="CreateStartInfo"/>, <see cref="ToWslPath"/> and <see cref="ResolveWindowsHostAsync"/>
+    /// and nowhere else.
+    /// </para>
+    ///
+    /// <para>
+    /// The command convention stays <c>wsl.exe</c>'s on both paths — an argument list starts with
+    /// <c>-e</c>, then the program, then its arguments — rather than being invented anew for Linux. That
+    /// is what makes the native translation <i>total</i>: drop the <c>-e</c> and execute the rest. A
+    /// per-call-site translation could silently mistranslate one of the twenty-odd call sites and run
+    /// the wrong thing; this one either works everywhere or throws immediately.
+    /// </para>
+    ///
+    /// <para>
+    /// Peers are provisioned by <c>interop/setup-wsl.sh</c>, so anything missing is a *setup* problem and
+    /// must <see cref="Assert.Ignore(String)"/> with a precise message rather than fail — an
+    /// unprovisioned machine has produced no evidence either way. One asymmetry is genuine and not an
+    /// implementation detail: under WSL's default NAT networking a server hosted on Windows is
+    /// <b>not</b> reachable at <c>127.0.0.1</c> from inside WSL, the host answers on the default gateway
+    /// address instead. Tests therefore bind to <c>IPv4Address.Any</c> and ask
     /// <see cref="ResolveWindowsHostAsync"/> which address the peer must dial — it probes rather than
     /// assumes, so mirrored networking (where <c>localhost</c> does work) is handled too.
     /// </para>
@@ -239,9 +260,6 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         private static (String?, String?, String?) Locate()
         {
 
-            if (!OperatingSystem.IsWindows())
-                return (null, null, "The WSL harness only applies on Windows.");
-
             // Walk up from the test binaries to the project directory that owns interop/, recognised by the
             // provisioning script rather than the folder name alone.
             var directory = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
@@ -254,13 +272,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var interopDirectory = Path.Combine(directory.FullName, "interop");
             var venvPython       = Path.Combine(interopDirectory, ".venv-interop", "bin", "python3");
 
-            if (!File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "wsl.exe")))
+            // Only Windows needs a bridge to Linux, and only there can it be missing. On Linux the peers
+            // are local processes, so there is nothing to check before running one.
+            if (OperatingSystem.IsWindows() &&
+                !File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "wsl.exe")))
                 return (interopDirectory, null, "wsl.exe not found — the Linux-only interop peers need WSL2.");
 
             if (!File.Exists(venvPython))
                 return (interopDirectory, null,
                         $"The Python interop peers are not provisioned: '{venvPython}' is missing. " +
-                         "Run interop/setup-wsl.sh from a WSL2 shell.");
+                        $"Run interop/setup-wsl.sh{(OperatingSystem.IsWindows() ? " from a WSL2 shell" : "")}.");
 
             return (interopDirectory, venvPython, null);
 
@@ -282,11 +303,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #region ToWslPath(WindowsPath)
 
-        /// <summary>Translate <c>C:\dir\file</c> into the <c>/mnt/c/dir/file</c> WSL sees.</summary>
+        /// <summary>
+        /// The path as the peer sees it: <c>C:\dir\file</c> becomes the <c>/mnt/c/dir/file</c> WSL sees,
+        /// while on Linux the test and the peer already share one filesystem and the path is its own
+        /// translation.
+        /// </summary>
         public static String ToWslPath(String WindowsPath)
         {
 
             var full = Path.GetFullPath(WindowsPath);
+
+            if (!OperatingSystem.IsWindows())
+                return full;
 
             if (full.Length < 2 || full[1] != ':')
                 throw new ArgumentException($"'{WindowsPath}' is not an absolute Windows path.", nameof(WindowsPath));
@@ -297,17 +325,30 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
-        #region RunAsync(Arguments, CancellationToken)
+        #region (private, static) CreateStartInfo(Arguments)
 
         /// <summary>
-        /// Run a command inside WSL. Arguments are passed through <see cref="ProcessStartInfo.ArgumentList"/>,
-        /// so nothing has to be shell-escaped by the caller.
+        /// Build the process start information for one peer command — the single place that knows how
+        /// this platform reaches Linux.
+        ///
+        /// <para>
+        /// Callers speak <c>wsl.exe</c>'s convention: <c>-e</c>, then the program, then its arguments.
+        /// On Windows that is passed through verbatim. On Linux the whole bridge collapses to dropping
+        /// the <c>-e</c> and executing the rest, because <c>wsl.exe -e prog args…</c> and
+        /// <c>prog args…</c> are the same command once there is no boundary to cross.
+        /// </para>
+        ///
+        /// <para>
+        /// A list that does not follow the convention throws instead of guessing. Guessing here would be
+        /// expensive: the plausible wrong reading is to treat <c>-e</c> as an argument of the program,
+        /// which on Linux would run a real program with an unexpected flag and report whatever it did as
+        /// an interop result.
+        /// </para>
         /// </summary>
-        public static async Task<(Int32 ExitCode, String StdOut, String StdErr)> RunAsync(IEnumerable<String>  Arguments,
-                                                                                          CancellationToken    CancellationToken)
+        private static ProcessStartInfo CreateStartInfo(IEnumerable<String> Arguments)
         {
 
-            var startInfo = new ProcessStartInfo("wsl.exe") {
+            var startInfo = new ProcessStartInfo {
                                 RedirectStandardOutput  = true,
                                 RedirectStandardError   = true,
                                 UseShellExecute         = false,
@@ -316,11 +357,67 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                 StandardErrorEncoding   = Encoding.UTF8
                             };
 
-            foreach (var argument in Arguments)
+            if (OperatingSystem.IsWindows())
+            {
+
+                startInfo.FileName = "wsl.exe";
+
+                foreach (var argument in Arguments)
+                    startInfo.ArgumentList.Add(argument);
+
+                return startInfo;
+
+            }
+
+            var arguments = Arguments.ToList();
+
+            if (arguments.Count < 2 || arguments[0] != "-e")
+                throw new ArgumentException(
+                          "A peer command must be '-e' followed by the program and its arguments — that is the " +
+                          "convention the native Linux path translates. Got: " +
+                         $"[{String.Join(", ", arguments)}]",
+                          nameof(Arguments));
+
+            // wsl.exe hands the peer WSL's own default PATH, which on Debian carries /usr/sbin and /sbin.
+            // The fixtures were written against that: they start daemons — dropbear, tinysshd, sshd — by
+            // bare name, and on Debian those live in /usr/sbin. A natively started child instead inherits
+            // the *test process's* PATH, which for a non-root user has neither directory, so the same
+            // fixture would find a peer on one path and not on the other. That asymmetry is worse than an
+            // outright failure: it does not break anything, it just quietly tests less.
+            var searchPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+            var entries    = searchPath.Split(':', StringSplitOptions.RemoveEmptyEntries).ToList();
+
+            foreach (var systemBin in new[] { "/usr/local/sbin", "/usr/sbin", "/sbin" })
+                if (!entries.Contains(systemBin))
+                    entries.Add(systemBin);
+
+            startInfo.Environment["PATH"] = String.Join(':', entries);
+
+            startInfo.FileName = arguments[1];
+
+            foreach (var argument in arguments.Skip(2))
                 startInfo.ArgumentList.Add(argument);
 
+            return startInfo;
+
+        }
+
+        #endregion
+
+        #region RunAsync(Arguments, CancellationToken)
+
+        /// <summary>
+        /// Run one peer command — through WSL on Windows, directly on Linux. Arguments are passed through
+        /// <see cref="ProcessStartInfo.ArgumentList"/>, so nothing has to be shell-escaped by the caller.
+        /// </summary>
+        public static async Task<(Int32 ExitCode, String StdOut, String StdErr)> RunAsync(IEnumerable<String>  Arguments,
+                                                                                          CancellationToken    CancellationToken)
+        {
+
+            var startInfo = CreateStartInfo(Arguments);
+
             using var process = Process.Start(startInfo)
-                                    ?? throw new InvalidOperationException("Could not start wsl.exe.");
+                                    ?? throw new InvalidOperationException($"Could not start '{startInfo.FileName}'.");
 
             var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken);
             var stderrTask = process.StandardError. ReadToEndAsync(CancellationToken);
@@ -344,17 +441,22 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         #region ResolveWindowsHostAsync(ProbePort, CancellationToken)
 
         /// <summary>
-        /// The address a WSL peer must dial to reach a listener bound on the Windows host.
+        /// The address a peer must dial to reach a listener bound by the test process.
         ///
         /// <para>
-        /// Probes <c>127.0.0.1</c> first (correct under mirrored networking) and falls back to the default
-        /// gateway (correct under the default NAT networking). Returns <c>null</c> when neither answers —
-        /// which on an otherwise healthy machine means the Windows firewall is blocking the test listener,
-        /// an environment problem that must not be reported as an interop failure.
+        /// On Linux there is no boundary to cross — the peer is a sibling process on the same loopback —
+        /// so the answer is <c>127.0.0.1</c> without asking anyone. On Windows it is a real question:
+        /// this probes <c>127.0.0.1</c> first (correct under mirrored networking) and falls back to the
+        /// default gateway (correct under the default NAT networking). Returns <c>null</c> when neither
+        /// answers — which on an otherwise healthy machine means the Windows firewall is blocking the
+        /// test listener, an environment problem that must not be reported as an interop failure.
         /// </para>
         /// </summary>
         public static async Task<String?> ResolveWindowsHostAsync(CancellationToken CancellationToken)
         {
+
+            if (!OperatingSystem.IsWindows())
+                return "127.0.0.1";
 
             if (resolvedHost is not null)
                 return resolvedHost;
@@ -473,18 +575,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var marker  = "hermod-interop-" + Guid.NewGuid().ToString("N");
             var tagged  = $"{Command} # {marker}";
 
-            var startInfo = new ProcessStartInfo("wsl.exe") {
-                                RedirectStandardOutput = true,
-                                RedirectStandardError  = true,
-                                UseShellExecute        = false,
-                                CreateNoWindow         = true
-                            };
-
-            foreach (var argument in new[] { "-e", "bash", "-c", tagged })
-                startInfo.ArgumentList.Add(argument);
+            var startInfo = CreateStartInfo(["-e", "bash", "-c", tagged]);
 
             var process = Process.Start(startInfo)
-                              ?? throw new InvalidOperationException("Could not start wsl.exe.");
+                              ?? throw new InvalidOperationException($"Could not start '{startInfo.FileName}'.");
 
             var server = new WslServer(process, marker);
 

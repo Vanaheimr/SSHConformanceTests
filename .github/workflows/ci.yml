@@ -74,13 +74,13 @@ jobs:
       #  * openssl — the command-line tool. Nothing under Tests/ invokes it; its only
       #    mention anywhere in this repository is a comment in interop/setup-wsl.sh. The
       #    OpenSSL *library* is a different matter and is present above as libssl3t64.
-      #  * python3-paramiko — ParamikoInteropTests reaches its peer through
-      #    interop/WslInterop.cs, whose Locate() answers "The WSL harness only applies on
-      #    Windows." before it looks at any peer at all, so the fixture skips on Linux no
-      #    matter what is installed. And on Windows it does not want a Debian package but
-      #    the virtualenv at interop/.venv-interop/, built by interop/setup-wsl.sh.
-      #  * dropbear-bin, tinysshd, putty-tools, golang-go, socat — same story: every one of
-      #    their fixtures is WSL-gated. See the comment on the test step below.
+      #  * python3-paramiko — the Paramiko and AsyncSSH fixtures do not want a Debian package
+      #    but the virtualenv at interop/.venv-interop/, which interop/setup-wsl.sh builds and
+      #    .gitignore deliberately keeps out of the checkout.
+      #  * dropbear-bin, tinysshd, putty-tools, golang-go, socat — the peers behind the other
+      #    six Linux fixtures. Since WslInterop grew a native Linux path these would genuinely
+      #    run here, so leaving them out is now a cost decision rather than an impossibility.
+      #    The test step below has the measured figures for both choices.
       - name: Install git and the .NET prerequisites (Debian container)
         if: runner.os == 'Linux'
         run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata openssh-client
@@ -131,13 +131,22 @@ jobs:
       # openssh-client), OpenSshAgent (needing the agent above) and SshNet — the last one a
       # pure-managed NuGet peer that needs nothing installed at all.
       #
-      # Eight fixtures skip on Linux and say so: AsyncSsh, CurlLibSsh, Dropbear,
-      # GoCryptoSsh, OpenSshServer, Paramiko, Plink and TinySsh all reach their peer through
-      # interop/WslInterop.cs, which is a wsl.exe harness and refuses outright on anything
-      # that is not Windows. Installing their peers here would change nothing — the gate is
-      # the harness, not the package. Giving WslInterop a native Linux path would flip all
-      # eight in one move and is the obvious next step for this workflow; until then their
-      # "The WSL harness only applies on Windows." is expected output, not a defect.
+      # Eight fixtures still skip here — AsyncSsh, CurlLibSsh, Dropbear, GoCryptoSsh,
+      # OpenSshServer, Paramiko, Plink and TinySsh — but no longer because they are unable to
+      # run. They reach their peers through interop/WslInterop.cs, which used to refuse
+      # outright on anything that was not Windows and now runs the same commands natively.
+      # What holds them back today is provisioning: interop/.venv-interop is .gitignore'd, so
+      # a checkout carries no Python peers, and the harness treats that as "unprovisioned" and
+      # skips everything depending on it. Measured with exactly the packages above: 41 of 94
+      # run, 53 skip, nothing fails — the same figures as before the native path existed,
+      # which is what makes this workflow safe to leave as it is for now.
+      #
+      # What it would buy is no longer hypothetical. With the peers installed and the
+      # virtualenv built — interop/setup-wsl.sh does both — the identical suite runs 93 of 94
+      # on Debian 13 in 13 seconds, everything except the ssh-agent check that the step above
+      # already covers. That is the full Tier-1/Tier-2 matrix PLAN §11.6 reserves for a
+      # *nightly* job rather than the per-commit gate, so it belongs in a second workflow and
+      # not in this one.
       #
       # The Windows leg reaches those eight no further: GitHub's hosted Windows images have
       # no WSL. What it does add is the Windows-bundled OpenSSH, a genuinely different build

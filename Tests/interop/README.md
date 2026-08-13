@@ -17,8 +17,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | `setup-wsl.sh`   | Provision the peers inside a WSL2 Debian/Ubuntu (idempotent; sudo for apt).   |
 | `.venv-interop/` | The Python peers (AsyncSSH, Paramiko), created by the script. Git-ignored.    |
 | `python/`        | Peer drivers speaking a JSON contract with `WslInterop.RunPeerDriverAsync`.   |
-| `WslInterop.cs`  | Runs peers inside WSL: process plumbing, addressing, peer logs, skip reasons. |
-| `docker/`        | Dockerfiles per peer + version for the CI/version-matrix runs (added in M9).  |
+| `WslInterop.cs`  | Runs the peers — through WSL on Windows, directly on Linux: process plumbing, addressing, peer logs, skip reasons. |
 | `go/`            | A small `golang.org/x/crypto/ssh` harness (added when that peer is wired in). |
 
 ## Which peers are exercised, and how
@@ -39,10 +38,17 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 ./setup-wsl.sh --check    # report what is present, install nothing
 ```
 
-The tests reach this shell from Windows via `wsl.exe -e`. Note the two WSL gotchas the harness
-handles automatically (the plan's §11.2): private keys are copied off `/mnt/c` into the WSL home and
-`chmod 600`-ed (OpenSSH refuses world-readable keys), and `localhost` reachability differs between
-NAT and mirrored networking modes.
+On Windows the tests reach this shell via `wsl.exe -e`. On Linux the same script provisions the same
+peers and the harness runs them directly — no bridge, no path translation, no gateway to find. Note
+the two WSL gotchas the harness handles automatically on the Windows path (the plan's §11.2): private
+keys are copied off `/mnt/c` into the WSL home and `chmod 600`-ed (OpenSSH refuses world-readable
+keys), and `localhost` reachability differs between NAT and mirrored networking modes.
+
+One asymmetry is worth knowing when reading `WslInterop.cs`: `wsl.exe` hands a peer WSL's own default
+`PATH`, which includes `/usr/sbin`, while a natively started child inherits the test process's `PATH`,
+which for a non-root user on Debian does not. Since the fixtures start `dropbear`, `tinysshd` and
+`sshd` by bare name — and Debian puts all three in `/usr/sbin` — the native path adds those
+directories explicitly. Without that the two paths would disagree about which peers exist at all.
 
 ### Which address a WSL peer must dial (measured 2026-08-11, NAT mode)
 
@@ -59,5 +65,13 @@ detect rather than assume: try `127.0.0.1` first, fall back to the gateway.
 
 ## CI
 
-Hosted CI runners have no WSL; the same peers are provided there via the `docker/` images. The full
-matrix strategy (per-commit smoke vs. nightly matrix) lives in the plan's §11.6.
+Hosted CI runners have no WSL, which is exactly why the harness gained its native Linux path: on the
+`debian:13` container leg of [ci.yml](../../.github/workflows/ci.yml) the peers are ordinary local
+processes, so `setup-wsl.sh` is the provisioning script there too. No per-peer container images are
+involved — an earlier plan for a `docker/` directory was never built and the container leg made it
+unnecessary.
+
+What CI installs today is `openssh-client` and nothing else, so the eight Linux fixtures skip for want
+of peers: **41 of 94 run**. Provisioned as `setup-wsl.sh` does it, the same suite runs **93 of 94 in
+13 s**. That gap is the per-commit versus nightly split in the plan's §11.6, and it is now a cost
+decision rather than a capability one.
