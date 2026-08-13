@@ -148,12 +148,15 @@ jobs:
       # *nightly* job rather than the per-commit gate, so it belongs in a second workflow and
       # not in this one.
       #
-      # The Windows leg reaches those eight no further: GitHub's hosted Windows images have
-      # no WSL. What it does add is the Windows-bundled OpenSSH, a genuinely different build
-      # — and a notably older one, which is the point. Where the Debian client negotiates
-      # both hybrid key exchanges, an older Windows client advertises neither, and the
-      # transport fixtures then say so by name rather than quietly passing. Two legs, two
-      # different clients, one suite.
+      # The Windows leg reaches those eight no further — the hosted images install no WSL distro
+      # — and lands at 40 of 94. What it adds is the Windows OpenSSH: a genuinely different
+      # build against a different TLS stack, driving the same server.
+      #
+      # It is not, however, an older one. That was assumed here at first and the artifacts
+      # disproved it: the transport fixture passes 12 of 12 on this leg, both hybrid key
+      # exchanges included. The 9.5p2 client that advertises neither is what sits on a typical
+      # developer Windows box, where those two cases skip by name — so the version spread this
+      # matrix covers is between CI and the desk, not between the two legs.
       #
       # Measured on Debian 13 with everything above in place: 41 of 94 checks run, 53 skip,
       # none fail. The suite itself takes seconds; the time goes into the build.
