@@ -71,20 +71,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             if (prepared != 0)
                 Assert.Ignore($"Could not prepare the sshd workspace: {prepareError}");
 
-            var port = FreePort();
-
             try
             {
 
                 // The mkdir keeps a root run working: sshd-as-root insists on /run/sshd, which is
                 // tmpfs-backed and so absent in a fresh container — see OpenSshServerInteropTests.
                 var server = await WslInterop.StartServerAsync(
-                                 $"$(mkdir -p /run/sshd 2>/dev/null; command -v sshd || echo /usr/sbin/sshd) -D -e -p {port} " +
-                                 $"-h {wslRoot}/hostkey " +
-                                 $"-o AuthorizedKeysFile={wslRoot}/authorized_keys " +
-                                 $"-o StrictModes=no -o UsePAM=no -o PidFile=none " +
-                                 $"-o ListenAddress=127.0.0.1",
-                                 port,
+                                 port =>
+                                     $"$(mkdir -p /run/sshd 2>/dev/null; command -v sshd || echo /usr/sbin/sshd) -D -e -p {port} " +
+                                     $"-h {wslRoot}/hostkey " +
+                                     $"-o AuthorizedKeysFile={wslRoot}/authorized_keys " +
+                                     $"-o StrictModes=no -o UsePAM=no -o PidFile=none " +
+                                     $"-o ListenAddress=127.0.0.1",
                                  CancellationToken);
 
                 // What the peer recorded about itself is the whole basis of reaping it, so read it back
@@ -136,19 +134,6 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 try { await WslInterop.RunAsync(["-e", "rm", "-rf", wslRoot],   CancellationToken.None); } catch { }
             }
 
-        }
-
-        #endregion
-
-        #region (private) FreePort()
-
-        private static Int32 FreePort()
-        {
-            using var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-            probe.Start();
-            var port = ((System.Net.IPEndPoint) probe.LocalEndpoint).Port;
-            probe.Stop();
-            return port;
         }
 
         #endregion

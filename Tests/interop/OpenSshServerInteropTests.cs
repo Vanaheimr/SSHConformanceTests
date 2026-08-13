@@ -58,7 +58,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         private const String Marker = "OPENSSH_SERVER_INTEROP_OK";
 
-        private sealed record Daemon(WslServer Server, Int32 Port, Byte[] HostKeyBlob, ISshHostKey UserKey, String WslRoot, String WindowsRoot);
+        private sealed record Daemon(WslServer Server, Byte[] HostKeyBlob, ISshHostKey UserKey, String WslRoot, String WindowsRoot)
+        {
+            /// <summary>The port the daemon ended up on — chosen by the harness, which may have had to retry.</summary>
+            public Int32 Port => Server.Port;
+        }
 
 
         /// <summary>
@@ -106,7 +110,6 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                              .First(line => line.StartsWith("ssh-ed25519", StringComparison.Ordinal))
                                              .Split(' ')[1]);
 
-            var port      = FreePort();
             var subsystem = WithSftp ? "-o Subsystem=\"sftp /usr/lib/openssh/sftp-server\" " : "";
 
             // The mkdir rides inside the command substitution: run as root, sshd refuses to start
@@ -115,17 +118,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             // ordinary user the mkdir fails (silently, hence 2>/dev/null), and an unprivileged sshd
             // does not want the directory in the first place.
             var daemon = await WslInterop.StartServerAsync(
-                             $"$(mkdir -p /run/sshd 2>/dev/null; command -v sshd || echo /usr/sbin/sshd) -D -e -p {port} " +
-                             $"-h {wslRoot}/hostkey " +
-                             $"-o AuthorizedKeysFile={wslRoot}/authorized_keys " +
-                             $"-o StrictModes=no -o UsePAM=no -o PidFile=none " +
-                             $"-o PasswordAuthentication=no -o KbdInteractiveAuthentication=no " +
-                             subsystem +
-                             $"-o ListenAddress=127.0.0.1",
-                             port,
+                             port =>
+                                 $"$(mkdir -p /run/sshd 2>/dev/null; command -v sshd || echo /usr/sbin/sshd) -D -e -p {port} " +
+                                 $"-h {wslRoot}/hostkey " +
+                                 $"-o AuthorizedKeysFile={wslRoot}/authorized_keys " +
+                                 $"-o StrictModes=no -o UsePAM=no -o PidFile=none " +
+                                 $"-o PasswordAuthentication=no -o KbdInteractiveAuthentication=no " +
+                                 subsystem +
+                                 $"-o ListenAddress=127.0.0.1",
                              CancellationToken);
 
-            return new Daemon(daemon, port, hostKeyBlob, userKey, wslRoot, windowsRoot);
+            return new Daemon(daemon, hostKeyBlob, userKey, wslRoot, windowsRoot);
 
         }
 
@@ -134,15 +137,6 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await Daemon.Server.DisposeAsync();
             try { Directory.Delete(Daemon.WindowsRoot, recursive: true); } catch { }
             try { await WslInterop.RunAsync(["-e", "rm", "-rf", Daemon.WslRoot], CancellationToken.None); } catch { }
-        }
-
-        private static Int32 FreePort()
-        {
-            using var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-            probe.Start();
-            var port = ((System.Net.IPEndPoint) probe.LocalEndpoint).Port;
-            probe.Stop();
-            return port;
         }
 
         /// <summary>The user sshd will authenticate — it runs unprivileged, so only its own account.</summary>

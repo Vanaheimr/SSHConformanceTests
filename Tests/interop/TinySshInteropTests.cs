@@ -109,20 +109,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// TinySSH speaks over stdin/stdout in the inetd tradition, so socat gives it a listening socket.
         /// Bound to loopback inside WSL, which Windows reaches through WSL2's localhost forwarding.
         /// </summary>
-        private static Task<WslServer> StartAsync(Fixture Fixture, Int32 Port, CancellationToken CancellationToken)
+        private static Task<WslServer> StartAsync(Fixture Fixture, CancellationToken CancellationToken)
             => WslInterop.StartServerAsync(
-                   $"socat TCP-LISTEN:{Port},reuseaddr,fork,bind=127.0.0.1 EXEC:'/usr/sbin/tinysshd -v {Fixture.KeyDirectory}'",
-                   Port,
+                   port =>
+                       $"socat TCP-LISTEN:{port},reuseaddr,fork,bind=127.0.0.1 EXEC:'/usr/sbin/tinysshd -v {Fixture.KeyDirectory}'",
                    CancellationToken);
-
-        private static Int32 FreePort()
-        {
-            using var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-            probe.Start();
-            var port = ((System.Net.IPEndPoint) probe.LocalEndpoint).Port;
-            probe.Stop();
-            return port;
-        }
 
         #endregion
 
@@ -148,14 +139,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         {
 
             var fixture = await PrepareAsync(CancellationToken);
-            var port    = FreePort();
 
-            await using var tinyssh = await StartAsync(fixture, port, CancellationToken);
+            await using var tinyssh = await StartAsync(fixture, CancellationToken);
 
             try
             {
 
-                var pipe = await SshTcp.ConnectAsync(new IPSocket(IPv4Address.Localhost, IPPort.Parse(port)), CancellationToken);
+                var pipe = await SshTcp.ConnectAsync(new IPSocket(IPv4Address.Localhost, IPPort.Parse(tinyssh.Port)), CancellationToken);
 
                 using var transport = await SshTransport.ClientHandshakeAsync(
                                           pipe,
@@ -208,15 +198,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         {
 
             var fixture      = await PrepareAsync(CancellationToken);
-            var port         = FreePort();
             var somebodyElse = SshHostKey.GenerateEd25519();
 
-            await using var tinyssh = await StartAsync(fixture, port, CancellationToken);
+            await using var tinyssh = await StartAsync(fixture, CancellationToken);
 
             try
             {
 
-                var pipe = await SshTcp.ConnectAsync(new IPSocket(IPv4Address.Localhost, IPPort.Parse(port)), CancellationToken);
+                var pipe = await SshTcp.ConnectAsync(new IPSocket(IPv4Address.Localhost, IPPort.Parse(tinyssh.Port)), CancellationToken);
 
                 Assert.That(async () => await SshTransport.ClientHandshakeAsync(
                                             pipe,

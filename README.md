@@ -1,5 +1,7 @@
 # SSH Conformance & Interoperability Test Suite
 
+[![CI](https://github.com/Vanaheimr/SSHConformanceTests/actions/workflows/ci.yml/badge.svg)](https://github.com/Vanaheimr/SSHConformanceTests/actions/workflows/ci.yml)
+
 A modern, fully asynchronous **SSH2 client and server** implementation for **C# / .NET 10**,
 including **SFTP**, **post-quantum hybrid key exchange**, **public-key authentication** and
 **OpenSSH certificates**. Part of the [Vanaheimr Hermod](https://www.github.com/Vanaheimr/Hermod)
