@@ -98,18 +98,7 @@ jobs:
       # the Go module fetch this workflow already performs.
       - name: Provision the interop peers (Debian container)
         if: runner.os == 'Linux'
-        run: |
-          # Dropbear walks the whole path up to the root before it will read an authorized-keys
-          # file and refuses any directory on the way that is group- or world-writable. The
-          # container's HOME is /github/home, which is exactly that, and the peers keep their
-          # scratch space under it — so Dropbear starts, accepts the connection, and only then
-          # rejects every key with "must be owned by user or root". The peer log says so in as
-          # many words; nothing about it looks like a permissions problem from the outside.
-          #
-          # Deliberately here rather than in setup-wsl.sh: that script also runs on developer
-          # machines, and no test run has any business changing the mode of a real $HOME.
-          chmod go-w "$HOME"
-          bash Tests/interop/setup-wsl.sh
+        run: bash Tests/interop/setup-wsl.sh
 
       - uses: actions/setup-dotnet@v6
         with:
@@ -137,26 +126,33 @@ jobs:
           ssh-add -q "${RUNNER_TEMP}/ci-agent-key"
           echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "${GITHUB_ENV}"
 
-      # Dropbear refuses an authorized-keys file unless its *entire* directory path — every
-      # element from the file up to the root — is owned by the user or root and not writable
-      # by group or others. The runner creates this container's HOME (/github/home) writable
-      # by everyone, so the one Dropbear check that actually authenticates failed here with
-      # "/github/home must be owned by user or root, and not writable by group or others"
-      # while every developer box passed it, their $HOME being 0755. That asymmetry is why
-      # it took a hosted runner to surface it at all.
+      # Dropbear will not read an authorized-keys file unless its *entire* directory path —
+      # every element from the file up to the root — is owned by the user or by root and is
+      # not writable by group or others. The peers keep their scratch space under $HOME, and
+      # the runner's /github/home breaks both halves of that rule: it is world-writable, and
+      # it belongs to the host's runner account, not to root, which is who this container is.
+      # So the one Dropbear check that authenticates failed here with "must be owned by user
+      # or root, and not writable by group or others" while every developer box passed it
+      # unnoticed, its $HOME being 0755 and its own.
       #
-      # The loop rather than a single chmod: reproduced locally that the walk really is the
-      # whole chain — a tight HOME under a 0777 parent fails too, and the log then names the
-      # parent instead.
+      # Both halves matter, and the ownership half is the one that cost an extra round: a
+      # chmod alone leaves the directory owned by the runner account and Dropbear refuses it
+      # just the same, with the very same message. Reproduced both ways on Debian 13 — a
+      # 0755 directory owned by another account fails, and chowning it to root is what makes
+      # the check pass.
       #
-      # Deliberately here and not in setup-wsl.sh: on a developer machine that script would
-      # quietly re-mode the user's own home directory, which is nobody's business but theirs.
-      # A container's directories are this job's to fix.
-      - name: Tighten the container HOME for Dropbear's path check (Debian container)
+      # The loop, because the walk really is the whole chain: a tight HOME under a 0777
+      # parent fails too, and the peer log then names the parent instead.
+      #
+      # Deliberately here and not in setup-wsl.sh: that script also runs on developer
+      # machines, and no test run has any business re-moding or re-owning a real $HOME.
+      # These are a throwaway container's own directories.
+      - name: Let Dropbear read keys from the container HOME (Debian container)
         if: runner.os == 'Linux'
         run: |
           d="${HOME:?}"
           while [ "${d}" != "/" ] && [ "${d}" != "." ]; do
+            chown "$(id -u):$(id -g)" "${d}"
             chmod go-w "${d}"
             d="$(dirname "${d}")"
           done
