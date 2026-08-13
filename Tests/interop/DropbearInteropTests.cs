@@ -136,15 +136,6 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             return (exitCode, stdout + stderr);
         }
 
-        private static Int32 FreePort()
-        {
-            using var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-            probe.Start();
-            var port = ((System.Net.IPEndPoint) probe.LocalEndpoint).Port;
-            probe.Stop();
-            return port;
-        }
-
         #endregion
 
 
@@ -440,7 +431,6 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var (workspace, userKey) = await PrepareAsync(CancellationToken);
             var user = await WslInterop.WhoAmIAsync(CancellationToken);
-            var port = FreePort();
 
             // Dropbear needs its host key in its own format; -y prints the public half for us to pin.
             var (keyExit, _, keyError) = await WslInterop.RunAsync([
@@ -459,9 +449,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var expectedHostKey = Convert.FromBase64String(publicLine.Split(' ')[1]);
 
             await using var dropbear = await WslInterop.StartServerAsync(
-                                           $"dropbear -r {workspace.WslHostKey} -D {workspace.WslAuthorizedDir} " +
-                                           $"-p 127.0.0.1:{port} -F -E",
-                                           port,
+                                           port =>
+                                               $"dropbear -r {workspace.WslHostKey} -D {workspace.WslAuthorizedDir} " +
+                                               $"-p 127.0.0.1:{port} -F -E",
                                            CancellationToken);
 
             try
@@ -472,7 +462,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 {
                     client = await SshClient.ConnectAsync(
                                  "127.0.0.1",
-                                 (UInt16) port,
+                                 (UInt16) dropbear.Port,
                                  new SshClientOptions {
                                      Username      = user,
                                      Credentials   = [ userKey ],
@@ -522,7 +512,6 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var (workspace, userKey) = await PrepareAsync(CancellationToken);
             var user = await WslInterop.WhoAmIAsync(CancellationToken);
-            var port = FreePort();
 
             var (keyExit, _, keyError) = await WslInterop.RunAsync([
                                              "-e", "dropbearkey", "-t", "ed25519", "-f", workspace.WslHostKey
@@ -531,9 +520,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 Assert.Ignore($"dropbearkey failed: {keyError}");
 
             await using var dropbear = await WslInterop.StartServerAsync(
-                                           $"dropbear -r {workspace.WslHostKey} -D {workspace.WslAuthorizedDir} " +
-                                           $"-p 127.0.0.1:{port} -F -E",
-                                           port,
+                                           port =>
+                                               $"dropbear -r {workspace.WslHostKey} -D {workspace.WslAuthorizedDir} " +
+                                               $"-p 127.0.0.1:{port} -F -E",
                                            CancellationToken);
 
             try
@@ -543,7 +532,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 Assert.That(async () => await SshClient.ConnectAsync(
                                             "127.0.0.1",
-                                            (UInt16) port,
+                                            (UInt16) dropbear.Port,
                                             new SshClientOptions {
                                                 Username      = user,
                                                 Credentials   = [ userKey ],
