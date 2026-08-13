@@ -83,24 +83,25 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     /// A peer server running for the lifetime of one test.
     ///
     /// <para>
-    /// Disposal kills the process it started and — via the marker the command was tagged with — whatever
-    /// that process left behind. The marker earns its keep on Windows, where killing <c>wsl.exe</c> does
-    /// not reliably reap the Linux side; on Linux the process tree is already the whole story, and the
-    /// pkill is then a cheap belt to the braces rather than a necessity.
+    /// Disposal reaps the daemon on the Linux side, which is the entire reason this type exists. Killing
+    /// <c>wsl.exe</c> ends the Windows half of the bridge and nothing else: the daemon is reparented to
+    /// init and keeps listening. So the peer records who it is before it starts, and disposal kills
+    /// exactly that — see <see cref="WslInterop.StartServerAsync"/> for what "who it is" has to mean to
+    /// survive a daemon that renames itself.
     /// </para>
     /// </summary>
     public sealed class WslServer : IAsyncDisposable
     {
 
         private readonly Process        process;
-        private readonly String         marker;
+        private readonly String         runIdentifier;
         private readonly StringBuilder  log = new ();
 
-        internal WslServer(Process Process, String Marker)
+        internal WslServer(Process Process, String RunIdentifier)
         {
 
-            this.process = Process;
-            this.marker  = Marker;
+            this.process       = Process;
+            this.runIdentifier = RunIdentifier;
 
             // Accumulated line by line rather than with ReadToEndAsync: the peer is still running when a
             // test needs to know why it refused something, and a task that only completes at exit would
@@ -139,10 +140,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             try
             {
-                // The Linux-side process outlives wsl.exe often enough to matter: a forgotten SSH daemon
-                // would keep listening on the developer's machine.
-                await WslInterop.RunAsync(["-e", "bash", "-c", $"pkill -f {marker} || true"], CancellationToken.None)
-                                .ConfigureAwait(false);
+                // Not belt and braces: on Windows this is the only thing that reaches the daemon at all,
+                // and a forgotten SSH daemon keeps listening on the developer's machine.
+                await WslInterop.ReapAsync(runIdentifier, CancellationToken.None).ConfigureAwait(false);
             }
             catch { }
 
@@ -235,6 +235,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         // The reachable address does not change during a run, so probe once.
         private static String? resolvedHost;
         private static readonly SemaphoreSlim resolveLock = new (1, 1);
+
+        // One identifier per test-host process, and a directory of its own for the peers it starts. A
+        // second test run on this machine gets a different one, which is what lets InteropPeerCleanup
+        // sweep our leftovers without touching peers that another run is still using.
+        private static readonly String sessionIdentifier = Guid.NewGuid().ToString("N");
+
+        // Set once a peer server has actually been started, so a run that never used WSL — the common
+        // case on a machine without it — does not shell out just to sweep nothing.
+        private static Int32 startedServers;
 
         #endregion
 
@@ -344,9 +353,24 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// which on Linux would run a real program with an unexpected flag and report whatever it did as
         /// an interop result.
         /// </para>
+        ///
+        /// <para>
+        /// Every argument has its line endings normalised on the way through, which matters for exactly
+        /// one kind of argument and matters a lot: the shell scripts this file passes to <c>bash -c</c>.
+        /// They are written as C# raw string literals, and a raw string literal keeps the line endings of
+        /// the <i>source file</i> — CRLF in a Windows checkout, because <c>.gitattributes</c> only pins
+        /// <c>*.sh</c> to LF and cannot see a script embedded in a <c>.cs</c> file. bash then reads the
+        /// carriage return as part of the last word on each line, which does not fail loudly: it silently
+        /// makes <c>mkdir "$d"</c> and <c>echo &gt; "$d/f"</c> disagree about what <c>$d</c> is, and turns
+        /// a <c>for … ; do</c> header into an outright syntax error. That cost this harness a fleet of SSH
+        /// daemons that nothing could ever kill. Line endings are a property of the boundary being
+        /// crossed, so they are converted at the boundary, once.
+        /// </para>
         /// </summary>
         private static ProcessStartInfo CreateStartInfo(IEnumerable<String> Arguments)
         {
+
+            Arguments = Arguments.Select(argument => argument.Replace("\r\n", "\n"));
 
             var startInfo = new ProcessStartInfo {
                                 RedirectStandardOutput  = true,
@@ -559,10 +583,28 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// until it is actually accepting connections.
         ///
         /// <para>
-        /// Killing <c>wsl.exe</c> does not reliably reap what it started on the Linux side, so the command
-        /// is tagged with a unique marker and <see cref="WslServer.DisposeAsync"/> pkills that marker. A
-        /// stray SSH daemon left listening after a test run would be both a leak and a small security
-        /// problem on the developer's machine.
+        /// Killing <c>wsl.exe</c> does not reap what it started on the Linux side, so the peer has to be
+        /// identified from within Linux. It writes down <b>its own PID and start time</b> just before it
+        /// <c>exec</c>s, and <see cref="WslServer.DisposeAsync"/> kills that. Both halves are load-bearing:
+        /// the PID says what to kill, and the start time — fixed at fork, unchanged by <c>exec</c> — says
+        /// it is still the same process, so a recycled PID from a run that crashed days ago can never be
+        /// mistaken for a peer and signalled.
+        /// </para>
+        ///
+        /// <para>
+        /// Identifying a daemon by pattern-matching its command line does not work, which is worth
+        /// recording because both obvious spellings look like they should. A marker appended as a shell
+        /// comment never reaches the peer at all — bash strips it before <c>exec</c>. And a marker passed
+        /// in the environment is destroyed in the case that matters most: OpenSSH's <c>setproctitle</c>
+        /// reuses the argv <i>and environment</i> memory to write "sshd: … [listener]", so a tagged sshd
+        /// has no tag left by the time anyone looks for it.
+        /// </para>
+        ///
+        /// <para>
+        /// <c>setsid</c> puts the peer in a session and process group of its own, so one signal to the
+        /// negated PID takes its forked children with it — socat's <c>tinysshd</c> instances, sshd's
+        /// per-connection children. <c>--wait</c> keeps the bridge process alive exactly as long as the
+        /// peer, which the readiness loop below and <see cref="WslServer.Output"/> both depend on.
         /// </para>
         /// </summary>
         /// <param name="Command">The shell command to run inside WSL.</param>
@@ -572,15 +614,26 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                              CancellationToken  CancellationToken)
         {
 
-            var marker  = "hermod-interop-" + Guid.NewGuid().ToString("N");
-            var tagged  = $"{Command} # {marker}";
+            var runIdentifier = Guid.NewGuid().ToString("N");
 
-            var startInfo = CreateStartInfo(["-e", "bash", "-c", tagged]);
+            // $$ is the PID this shell will still have after exec, and field 22 of /proc/self/stat is the
+            // start time it was forked with. Everything after the last ')' is parsed positionally because
+            // the process name in between sits in parentheses and may contain spaces.
+            var script = $$"""
+                          mkdir -p "$HOME/.hermod-interop/run/{{sessionIdentifier}}"
+                          stat=$(cat /proc/$$/stat)
+                          echo "$$ $(echo "${stat#*) }" | cut -d' ' -f20)" > "$HOME/.hermod-interop/run/{{sessionIdentifier}}/{{runIdentifier}}.pid"
+                          exec {{Command}}
+                          """;
+
+            var startInfo = CreateStartInfo(["-e", "setsid", "--wait", "bash", "-c", script]);
 
             var process = Process.Start(startInfo)
                               ?? throw new InvalidOperationException($"Could not start '{startInfo.FileName}'.");
 
-            var server = new WslServer(process, marker);
+            Interlocked.Increment(ref startedServers);
+
+            var server = new WslServer(process, runIdentifier);
 
             // Wait for the listener rather than sleeping a fixed amount: peers start at very different
             // speeds and a fixed delay is either slow or flaky.
@@ -608,6 +661,139 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             throw new InvalidOperationException(
                       $"The WSL peer server never accepted a connection on port {Port}.\n{Command}\n{diagnostics}");
+
+        }
+
+        #endregion
+
+        #region (private, static) ReapFunctions
+
+        /// <summary>
+        /// The two shell functions the reaping scripts are built from.
+        ///
+        /// <para>
+        /// <c>alive</c> answers "is this still the very process we started?" by comparing the recorded
+        /// start time, so it doubles as the liveness check and as the guard against acting on a PID the
+        /// kernel has since handed to somebody else. It also refuses anything non-numeric and PID 1,
+        /// because the negated-PID form used below turns a stray <c>-1</c> into a signal to every process
+        /// on the machine.
+        /// </para>
+        ///
+        /// <para>
+        /// <c>reap</c> takes a PID file and ends what it names: the process group first, falling back to
+        /// the bare PID when the peer is not a group leader, TERM before KILL so a daemon still gets to
+        /// close its sockets, and the PID file removed either way — a peer that is already gone leaves
+        /// nothing behind but the file.
+        /// </para>
+        /// </summary>
+        private const String ReapFunctions = """
+                                             alive() {
+                                                 case "$1" in ''|*[!0-9]*) return 1;; esac
+                                                 [ "$1" -gt 1 ] || return 1
+                                                 s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+                                                 [ "$(echo "${s#*) }" | cut -d' ' -f20)" = "$2" ]
+                                             }
+
+                                             reap() {
+                                                 [ -r "$1" ] || return 0
+                                                 read -r pid start rest < "$1" || true
+                                                 if alive "$pid" "$start"; then
+                                                     kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+                                                     for _ in 1 2 3 4 5 6 7 8 9 10; do
+                                                         alive "$pid" "$start" || break
+                                                         sleep 0.2
+                                                     done
+                                                     if alive "$pid" "$start"; then
+                                                         kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+                                                     fi
+                                                 fi
+                                                 rm -f "$1"
+                                             }
+                                             """;
+
+        #endregion
+
+        #region (internal, static) ReapAsync(RunIdentifier, CancellationToken)
+
+        /// <summary>
+        /// End the peer started under <paramref name="RunIdentifier"/>, and everything it forked.
+        /// </summary>
+        internal static Task ReapAsync(String             RunIdentifier,
+                                       CancellationToken  CancellationToken)
+
+            => RunAsync(["-e", "bash", "-c",
+                         $$"""
+                           {{ReapFunctions}}
+
+                           reap "$HOME/.hermod-interop/run/{{sessionIdentifier}}/{{RunIdentifier}}.pid"
+                           exit 0
+                           """],
+                        CancellationToken);
+
+        #endregion
+
+        #region (internal, static) SweepAsync(CancellationToken)
+
+        /// <summary>
+        /// End whatever this test run still has listening inside Linux, and report peers that an earlier
+        /// run left behind.
+        ///
+        /// <para>
+        /// Only <i>this</i> session's peers are signalled. Another session's PID files are collected when
+        /// the process behind them is gone, but a live one is only counted and reported: a second test host
+        /// running right now owns those, and killing its daemons would break a run that is doing nothing
+        /// wrong. The count is what a developer needs to see — orphans can only come from a run that died
+        /// before it could clean up, and nothing else will ever collect them.
+        /// </para>
+        /// </summary>
+        /// <returns>How many peers from other sessions are still running, or <c>null</c> when the sweep could not run.</returns>
+        internal static async Task<Int32?> SweepAsync(CancellationToken CancellationToken)
+        {
+
+            if (Volatile.Read(ref startedServers) == 0)
+                return 0;
+
+            try
+            {
+
+                var (exitCode, stdout, _) = await RunAsync(["-e", "bash", "-c",
+                                                            $$"""
+                                                              {{ReapFunctions}}
+
+                                                              root="$HOME/.hermod-interop/run"
+
+                                                              for f in "$root/{{sessionIdentifier}}"/*.pid; do
+                                                                  reap "$f"
+                                                              done
+
+                                                              left=0
+                                                              for f in "$root"/*/*.pid; do
+                                                                  [ -e "$f" ] || continue
+                                                                  read -r pid start rest < "$f" || true
+                                                                  if alive "$pid" "$start"; then
+                                                                      left=$((left + 1))
+                                                                  else
+                                                                      rm -f "$f"
+                                                                  fi
+                                                              done
+
+                                                              for d in "$root"/*/; do rmdir "$d" 2>/dev/null || true; done
+                                                              rmdir "$root" 2>/dev/null || true
+
+                                                              echo "$left"
+                                                              exit 0
+                                                              """],
+                                                           CancellationToken).ConfigureAwait(false);
+
+                return exitCode == 0 && Int32.TryParse(stdout.Trim(), out var left)
+                           ? left
+                           : null;
+
+            }
+            catch
+            {
+                return null;
+            }
 
         }
 
