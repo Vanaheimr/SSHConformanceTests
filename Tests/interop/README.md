@@ -14,7 +14,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 
 | Path             | Purpose                                                                      |
 |------------------|------------------------------------------------------------------------------|
-| `setup-wsl.sh`   | Provision the peers inside a WSL2 Debian/Ubuntu (idempotent; sudo for apt).   |
+| `setup-wsl.sh`   | Provision the peers on any Debian-family Linux (idempotent; root/sudo for apt). |
 | `.venv-interop/` | The Python peers (AsyncSSH, Paramiko), created by the script. Git-ignored.    |
 | `python/`        | Peer drivers speaking a JSON contract with `WslInterop.RunPeerDriverAsync`.   |
 | `WslInterop.cs`  | Runs the peers — through WSL on Windows, directly on Linux: process plumbing, addressing, peer logs, skip reasons. |
@@ -71,7 +71,10 @@ processes, so `setup-wsl.sh` is the provisioning script there too. No per-peer c
 involved — an earlier plan for a `docker/` directory was never built and the container leg made it
 unnecessary.
 
-What CI installs today is `openssh-client` and nothing else, so the eight Linux fixtures skip for want
-of peers: **41 of 94 run**. Provisioned as `setup-wsl.sh` does it, the same suite runs **93 of 94 in
-13 s**. That gap is the per-commit versus nightly split in the plan's §11.6, and it is now a cost
-decision rather than a capability one.
+Since 2026-08-13 the Debian leg runs `setup-wsl.sh` itself — as root, where the script skips the
+sudo it would use on a developer box — so every fixture in this repository runs on every commit:
+**95 of 95 checks**, in about 16 s of test time. The Python peers deliberately keep coming from PyPI
+rather than apt: trixie's `python3-asyncssh` 2.20 predates AsyncSSH's PyCA-cryptography ML-KEM path
+(2.24), and with the apt package the post-quantum interop check could not pass. What remains for a
+nightly job (the plan's §11.6) is the *version spread* — OpenSSH 8.9/9.6/9.9 containers, the Tier 3
+peers — not this suite at the distro's own peer versions.

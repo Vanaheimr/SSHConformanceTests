@@ -890,8 +890,8 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 
 ### 11.6 CI strategy
 
-- **Per commit:** unit + loopback + in-process SSH.NET smoke + one OpenSSH-current container round-trip (client and server role) — minutes, not hours
-- **Nightly:** full Tier 1 + Tier 2 matrix on a Linux runner (containers + apt peers); Windows runner covers Win32-OpenSSH + plink
+- **Per commit** ✅ (`.github/workflows/ci.yml`, since 2026-08-13 with the full peer set): the whole conformance suite on a Debian 13 container leg — every peer at trixie's versions, provisioned by `setup-wsl.sh`, 95 of 95 checks in ~16 s of test time — plus a Windows leg (40 of 95; hosted runners have no WSL) adding the genuinely different Windows OpenSSH build
+- **Nightly** ⬜: the *version spread* the per-commit gate does not buy — OpenSSH 8.9/9.6/9.9/10.x containers, Tier 2 peers at non-distro versions; Windows runner covers Win32-OpenSSH + plink
 - **Weekly/manual:** Tier 3, incl. the native OpenBSD VM smoke test
 - **Local dev box:** the full WSL2 suite (closest match to the "OpenSSH under Linux/WSL" requirement); `dotnet test --filter Category=Interop.WSL`
 
