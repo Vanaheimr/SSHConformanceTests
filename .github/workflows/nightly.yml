@@ -1,0 +1,323 @@
+name: Nightly
+
+# The counterpart to ci.yml, split the same way Hermod's own nightly is split:
+# a fatal half whose red means our code broke, and an informational half whose
+# red means something outside this repository moved. Mixing the two is what
+# stops a night from being read at all — a gate that can go red because a mirror
+# was slow gets ignored within a week — so they are separate steps here, with
+# different failure semantics and their own .trx files.
+#
+# FATAL — the suite the gate runs, three times in a row.
+#
+#   That sounds redundant and is not. A gate runs each commit once, so a failure
+#   that appears once and never reproduces locally is indistinguishable from
+#   noise — the run where "An existing connection was forcibly closed by the
+#   remote host" showed up a single time is still unexplained for exactly that
+#   reason. Three runs a night turn it into a number: one of three is a flake and
+#   says so, three of three is a regression, and a suite that only fails in runs
+#   2 and 3 is telling us it does not clean up after itself. All three are
+#   findings; a single run can report none of them.
+#
+# INFORMATIONAL — the newest upstream OpenSSH, built from source.
+#
+#   This is the forward half of the version spread PLAN §11.6 asks for, and the
+#   only half that can be had at all today: 8.9/9.6/9.9 exist as era-matched
+#   distribution packages, but the behaviour gates §11.1 names — ≥ 10.3 (empty
+#   cert principals match nothing, IANA agent names) and ≥ 10.4 (disconnect on
+#   non-KEX traffic during post-auth rekey) — ship in no distribution whatsoever.
+#   Debian 13 stops at 10.0p2; upstream was at 10.5p1 when this was written.
+#
+#   It discovers the newest release rather than pinning one, which is the whole
+#   reason it belongs in a nightly: the question worth asking every morning is
+#   "does the OpenSSH released yesterday still talk to us", and a pinned version
+#   stops asking it the day after it is written.
+#
+#   Informational because almost everything that can go wrong in it is not ours:
+#   a CDN that times out, a mirror listing that changes shape, a configure that
+#   wants a header this container lacks. A red here is a prompt to look, not a
+#   regression — and when it IS a real interop break, the fatal half above stayed
+#   green and the summary names the exact upstream version that broke us.
+#
+#   The backward half — 8.9/9.6/9.9 through era-matched container images — is
+#   still open, and deliberately so: it is a different mechanism (images, not a
+#   build) and setup-wsl.sh has no version knob to hang it on.
+#
+# What this workflow deliberately does NOT do is build against Hermod's master.
+# The submodules are checked out at their pinned commits, same as the gate. Drift
+# is dependabot.yml's job now, and it answers in mergeable pull requests rather
+# than in red mornings.
+#
+# Two things worth knowing about scheduled workflows, both inherited from Hermod's
+# nightly: they only ever run on the default branch — so this file cannot be
+# tested in a pull request, only through "Run workflow" — and GitHub disables them
+# after 60 days without repository activity. If the nights stop arriving, that is
+# the first thing to check.
+on:
+  schedule:
+    # 02:41 UTC. Not on the hour, because GitHub's scheduler is busiest there and
+    # delays runs by tens of minutes; offset from Hermod's own 02:17 so the two
+    # repositories' nights do not arrive as one indistinguishable block.
+    - cron: '41 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repeat-suite:
+    # The same two legs as ci.yml, for the same reasons — see the comments there:
+    # in short, Windows because that is where this harness is developed and where
+    # a second OpenSSH build judges us, and Debian 13 in a bare debian:13 container
+    # because that is production and because trixie's OpenSSL 3.5 is what makes the
+    # hybrid key exchanges actually run instead of skip.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            leg: windows-latest
+          - os: ubuntu-latest
+            container: debian:13
+            leg: debian-13-container
+    name: ${{ matrix.leg }}
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    steps:
+
+      # Everything up to the build is ci.yml's setup, unchanged and for the
+      # reasons documented there. Repeating those comments here would guarantee
+      # the two copies drift apart, so they are not repeated — but the steps
+      # themselves have to be identical, because the whole premise of the fatal
+      # half is that it runs the same thing the gate runs.
+
+      # Before the checkout on purpose: actions/checkout falls back to a REST
+      # tarball without a git binary, and a tarball cannot fetch submodules.
+      - name: Install git and the .NET prerequisites (Debian container)
+        if: runner.os == 'Linux'
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Provision the interop peers (Debian container)
+        if: runner.os == 'Linux'
+        run: bash Tests/interop/setup-wsl.sh
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Start an ssh-agent holding one throwaway identity (Debian container)
+        if: runner.os == 'Linux'
+        run: |
+          eval "$(ssh-agent -s)"
+          ssh-keygen -t ed25519 -f "${RUNNER_TEMP}/ci-agent-key" -N "" -q
+          ssh-add -q "${RUNNER_TEMP}/ci-agent-key"
+          echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "${GITHUB_ENV}"
+
+      - name: Tighten the container HOME for Dropbear's path check (Debian container)
+        if: runner.os == 'Linux'
+        run: |
+          id
+          d="${HOME:?}"
+          while [ "${d}" != "/" ] && [ "${d}" != "." ]; do
+            ls -ld "${d}"
+            chown "$(id -u):$(id -g)" "${d}" || echo "  chown refused for ${d} (bind mount?)"
+            chmod go-w "${d}"
+            ls -ld "${d}"
+            d="$(dirname "${d}")"
+          done
+
+      - name: Build
+        run: dotnet build Tests/Tests.csproj --configuration Release
+
+      # ---------------------------------------------------------------------
+      # The fatal half.
+      # ---------------------------------------------------------------------
+      #
+      # Three runs against one provisioning, which is what makes this affordable:
+      # the suite itself costs about 30 seconds on a hosted runner, while apt, pip
+      # and the Go module fetch above cost minutes. Repeating the cheap part is
+      # nearly free, and it is the part that varies.
+      #
+      # set +e rather than letting the step die on the first red run: "1 of 3
+      # failed" and "3 of 3 failed" are different findings, and aborting after the
+      # first would collapse them into the same one. Each run keeps its own .trx,
+      # so a night that goes partly red can be compared test by test rather than
+      # by counter — which is the difference between "84 failed" and "84 different
+      # ones failed", a distinction Hermod's nightly had to learn the hard way.
+      #
+      # shell: bash on both legs, Git Bash on Windows. GITHUB_STEP_SUMMARY takes a
+      # Windows path there and the redirect handles it — the same pattern Hermod's
+      # nightly already runs on both of its legs.
+      - name: Test the pinned suite, three times (fatal)
+        timeout-minutes: 40
+        shell: bash
+        run: |
+          set +e
+          rows="${RUNNER_TEMP}/rows.md"
+          : > "${rows}"
+          failed=0
+          for i in 1 2 3; do
+            echo "::group::run ${i} of 3"
+            dotnet test Tests/Tests.csproj --configuration Release --no-build \
+              --logger "console;verbosity=normal" \
+              --logger "trx;LogFileName=${{ matrix.leg }}-run${i}.trx" \
+              --results-directory artifacts
+            rc=$?
+            echo "::endgroup::"
+            if [ "${rc}" -eq 0 ]; then
+              echo "| ${i} | passed |" >> "${rows}"
+            else
+              failed=1
+              echo "| ${i} | **failed** (exit ${rc}) |" >> "${rows}"
+            fi
+          done
+          {
+            echo '## Pinned suite, three runs (${{ matrix.leg }})'
+            echo
+            echo 'Three runs of the same suite against one provisioning. A mixed'
+            echo 'column is the finding this half exists for.'
+            echo
+            echo '| Run | Outcome |'
+            echo '|---|---|'
+            cat "${rows}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          exit ${failed}
+
+      # ---------------------------------------------------------------------
+      # The informational half.
+      # ---------------------------------------------------------------------
+      #
+      # Linux only. The Windows leg has no compiler toolchain wired up and reaches
+      # none of the WSL peers anyway; adding a source build there would be an
+      # unverified step for a leg that already covers what it is here to cover —
+      # the Microsoft OpenSSH build, at its own version.
+      #
+      # Why this needs no change to the harness: every OpenSSH fixture resolves
+      # its binary through PATH — FindOnPathOrSystem("ssh"), and `command -v sshd`
+      # for the server side — so prepending the build directory is the entire
+      # integration. No filter file, no configuration switch, no #if.
+      #
+      # The filter selects the fixtures that drive an OpenSSH binary. The other
+      # peers (Dropbear, TinySSH, AsyncSSH, Paramiko, Go, plink, curl, SSH.NET)
+      # are unaffected by which OpenSSH is on PATH and already ran three times in
+      # the fatal half, so running them again here would only cost minutes and
+      # blur which version a result belongs to.
+      #
+      # Every early exit goes through emit() so a night that gave up still says
+      # where. The scratch files are absolute paths under RUNNER_TEMP on purpose,
+      # twice over: the build runs in a subshell that cd's into the unpacked
+      # tarball, so a relative name would scatter the summary across two files and
+      # print whichever half the last cd left us in — and keeping them out of the
+      # workspace leaves the checkout as clean as it was found.
+      #
+      # continue-on-error AND a trailing exit 0: the first keeps a red step from
+      # failing the job, the second keeps set +e from letting some earlier
+      # command's status leak out as the step's. Hermod's live-DNS step uses both
+      # for the same reason.
+      - name: Interop against the newest upstream OpenSSH (informational)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set +e
+          SUMMARY="${RUNNER_TEMP}/upstream-summary.md"
+          LOG="${RUNNER_TEMP}/upstream-test.txt"
+          : > "${SUMMARY}"
+          note() { echo "$1" >> "${SUMMARY}"; }
+          emit() {
+            {
+              echo '## Newest upstream OpenSSH (${{ matrix.leg }}, informational)'
+              echo
+              echo 'The forward half of the version spread PLAN §11.6 asks for. A failure'
+              echo 'here is a prompt to look at the named release, not a regression in this'
+              echo 'tree — the fatal half above is what speaks for our code.'
+              echo
+              cat "${SUMMARY}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          }
+
+          echo "::group::build prerequisites"
+          apt-get install -y --no-install-recommends build-essential zlib1g-dev libssl-dev
+          prereq=$?
+          echo "::endgroup::"
+          if [ ${prereq} -ne 0 ]; then
+            note '- could not install the build prerequisites — nothing was tested'
+            emit
+            exit 0
+          fi
+
+          # Discover rather than pin. Verified against the live listing on
+          # 2026-08-13: the newest release was openssh-10.5p1, while this
+          # container's own OpenSSH is 10.0p2 — so there is a real gap to test
+          # across, and it is the gap §11.1 names.
+          base="https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable"
+          tarball="$(curl -s --max-time 60 "${base}/" \
+                     | grep -oE 'openssh-[0-9]+\.[0-9]+p[0-9]+\.tar\.gz' \
+                     | sort -Vu | tail -1)"
+          if [ -z "${tarball}" ]; then
+            note '- could not determine the newest release from the mirror listing — nothing was tested'
+            emit
+            exit 0
+          fi
+          release="${tarball%.tar.gz}"
+          note "- newest upstream release: \`${release}\`"
+          note "- this container ships: \`$(ssh -V 2>&1)\`"
+
+          # A subshell so the cd's stay in here and the test below still runs from
+          # the workspace. Plain `make`, not a hand-picked target list: the default
+          # target is the trodden path, and naming targets invites a parallel build
+          # to race on libssh.a.
+          echo "::group::build ${release}"
+          ( mkdir -p "${RUNNER_TEMP}/upstream" \
+            && cd "${RUNNER_TEMP}/upstream" \
+            && curl -sSfL --max-time 300 -O "${base}/${tarball}" \
+            && tar xzf "${tarball}" \
+            && cd "${release}" \
+            && ./configure --without-pam \
+            && make -j"$(nproc)" )
+          built=$?
+          echo "::endgroup::"
+
+          upstream="${RUNNER_TEMP}/upstream/${release}"
+          if [ ${built} -ne 0 ] || [ ! -x "${upstream}/ssh" ]; then
+            note '- **the build produced no ssh binary** — see the group above; nothing was tested'
+            emit
+            exit 0
+          fi
+          note "- built as: \`$("${upstream}/ssh" -V 2>&1)\`"
+
+          echo "::group::OpenSSH fixtures against ${release}"
+          PATH="${upstream}:${PATH}" dotnet test Tests/Tests.csproj --configuration Release --no-build \
+            --filter "FullyQualifiedName~OpenSsh" \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=${{ matrix.leg }}-upstream.trx" \
+            --results-directory artifacts 2>&1 | tee "${LOG}"
+          echo "::endgroup::"
+
+          note ''
+          note '```'
+          grep -E "Passed!|Failed!|Total tests|Passed:|Failed:|Skipped:" "${LOG}" >> "${SUMMARY}" \
+            || tail -5 "${LOG}" >> "${SUMMARY}"
+          note '```'
+          emit
+          exit 0
+
+      # Three .trx per leg from the fatal half, plus one from the informational
+      # half on Linux. Named apart from the gate's artifact so a downloaded
+      # directory says which workflow produced it — InteropReport reads a
+      # directory recursively, and mixing a nightly's runs into a gate's one would
+      # render a matrix nobody can attribute.
+      #
+      # continue-on-error on the upstream step means it counts as successful here,
+      # so !cancelled() collects its .trx even on a night that half went red.
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-test-results-${{ matrix.leg }}
+          path: artifacts/*.trx

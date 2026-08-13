@@ -1,0 +1,63 @@
+version: 2
+
+# The counterpart to the two workflows — and deliberately not a third one.
+#
+# ci.yml tests what the submodule pointers say, never what libs/Hermod has done
+# since. For a gate that is the right behaviour: a reproducible build at pinned
+# commits. But it leaves a blind spot with a name. The SSH implementation and its
+# hermetic tests live inside Hermod, so Hermod's own CI does cover them — what it
+# cannot cover is this repository's Tests/interop/, which is the only place our
+# code meets a real peer. A change in Hermod that passes its hermetic suite and
+# still breaks conformance stays invisible here until somebody bumps the pin by
+# hand. Commit 7575e17 is what that looks like when it works, and it only worked
+# because the drift happened to be noticed.
+#
+# A nightly could close that by building against Hermod's master instead of the
+# pin, but it would answer in the wrong currency: a red night names no commit and
+# leaves nothing to merge. Dependabot answers in pull requests. And because
+# GitHub builds a pull_request run from refs/pull/N/merge — the PR merged into
+# master's current tip, not the PR's own commit — the verdict on such a PR is
+# "this pin, merged into master", which is exactly the question a pin bump asks.
+# Green means the bump is safe and one click applies it; red names the commit
+# range that broke us while that range is still one day wide.
+#
+# Both submodules are covered, and Styx is not an afterthought here. Hermod's own
+# CI checks Styx out as a sibling at master, unpinned, and says so in its comments
+# — so Hermod's master is only ever tested against Styx's master. Every day our
+# Styx pin lags is a day we build a combination that nothing else verifies.
+#
+# .gitmodules names no branch for either submodule, so each is followed on its own
+# repository's default branch, which is master for both.
+
+updates:
+  - package-ecosystem: gitsubmodule
+    directory: /
+
+    # Daily rather than weekly: the entire value of this file is a small commit
+    # range when something breaks, and a week of Hermod is not a small range —
+    # the last sync alone spanned 15 commits. Daily is not one PR per day either;
+    # Dependabot updates an already-open PR in place rather than opening a second
+    # one, so the ceiling is one open PR per submodule.
+    #
+    # 05:00 UTC is after the nightly below has had its two-and-a-half hours, so a
+    # single look in the morning finds both the night's verdict and the day's pin
+    # proposal. That is a convenience, not a dependency: the PR triggers its own
+    # ci.yml run and does not read the nightly's result.
+    schedule:
+      interval: daily
+      time: "05:00"
+      timezone: Etc/UTC
+
+    # Two submodules, one PR each. The number is deliberate rather than the
+    # default 5: if a third pin is ever added and its PR silently never appears,
+    # this line is the reason.
+    open-pull-requests-limit: 2
+
+    labels:
+      - dependencies
+
+    # No commit-message prefix on purpose. This repository writes commit subjects
+    # as sentences — "Follow Hermod's master again, two DNS commits on" — and a
+    # "chore(deps):" would be the only one of its kind in the log. Dependabot's
+    # own "Bump libs/Hermod from X to Y" stays on the PR's commit, where it is
+    # accurate and unremarkable; the merge commit is where the real message goes.
