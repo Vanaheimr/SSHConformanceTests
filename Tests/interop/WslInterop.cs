@@ -97,11 +97,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         private readonly String         runIdentifier;
         private readonly StringBuilder  log = new ();
 
-        internal WslServer(Process Process, String RunIdentifier)
+        /// <summary>The port the peer is listening on — chosen by <see cref="WslInterop.StartServerAsync"/>.</summary>
+        public Int32 Port { get; }
+
+        internal WslServer(Process Process, String RunIdentifier, Int32 Port)
         {
 
             this.process       = Process;
             this.runIdentifier = RunIdentifier;
+            this.Port          = Port;
 
             // Accumulated line by line rather than with ReadToEndAsync: the peer is still running when a
             // test needs to know why it refused something, and a task that only completes at exit would
@@ -244,6 +248,22 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         // Set once a peer server has actually been started, so a run that never used WSL — the common
         // case on a machine without it — does not shell out just to sweep nothing.
         private static Int32 startedServers;
+
+        // A peer server's port is drawn from *below* the ephemeral range either platform hands out
+        // (49152-65535 on Windows by default, typically 32768-60999 on Linux). A port from inside that
+        // range can be claimed by any outbound connection in the window between finding it free and the
+        // peer binding it — and on Windows that window is the expensive one: WSL's localhost-forwarding
+        // relay has to bind the same port on the Windows side, so losing the race leaves the peer
+        // listening perfectly well inside WSL while Windows can never reach it, which
+        // reads exactly like a peer that failed to start. A full conformance run churns the ephemeral
+        // range hard enough for that to happen, which is why it only ever bit long runs.
+        private const Int32 PeerPortFirst  = 20000;
+        private const Int32 PeerPortLast   = 29999;
+
+        // Reaching a healthy peer takes milliseconds. A peer still unreachable after this is not slow,
+        // it is unreachable — so the answer is a different port, not a longer wait.
+        private static readonly TimeSpan readinessBudget = TimeSpan.FromSeconds(10);
+        private const Int32 StartAttempts = 3;
 
         #endregion
 
@@ -576,11 +596,20 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
-        #region StartServerAsync(Command, ReadyMarker, CancellationToken)
+        #region StartServerAsync(CommandForPort, CancellationToken)
 
         /// <summary>
-        /// Start a long-running peer <b>server</b> inside WSL — Dropbear or socat-hosted TinySSH — and wait
-        /// until it is actually accepting connections.
+        /// Start a long-running peer <b>server</b> — sshd, Dropbear or socat-hosted TinySSH — on a port of
+        /// this method's choosing, and wait until this process can actually reach it.
+        ///
+        /// <para>
+        /// The port is picked here rather than by the caller because picking it is half the problem, and on
+        /// Windows it is the whole problem: the peer binds inside WSL, and Windows only reaches it through
+        /// the localhost-forwarding relay, which has to bind the same port on the Windows side. If anything
+        /// on Windows holds that port by then, the peer runs perfectly and stays permanently unreachable.
+        /// Waiting longer cannot fix that — a different port can — so an unreachable peer is retried on a
+        /// freshly drawn one.
+        /// </para>
         ///
         /// <para>
         /// Killing <c>wsl.exe</c> does not reap what it started on the Linux side, so the peer has to be
@@ -607,47 +636,108 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// peer, which the readiness loop below and <see cref="WslServer.Output"/> both depend on.
         /// </para>
         /// </summary>
-        /// <param name="Command">The shell command to run inside WSL.</param>
-        /// <param name="Port">The TCP port it will listen on, used to wait for readiness.</param>
-        public static async Task<WslServer> StartServerAsync(String             Command,
-                                                             Int32              Port,
-                                                             CancellationToken  CancellationToken)
+        /// <param name="CommandForPort">Builds the shell command to run for a given port.</param>
+        public static async Task<WslServer> StartServerAsync(Func<Int32, String>  CommandForPort,
+                                                             CancellationToken    CancellationToken)
         {
 
-            var runIdentifier = Guid.NewGuid().ToString("N");
+            var attempts    = new List<String>();
+            var lastCommand = "";
 
-            // $$ is the PID this shell will still have after exec, and field 22 of /proc/self/stat is the
-            // start time it was forked with. Everything after the last ')' is parsed positionally because
-            // the process name in between sits in parentheses and may contain spaces.
-            var script = $$"""
-                          mkdir -p "$HOME/.hermod-interop/run/{{sessionIdentifier}}"
-                          stat=$(cat /proc/$$/stat)
-                          echo "$$ $(echo "${stat#*) }" | cut -d' ' -f20)" > "$HOME/.hermod-interop/run/{{sessionIdentifier}}/{{runIdentifier}}.pid"
-                          exec {{Command}}
-                          """;
-
-            var startInfo = CreateStartInfo(["-e", "setsid", "--wait", "bash", "-c", script]);
-
-            var process = Process.Start(startInfo)
-                              ?? throw new InvalidOperationException($"Could not start '{startInfo.FileName}'.");
-
-            Interlocked.Increment(ref startedServers);
-
-            var server = new WslServer(process, runIdentifier);
-
-            // Wait for the listener rather than sleeping a fixed amount: peers start at very different
-            // speeds and a fixed delay is either slow or flaky.
-            for (var attempt = 0; attempt < 100; attempt++)
+            for (var attempt = 1; attempt <= StartAttempts; attempt++)
             {
 
+                // A run identifier per attempt, not per call: a retry starts a second daemon, and the one
+                // that was abandoned has to stay reapable on its own.
+                var port          = AllocatePort();
+                var runIdentifier = Guid.NewGuid().ToString("N");
+                var command       = CommandForPort(port);
+
+                lastCommand = command;
+
+                // $$ is the PID this shell will still have after exec, and field 22 of /proc/self/stat is the
+                // start time it was forked with. Everything after the last ')' is parsed positionally because
+                // the process name in between sits in parentheses and may contain spaces.
+                var script = $$"""
+                              mkdir -p "$HOME/.hermod-interop/run/{{sessionIdentifier}}"
+                              stat=$(cat /proc/$$/stat)
+                              echo "$$ $(echo "${stat#*) }" | cut -d' ' -f20)" > "$HOME/.hermod-interop/run/{{sessionIdentifier}}/{{runIdentifier}}.pid"
+                              exec {{command}}
+                              """;
+
+                var startInfo = CreateStartInfo(["-e", "setsid", "--wait", "bash", "-c", script]);
+
+                var process = Process.Start(startInfo)
+                                  ?? throw new InvalidOperationException($"Could not start '{startInfo.FileName}'.");
+
+                Interlocked.Increment(ref startedServers);
+
+                var server = new WslServer(process, runIdentifier, port);
+
+                if (await WaitUntilReachableAsync(process, port, CancellationToken).ConfigureAwait(false))
+                    return server;
+
+                // Whether the peer is listening at all says which failure this is, and the two want opposite
+                // remedies: a peer that never bound has a reason in its own log, while one that bound and
+                // cannot be reached lost the race for the port.
+                var peerIsListening = await IsPeerListeningAsync(port).ConfigureAwait(false);
+
+                // The peer's log is written asynchronously, so a process that just died still has its last
+                // words in flight — and those last words are usually the whole explanation.
                 if (process.HasExited)
-                    break;
+                    try { await process.WaitForExitAsync(CancellationToken).ConfigureAwait(false); } catch { }
+
+                attempts.Add($"   attempt {attempt} on port {port}: " +
+                             (peerIsListening switch {
+                                  true  => "the peer WAS listening on that port, but this process could not reach it" +
+                                           (OperatingSystem.IsWindows()
+                                                ? " — WSL's localhost forwarding could not bind that port on the Windows side."
+                                                : " — it must be bound to an address this process cannot dial."),
+                                  false => "the peer never listened on that port" + (process.HasExited ? " and has exited." : "."),
+                                  null  => "could not determine whether the peer was listening on that port."
+                              }) +
+                             $"\n{server.Output}");
+
+                await server.DisposeAsync().ConfigureAwait(false);
+
+            }
+
+            throw new InvalidOperationException(
+                      $"The peer server never became reachable, on {StartAttempts} different ports.\n" +
+                      $"{lastCommand}\n" +
+                      String.Join("\n", attempts));
+
+        }
+
+        #endregion
+
+        #region (private, static) WaitUntilReachableAsync(Process, Port, CancellationToken)
+
+        /// <summary>
+        /// Wait until a connection to the peer's port succeeds — the only readiness signal that means what
+        /// the tests need, since they dial the peer from this process too.
+        /// </summary>
+        private static async Task<Boolean> WaitUntilReachableAsync(Process            Process,
+                                                                   Int32              Port,
+                                                                   CancellationToken  CancellationToken)
+        {
+
+            // Polled rather than slept through: peers start at very different speeds, and a fixed delay is
+            // either slow or flaky.
+            var elapsed = Stopwatch.StartNew();
+
+            while (elapsed.Elapsed < readinessBudget)
+            {
+
+                // A peer that has died is never going to listen, and its log already says why.
+                if (Process.HasExited)
+                    return false;
 
                 try
                 {
                     using var probe = new System.Net.Sockets.TcpClient();
                     await probe.ConnectAsync("127.0.0.1", Port, CancellationToken).ConfigureAwait(false);
-                    return server;
+                    return true;
                 }
                 catch (System.Net.Sockets.SocketException)
                 {
@@ -656,11 +746,73 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             }
 
-            var diagnostics = server.Output;
-            await server.DisposeAsync().ConfigureAwait(false);
+            return false;
+
+        }
+
+        #endregion
+
+        #region (private, static) IsPeerListeningAsync(Port)
+
+        /// <summary>
+        /// Whether anything is listening on the port <i>where the peer runs</i> — inside WSL on Windows,
+        /// right here on Linux — or <c>null</c> when that could not be established. Asked only when a peer
+        /// failed to come up, to name which half broke.
+        /// </summary>
+        private static async Task<Boolean?> IsPeerListeningAsync(Int32 Port)
+        {
+            try
+            {
+
+                // CancellationToken.None deliberately: this runs on the failure path, where the caller's
+                // token may already be cancelled and the diagnosis is what the run is left with.
+                var (exitCode, stdout, _) = await RunAsync(
+                                                ["-e", "bash", "-c", $"timeout 5 ss -ltn 2>/dev/null | grep -c ':{Port} ' || true"],
+                                                CancellationToken.None).ConfigureAwait(false);
+
+                return exitCode == 0 && Int32.TryParse(stdout.Trim(), out var listeners)
+                           ? listeners > 0
+                           : null;
+
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        #endregion
+
+        #region (private, static) AllocatePort()
+
+        /// <summary>
+        /// A free TCP port for a peer server, drawn from below Windows' dynamic range so that no outbound
+        /// connection can take it out from under the WSL relay — see <see cref="PeerPortFirst"/>.
+        /// </summary>
+        private static Int32 AllocatePort()
+        {
+
+            for (var attempt = 0; attempt < 200; attempt++)
+            {
+
+                var candidate = Random.Shared.Next(PeerPortFirst, PeerPortLast + 1);
+
+                try
+                {
+                    // Binding it proves it is free on the Windows side; releasing it again is safe here in
+                    // a way it is not for an ephemeral port, since nothing else hands out this range.
+                    using var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, candidate);
+                    probe.Start();
+                    probe.Stop();
+                    return candidate;
+                }
+                catch (System.Net.Sockets.SocketException)
+                { }
+
+            }
 
             throw new InvalidOperationException(
-                      $"The WSL peer server never accepted a connection on port {Port}.\n{Command}\n{diagnostics}");
+                      $"Could not find a free port between {PeerPortFirst} and {PeerPortLast} for a WSL peer server.");
 
         }
 
