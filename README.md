@@ -10,7 +10,9 @@ ecosystem.
 > **Status:** milestones **M0–M8 are complete** — transport, post-quantum key exchange, authentication,
 > keys and certificates, the connection layer, SFTP v3 and forwarding, all validated against real
 > implementations. **M9** (hardening, audit stream, fuzz suite, security review) and **M10** (demo CLI,
-> benchmarks) are in place bar the nightly CI matrix, which needs a runner decision. The full design,
+> benchmarks) are in place; the CI qualifier that used to sit here is settled — the whole suite gates
+> every commit, and a nightly adds three repeat runs plus the newest upstream OpenSSH. Only the
+> older-release half of the version matrix is still open. The full design,
 > feature set and the interoperability test program live in [PLAN.md](PLAN.md); repository conventions
 > are in [CLAUDE.md](CLAUDE.md). Progress is tracked with ✅ / 🔶 / ⬜ markers.
 
@@ -37,9 +39,11 @@ Dropbear and TinySSH** — including our SFTP client against OpenSSH's own `sftp
 | **curl / libssh2** | 8.14.1 / 1.11.1 | their client → our server | SFTP upload + download byte-for-byte through a third C lineage, host-key pinning via `--hostpubsha256` | no exec — curl speaks SFTP, not sessions |
 
 **Known gaps.** Certificates are so far only proven against OpenSSH, and only in the direction where we
-validate theirs. WinSCP, FileZilla and Apache MINA SSHD are candidates but not wired in. Everything above runs on a
-developer machine today; the **nightly CI matrix is the one piece still missing**, waiting on a runner
-decision (PLAN §13.5). Peers that are absent are **skipped with a precise reason**, never silently
+validate theirs. WinSCP, FileZilla and Apache MINA SSHD are candidates but not wired in. Everything above no longer runs
+only on a developer machine: since 2026-08-13 the Debian CI leg provisions every peer and runs the whole
+suite on each commit, and a nightly adds the newest upstream OpenSSH built from source — 10.5p1 at the
+time of writing, against Debian's 10.0p2. What is still missing there is the other direction, **older**
+OpenSSH releases through era-matched container images (PLAN §11.6). Peers that are absent are **skipped with a precise reason**, never silently
 counted as passing — the matrix distinguishes "disagreed" from "no evidence either way".
 
 ## Features
