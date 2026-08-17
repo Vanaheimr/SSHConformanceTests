@@ -32,7 +32,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
     public static class Program
     {
 
-        /// <summary>The command-line entry point.</summary>
+        /// <summary>
+        /// The command-line entry point.
+        /// </summary>
         /// <param name="Arguments">TRX paths, optionally followed by <c>-o &lt;file&gt;</c>.</param>
         public static Int32 Main(String[] Arguments)
         {

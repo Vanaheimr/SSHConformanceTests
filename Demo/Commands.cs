@@ -31,13 +31,17 @@ using org.GraphDefined.Vanaheimr.Hermod.SSH.Server;
 namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 {
 
-    /// <summary>The implementations of the <c>hermod-ssh</c> verbs, each wiring the library features.</summary>
+    /// <summary>
+    /// The implementations of the <c>hermod-ssh</c> verbs, each wiring the library features.
+    /// </summary>
     public static class Commands
     {
 
         #region keygen
 
-        /// <summary>Generate a key pair and write it (private + <c>.pub</c>), then print its fingerprint.</summary>
+        /// <summary>
+        /// Generate a key pair and write it (private + <c>.pub</c>), then print its fingerprint.
+        /// </summary>
         public static async Task<Int32> KeygenAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 
@@ -61,7 +65,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
         #region scan
 
-        /// <summary>Print a public key's fingerprints and its SSHFP DNS records (the <c>ssh-keygen -r</c> view).</summary>
+        /// <summary>
+        /// Print a public key's fingerprints and its SSHFP DNS records (the <c>ssh-keygen -r</c> view).
+        /// </summary>
         public static async Task<Int32> ScanAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 
@@ -89,7 +95,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
         #region ca
 
-        /// <summary>Issue an OpenSSH certificate: sign a subject public key with a CA key (mini-CA).</summary>
+        /// <summary>
+        /// Issue an OpenSSH certificate: sign a subject public key with a CA key (mini-CA).
+        /// </summary>
         public static async Task<Int32> CaAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 
@@ -134,7 +142,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
         #region exec
 
-        /// <summary>Log in with a key, run a command, capture stdout/stderr + exit code, log out (over the façade).</summary>
+        /// <summary>
+        /// Log in with a key, run a command, capture stdout/stderr + exit code, log out (over the façade).
+        /// </summary>
         public static async Task<Int32> ExecAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 
@@ -155,7 +165,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
         #region connect
 
-        /// <summary>Open a session and stream it interactively: local stdin → remote, remote stdout/stderr → local.</summary>
+        /// <summary>
+        /// Open a session and stream it interactively: local stdin → remote, remote stdout/stderr → local.
+        /// </summary>
         public static async Task<Int32> ConnectAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 
@@ -196,7 +208,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
         #region sftp
 
-        /// <summary>Transfer files over a multiplexed SFTP subsystem: <c>ls</c> / <c>get</c> / <c>put</c>.</summary>
+        /// <summary>
+        /// Transfer files over a multiplexed SFTP subsystem: <c>ls</c> / <c>get</c> / <c>put</c>.
+        /// </summary>
         public static async Task<Int32> SftpAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 
@@ -239,7 +253,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
         #region forward
 
-        /// <summary>Local port forward (<c>ssh -L</c>): bind a local port and tunnel each connection through the server.</summary>
+        /// <summary>
+        /// Local port forward (<c>ssh -L</c>): bind a local port and tunnel each connection through the server.
+        /// </summary>
         public static async Task<Int32> ForwardAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 
@@ -288,7 +304,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
         #region play
 
-        /// <summary>Replay a recorded asciicast v2 session to the terminal, honoring the inter-event timing.</summary>
+        /// <summary>
+        /// Replay a recorded asciicast v2 session to the terminal, honoring the inter-event timing.
+        /// </summary>
         public static async Task<Int32> PlayAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 
@@ -373,7 +391,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
         #region serve
 
-        /// <summary>Run a demo SSH server (façade): authorize keys, answer <c>exec</c>, and optionally serve SFTP + forwarding.</summary>
+        /// <summary>
+        /// Run a demo SSH server (façade): authorize keys, answer <c>exec</c>, and optionally serve SFTP + forwarding.
+        /// </summary>
         public static async Task<Int32> ServeAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 

@@ -27,7 +27,9 @@ using org.GraphDefined.Vanaheimr.Hermod.SSH.CLI;
 namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 {
 
-    /// <summary>M10: the demo CLI's offline verbs (keygen / scan / ca) wire the library correctly.</summary>
+    /// <summary>
+    /// M10: the demo CLI's offline verbs (keygen / scan / ca) wire the library correctly.
+    /// </summary>
     [TestFixture]
     public class DemoCliTests
     {

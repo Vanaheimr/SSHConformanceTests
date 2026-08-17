@@ -57,7 +57,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #region (private) harness
 
-        /// <summary>Everything a driver run needs, plus the temporary files to clean up afterwards.</summary>
+        /// <summary>
+        /// Everything a driver run needs, plus the temporary files to clean up afterwards.
+        /// </summary>
         private sealed record Fixture(SshServer   Server,
                                       String      Host,
                                       Int32       Port,

@@ -126,7 +126,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             try { await WslInterop.RunAsync(["-e", "rm", "-rf", Workspace.WslRoot], CancellationToken.None); } catch { }
         }
 
-        /// <summary>Convert our openssh-key-v1 private key into Dropbear's own format.</summary>
+        /// <summary>
+        /// Convert our openssh-key-v1 private key into Dropbear's own format.
+        /// </summary>
         private static async Task<(Int32 ExitCode, String Output)> ConvertKeyAsync(Workspace Workspace, CancellationToken CancellationToken)
         {
             var (exitCode, stdout, stderr) = await WslInterop.RunAsync([

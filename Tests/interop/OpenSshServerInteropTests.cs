@@ -60,7 +60,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         private sealed record Daemon(WslServer Server, Byte[] HostKeyBlob, ISshHostKey UserKey, String WslRoot, String WindowsRoot)
         {
-            /// <summary>The port the daemon ended up on — chosen by the harness, which may have had to retry.</summary>
+            /// <summary>
+            /// The port the daemon ended up on — chosen by the harness, which may have had to retry.
+            /// </summary>
             public Int32 Port => Server.Port;
         }
 
@@ -139,7 +141,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             try { await WslInterop.RunAsync(["-e", "rm", "-rf", Daemon.WslRoot], CancellationToken.None); } catch { }
         }
 
-        /// <summary>The user sshd will authenticate — it runs unprivileged, so only its own account.</summary>
+        /// <summary>
+        /// The user sshd will authenticate — it runs unprivileged, so only its own account.
+        /// </summary>
         private static Task<String> WhoAsync(CancellationToken CancellationToken)
             => WslInterop.WhoAmIAsync(CancellationToken);
 
@@ -196,7 +200,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #region OurClient_SeesRemoteExitStatus_FromRealOpenSshServer
 
-        /// <summary>A failing remote command: the exit status has to survive the trip back.</summary>
+        /// <summary>
+        /// A failing remote command: the exit status has to survive the trip back.
+        /// </summary>
         [Test]
         [CancelAfter(120000)]
         public async Task OurClient_SeesRemoteExitStatus_FromRealOpenSshServer(CancellationToken CancellationToken)

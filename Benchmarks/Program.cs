@@ -44,7 +44,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks
     public static class Program
     {
 
-        /// <summary>The command-line entry point; arguments are passed straight to BenchmarkDotNet.</summary>
+        /// <summary>
+        /// The command-line entry point; arguments are passed straight to BenchmarkDotNet.
+        /// </summary>
         /// <param name="Arguments">BenchmarkDotNet switches (<c>--filter</c>, <c>--job</c>, …).</param>
         public static void Main(String[] Arguments)
             => BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(Arguments);

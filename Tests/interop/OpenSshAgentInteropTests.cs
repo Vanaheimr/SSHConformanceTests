@@ -28,7 +28,9 @@ using org.GraphDefined.Vanaheimr.Hermod.SSH;
 namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 {
 
-    /// <summary>M8: talk to the real platform ssh-agent (Windows named pipe / SSH_AUTH_SOCK) if one is available.</summary>
+    /// <summary>
+    /// M8: talk to the real platform ssh-agent (Windows named pipe / SSH_AUTH_SOCK) if one is available.
+    /// </summary>
     [TestFixture]
     [Category("Interop")]
     [Category("Interop.OpenSSH")]

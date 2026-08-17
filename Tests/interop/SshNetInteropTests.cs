@@ -80,7 +80,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         }
 
-        /// <summary>Build an SSH.NET connection that pins our host key.</summary>
+        /// <summary>
+        /// Build an SSH.NET connection that pins our host key.
+        /// </summary>
         private static Renci.SshNet.ConnectionInfo ConnectionFor(Int32 Port, String KeyPath)
         {
 
@@ -298,7 +300,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #region SshNet_RunsSeveralCommandsOnOneConnection
 
-        /// <summary>Our multiplexer seen from another implementation: several sessions on one connection.</summary>
+        /// <summary>
+        /// Our multiplexer seen from another implementation: several sessions on one connection.
+        /// </summary>
         [Test]
         [CancelAfter(60000)]
         public async Task SshNet_RunsSeveralCommandsOnOneConnection(CancellationToken CancellationToken)

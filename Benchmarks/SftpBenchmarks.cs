@@ -58,11 +58,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks
         private SftpClient    sftp        = null!;
         private Byte[]        payload     = [];
 
-        /// <summary>The transfer size, in mebibytes.</summary>
+        /// <summary>
+        /// The transfer size, in mebibytes.
+        /// </summary>
         [Params(8, 32)]
         public Int32 Megabytes { get; set; }
 
-        /// <summary>Stand up the server and one authenticated client; only the transfer is measured.</summary>
+        /// <summary>
+        /// Stand up the server and one authenticated client; only the transfer is measured.
+        /// </summary>
         [GlobalSetup]
         public void Setup()
         {
@@ -95,7 +99,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks
 
         }
 
-        /// <summary>Tear the connection down.</summary>
+        /// <summary>
+        /// Tear the connection down.
+        /// </summary>
         [GlobalCleanup]
         public void Cleanup()
         {
@@ -104,12 +110,16 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks
             try { server?.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { }
         }
 
-        /// <summary>Upload the payload (client → server).</summary>
+        /// <summary>
+        /// Upload the payload (client → server).
+        /// </summary>
         [Benchmark]
         public async Task Upload()
             => await sftp.UploadAsync("/upload.bin", payload);
 
-        /// <summary>Download the payload (server → client).</summary>
+        /// <summary>
+        /// Download the payload (server → client).
+        /// </summary>
         [Benchmark]
         public async Task<Int32> Download()
             => (await sftp.DownloadAsync("/download.bin")).Length;

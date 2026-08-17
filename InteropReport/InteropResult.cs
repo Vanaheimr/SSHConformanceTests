@@ -25,19 +25,29 @@ using System.Xml.Linq;
 namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
 {
 
-    /// <summary>How a single interop test came out.</summary>
+    /// <summary>
+    /// How a single interop test came out.
+    /// </summary>
     public enum InteropOutcome
     {
-        /// <summary>The peer and we agreed.</summary>
+        /// <summary>
+        /// The peer and we agreed.
+        /// </summary>
         Passed,
-        /// <summary>The test ran and failed — a genuine interop defect.</summary>
+        /// <summary>
+        /// The test ran and failed — a genuine interop defect.
+        /// </summary>
         Failed,
-        /// <summary>Not exercised: the peer or a needed tool was unavailable on this machine.</summary>
+        /// <summary>
+        /// Not exercised: the peer or a needed tool was unavailable on this machine.
+        /// </summary>
         Skipped
     }
 
 
-    /// <summary>One interop test result, attributed to the peer it exercised and the capability it covers.</summary>
+    /// <summary>
+    /// One interop test result, attributed to the peer it exercised and the capability it covers.
+    /// </summary>
     /// <param name="Peer">The other implementation involved (OpenSSH, SSH.NET, …).</param>
     /// <param name="Feature">The capability the test covers.</param>
     /// <param name="TestName">The test's own name, for the detail listing.</param>
@@ -123,7 +133,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
 
         #region Read(Paths)
 
-        /// <summary>Read every TRX file under the given files or directories.</summary>
+        /// <summary>
+        /// Read every TRX file under the given files or directories.
+        /// </summary>
         /// <param name="Paths">TRX files, or directories to search recursively.</param>
         public static IReadOnlyList<InteropResult> Read(IEnumerable<String> Paths)
         {

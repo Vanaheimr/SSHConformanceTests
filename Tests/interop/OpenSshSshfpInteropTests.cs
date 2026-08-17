@@ -28,7 +28,9 @@ using org.GraphDefined.Vanaheimr.Hermod.SSH;
 namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 {
 
-    /// <summary>M8 SSHFP: our generated zone records match <c>ssh-keygen -r</c> byte-for-byte.</summary>
+    /// <summary>
+    /// M8 SSHFP: our generated zone records match <c>ssh-keygen -r</c> byte-for-byte.
+    /// </summary>
     [TestFixture]
     [Category("Interop")]
     [Category("Interop.OpenSSH")]

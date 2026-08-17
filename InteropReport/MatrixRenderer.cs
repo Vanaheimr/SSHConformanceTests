@@ -40,7 +40,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
 
         #region Render(Results, GeneratedAt)
 
-        /// <summary>Render the full report.</summary>
+        /// <summary>
+        /// Render the full report.
+        /// </summary>
         /// <param name="Results">The results gathered from the test run.</param>
         /// <param name="GeneratedAt">The timestamp to record.</param>
         public static String Render(IReadOnlyList<InteropResult> Results, DateTimeOffset GeneratedAt)

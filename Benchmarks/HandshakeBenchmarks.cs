@@ -43,19 +43,25 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks
 
         private ISshHostKey hostKey = null!;
 
-        /// <summary>The key exchange to measure.</summary>
+        /// <summary>
+        /// The key exchange to measure.
+        /// </summary>
         [Params(SshAlgorithmNames.Kex.Curve25519Sha256,
                 SshAlgorithmNames.Kex.EcdhNistP256,
                 SshAlgorithmNames.Kex.MlKem768X25519Sha256,
                 SshAlgorithmNames.Kex.SntruP761X25519Sha512)]
         public String KeyExchange { get; set; } = "";
 
-        /// <summary>Generate the host key once — key generation is not what is being measured.</summary>
+        /// <summary>
+        /// Generate the host key once — key generation is not what is being measured.
+        /// </summary>
         [GlobalSetup]
         public void Setup()
             => hostKey = SshHostKey.GenerateEd25519();
 
-        /// <summary>One complete handshake, client and server.</summary>
+        /// <summary>
+        /// One complete handshake, client and server.
+        /// </summary>
         [Benchmark]
         public async Task Handshake()
         {

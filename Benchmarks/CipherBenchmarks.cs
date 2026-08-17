@@ -44,17 +44,23 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks
         private SshTransport  server   = null!;
         private Byte[]        payload  = [];
 
-        /// <summary>The cipher to measure.</summary>
+        /// <summary>
+        /// The cipher to measure.
+        /// </summary>
         [Params(SshAlgorithmNames.Cipher.ChaCha20Poly1305,
                 SshAlgorithmNames.Cipher.Aes256Gcm,
                 SshAlgorithmNames.Cipher.Aes256Ctr)]
         public String Cipher { get; set; } = "";
 
-        /// <summary>The application payload per record, in bytes.</summary>
+        /// <summary>
+        /// The application payload per record, in bytes.
+        /// </summary>
         [Params(1024, 32768)]
         public Int32 PayloadSize { get; set; }
 
-        /// <summary>Establish one encrypted transport pair; the handshake is not part of the measurement.</summary>
+        /// <summary>
+        /// Establish one encrypted transport pair; the handshake is not part of the measurement.
+        /// </summary>
         [GlobalSetup]
         public void Setup()
         {
@@ -74,7 +80,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks
 
         }
 
-        /// <summary>Release the transports.</summary>
+        /// <summary>
+        /// Release the transports.
+        /// </summary>
         [GlobalCleanup]
         public void Cleanup()
         {
@@ -82,7 +90,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks
             server?.Dispose();
         }
 
-        /// <summary>Send one record and receive it at the far end.</summary>
+        /// <summary>
+        /// Send one record and receive it at the far end.
+        /// </summary>
         [Benchmark]
         public async Task<Int32> RoundTripRecord()
         {

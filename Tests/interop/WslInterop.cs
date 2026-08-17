@@ -70,7 +70,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                     ? $"\n--- peer trace ---\n{String.Join("\n", DebugLog.TakeLast(60))}"
                     : "");
 
-        /// <summary>A one-line rendering of the negotiated algorithms for the test log.</summary>
+        /// <summary>
+        /// A one-line rendering of the negotiated algorithms for the test log.
+        /// </summary>
         public String AlgorithmSummary
             => Algorithms is null or { Count: 0 }
                    ? "(peer exposes no negotiated-algorithm information)"
@@ -97,7 +99,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         private readonly String         runIdentifier;
         private readonly StringBuilder  log = new ();
 
-        /// <summary>The port the peer is listening on — chosen by <see cref="WslInterop.StartServerAsync"/>.</summary>
+        /// <summary>
+        /// The port the peer is listening on — chosen by <see cref="WslInterop.StartServerAsync"/>.
+        /// </summary>
         public Int32 Port { get; }
 
         /// <summary>
@@ -134,7 +138,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 log.AppendLine(Line);
         }
 
-        /// <summary>Whatever the peer has logged so far — the first place to look when it refuses us.</summary>
+        /// <summary>
+        /// Whatever the peer has logged so far — the first place to look when it refuses us.
+        /// </summary>
         public String Output
         {
             get
@@ -187,7 +193,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             return ValueTask.CompletedTask;
         }
 
-        /// <summary>Everything our server logged, for a failure message.</summary>
+        /// <summary>
+        /// Everything our server logged, for a failure message.
+        /// </summary>
         public String Report
         {
             get
@@ -254,7 +262,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         // sweep our leftovers without touching peers that another run is still using.
         private static readonly String sessionIdentifier = Guid.NewGuid().ToString("N");
 
-        /// <summary>This test process's own run directory name — see <see cref="WslServer.RunIdentifier"/>.</summary>
+        /// <summary>
+        /// This test process's own run directory name — see <see cref="WslServer.RunIdentifier"/>.
+        /// </summary>
         internal static String SessionIdentifier
             => sessionIdentifier;
 
@@ -282,11 +292,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #region Properties
 
-        /// <summary>The source-tree <c>SSH/interop</c> directory holding the venv and the peer drivers.</summary>
+        /// <summary>
+        /// The source-tree <c>SSH/interop</c> directory holding the venv and the peer drivers.
+        /// </summary>
         public static String? InteropDirectory
             => harness.Value.InteropDir;
 
-        /// <summary>Why the WSL harness cannot be used on this machine, or <c>null</c> when it can.</summary>
+        /// <summary>
+        /// Why the WSL harness cannot be used on this machine, or <c>null</c> when it can.
+        /// </summary>
         public static String? UnavailableReason
             => harness.Value.Reason;
 
@@ -333,7 +347,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #region SkipIfUnavailable()
 
-        /// <summary>Ignore the calling test when the WSL harness is not provisioned on this machine.</summary>
+        /// <summary>
+        /// Ignore the calling test when the WSL harness is not provisioned on this machine.
+        /// </summary>
         public static void SkipIfUnavailable()
         {
             if (UnavailableReason is not null)

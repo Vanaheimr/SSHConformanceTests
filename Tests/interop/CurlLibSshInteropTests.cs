@@ -68,7 +68,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                       RecordingAuditSink  Audit)
         {
 
-            /// <summary>The key material and scratch files, addressed as WSL sees them.</summary>
+            /// <summary>
+            /// The key material and scratch files, addressed as WSL sees them.
+            /// </summary>
             public String WslPrivateKey => WslInterop.ToWslPath(Path.Combine(WindowsRoot, "user"));
             public String WslPublicKey  => WslInterop.ToWslPath(Path.Combine(WindowsRoot, "user.pub"));
 
@@ -133,7 +135,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         }
 
 
-        /// <summary>Run curl against our SFTP subsystem with the host key pinned.</summary>
+        /// <summary>
+        /// Run curl against our SFTP subsystem with the host key pinned.
+        /// </summary>
         private static Task<(Int32 ExitCode, String StdOut, String StdErr)> CurlAsync(Fixture            Fixture,
                                                                                       IEnumerable<String> Arguments,
                                                                                       CancellationToken   CancellationToken,
