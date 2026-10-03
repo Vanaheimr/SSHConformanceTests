@@ -84,7 +84,7 @@ commits** (submodule first, then the pointer bump here) — see the push order i
 - **`DateTimeOffset` instead of `DateTime` wherever possible** (public API, models, file parsers); current
   time only via `TimeProvider.GetUtcNow()` (returns `DateTimeOffset`); where a third-party API forces
   `DateTime` (e.g. BouncyCastle), convert at that boundary and keep it out of our types
-- Tests with NUnit 4.x (`[CancelAfter]` on async tests); categories `Unit` / `Loopback` / `Interop` / `Slow`
+- Tests with NUnit 5 (`[CancelAfter]` on async tests); categories `Unit` / `Loopback` / `Interop` / `Slow`
 - English for all code, XML docs, comments and commit messages
 - Dependencies: `libs/Hermod` + `libs/Styx` git submodules, referenced via the `/Dependencies/`
   solution folder in `SSH.slnx`; BouncyCastle comes in through Hermod

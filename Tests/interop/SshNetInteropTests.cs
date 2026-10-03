@@ -169,7 +169,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             try
             {
 
-                Assert.CatchAsync(async () => await Task.Run(() => {
+                await Assert.CatchAsync(async () => await Task.Run(() => {
 
                     using var client = new Renci.SshNet.SshClient(ConnectionFor(port, keyPath));
                     PinHostKey(client, somebodyElse);

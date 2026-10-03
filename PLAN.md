@@ -732,7 +732,7 @@ typing rhythm — enough to narrow down passwords (Song/Wagner/Tian 2001). Mitig
 
 ## 10. Testing Strategy (NUnit)
 
-**Stack:** NUnit 4.x + `NUnit3TestAdapter` + `Microsoft.NET.Test.Sdk` + `NUnit.Analyzers` + `coverlet.collector`.
+**Stack:** NUnit 5 + `NUnit3TestAdapter` + `Microsoft.NET.Test.Sdk` + `NUnit.Analyzers` + `coverlet.collector`.
 Async tests with `[CancelAfter(…)]` + `CancellationToken` parameter, `Assert.ThatAsync`, `TestCaseSource` for matrices. Categories: `Unit` (fast, deterministic, default), `Loopback`, `Interop` (see §11), `Slow`.
 
 ### 10.1 Unit tests (per layer, with test vectors)
