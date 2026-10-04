@@ -441,9 +441,22 @@ jobs:
       - name: Install git and the .NET prerequisites (Debian container)
         run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
 
+      # fetch-depth 0, which the gate's legs do not need and this job does. The
+      # default is a depth-1 clone and a `submodule update --depth=1`, so each
+      # submodule arrives with one commit of history -- enough to build against,
+      # and not enough to say what changed. The first run of this job proved it
+      # rather than implied it: it reported "libs/Hermod: 1 commits" where the
+      # range was really ten, and the summary would have listed one of them. The
+      # commit range is the whole reason this job is defensible next to
+      # dependabot's pull request, so the history it needs is not optional.
+      #
+      # It costs very little: both submodules' objects live in the
+      # superproject's .git, which is about 50 MB in full, against a job that
+      # spends two and a half minutes provisioning peers.
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+          fetch-depth: 0
 
       # The pins are recorded before they are moved, because afterwards there is
       # nothing left to compare against -- and the comparison is the point.
