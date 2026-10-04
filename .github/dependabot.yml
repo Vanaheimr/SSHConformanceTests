@@ -37,7 +37,7 @@ updates:
     # range when something breaks, and a week of Hermod is not a small range —
     # the last sync alone spanned 15 commits. Daily is not one PR per day either;
     # Dependabot updates an already-open PR in place rather than opening a second
-    # one, so the ceiling is one open PR per submodule.
+    # one, so the ceiling is one open PR for the group defined below.
     #
     # 05:00 UTC is after the nightly below has had its two-and-a-half hours, so a
     # single look in the morning finds both the night's verdict and the day's pin
@@ -72,9 +72,34 @@ updates:
     cooldown:
       default-days: 0
 
-    # Two submodules, one PR each. The number is deliberate rather than the
-    # default 5: if a third pin is ever added and its PR silently never appears,
-    # this line is the reason.
+    # One pull request for both submodules — correctness, not tidiness.
+    #
+    # libs/Hermod and libs/Styx do not evolve independently: Hermod's master
+    # regularly calls a Styx API that arrived days earlier. One PR per submodule
+    # means each is built against the OTHER's old pin — a combination that exists
+    # nowhere and that nobody will ever ship. On 2026-10-04 that is precisely how
+    # it failed, on both legs:
+    #
+    #     Hermod/HTTP/Passkeys/WebAuthn.cs(206,67): error CS1061:
+    #     'CBORValue' does not contain a definition for 'GetValue'
+    #
+    # GetValue(CBORValue) had landed in Styx c530de16 while the Hermod-only PR
+    # left Styx on the old pin. The same pattern had turned both pin PRs red on
+    # 2026-08-14, undiagnosed at the time, and it cost an afternoon to find the
+    # second time. Grouped, CI judges the combination this repository is actually
+    # going to carry.
+    #
+    # The pattern is "*" rather than the two paths by name so that a third
+    # submodule joins the group by existing, instead of quietly getting its own
+    # pull request and its own impossible combination.
+    groups:
+      submodules:
+        patterns:
+          - "*"
+
+    # With that group there is at most one pin PR at a time, so this is a backstop
+    # rather than a budget: it keeps an ungrouped entry, should one ever be added,
+    # from opening five at once.
     open-pull-requests-limit: 2
 
     labels:
