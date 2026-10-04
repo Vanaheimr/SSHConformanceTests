@@ -160,19 +160,40 @@ jobs:
           rows="${RUNNER_TEMP}/rows.md"
           : > "${rows}"
           failed=0
+          #
+          # A skipped check counts as a failed run on the Debian leg, the same
+          # way it does in ci.yml and for the same reason: setup-wsl.sh put
+          # every peer there, so a fixture that gates itself out could not use
+          # one that is installed, and a run of nothing but skips would be
+          # tabled as "passed". On Windows the skips are honest -- 55 of the 95,
+          # no WSL distro on the runner -- so the check is Linux-only, and the
+          # table says which of the two kinds of failure a run had.
+          #
+          # tee with PIPESTATUS rather than a plain redirect: the per-run output
+          # has to stay visible inside its ::group:: fold, and the exit status
+          # that matters is dotnet's, not tee's.
           for i in 1 2 3; do
             echo "::group::run ${i} of 3"
             dotnet test Tests/Tests.csproj --configuration Release --no-build \
               --logger "console;verbosity=normal" \
               --logger "trx;LogFileName=${{ matrix.leg }}-run${i}.trx" \
-              --results-directory artifacts
-            rc=$?
+              --results-directory artifacts 2>&1 | tee "${RUNNER_TEMP}/run${i}.txt"
+            rc=${PIPESTATUS[0]}
             echo "::endgroup::"
-            if [ "${rc}" -eq 0 ]; then
-              echo "| ${i} | passed |" >> "${rows}"
-            else
+            skipped=0
+            if [ "${RUNNER_OS}" = "Linux" ]; then
+              for n in $(grep -oE 'Skipped: +[0-9]+' "${RUNNER_TEMP}/run${i}.txt" | grep -oE '[0-9]+'); do
+                skipped=$((skipped + n))
+              done
+            fi
+            if [ "${rc}" -ne 0 ]; then
               failed=1
               echo "| ${i} | **failed** (exit ${rc}) |" >> "${rows}"
+            elif [ "${skipped}" -ne 0 ]; then
+              failed=1
+              echo "| ${i} | **failed** (${skipped} skipped) |" >> "${rows}"
+            else
+              echo "| ${i} | passed |" >> "${rows}"
             fi
           done
           {

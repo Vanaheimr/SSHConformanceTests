@@ -205,9 +205,48 @@ jobs:
       # exchanges included. The 9.5p2 client that advertises neither is what sits on a typical
       # developer Windows box, where those two cases skip by name — so the version spread this
       # matrix covers is between CI and the desk, not between the two legs.
+      #
+      # The count above is an invariant, not a note, so it is checked. Every
+      # fixture here gates itself on its peer: a missing sshd or Dropbear makes
+      # the check call Assert.Ignore, NUnit records a skip rather than a
+      # failure, and the step exits 0 having asked nothing. That is the right
+      # behaviour on the Windows leg, where 55 of the 95 skip by name because
+      # the runner has no WSL distro, and it is a lie on the Debian leg, where
+      # setup-wsl.sh installed every peer four steps up. So a skip there fails
+      # the gate.
+      #
+      # NTSConformanceTests paid for this lesson in full today: a lane that
+      # provisioned its own peers reported agreement with chrony 4.9 for an
+      # entire run while chronyd had exited at startup every time, thirteen
+      # checks quietly skipping themselves. Nothing here is harder to believe
+      # than that was.
+      #
+      # Linux-only, and the asymmetry is deliberate rather than convenient: the
+      # whole point of the Windows leg is that it reports honestly on what it
+      # cannot reach.
       - name: Test
         timeout-minutes: 20
-        run: dotnet test Tests/Tests.csproj --configuration Release --no-build --logger "console;verbosity=normal" --logger "trx;LogFileName=${{ matrix.leg }}.trx" --results-directory artifacts
+        shell: bash
+        run: |
+          set +e
+          dotnet test Tests/Tests.csproj --configuration Release --no-build \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=${{ matrix.leg }}.trx" \
+            --results-directory artifacts > test.out 2>&1
+          rc=$?
+          cat test.out
+          [ "${rc}" -eq 0 ] || exit "${rc}"
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            skipped=0
+            for n in $(grep -oE 'Skipped: +[0-9]+' test.out | grep -oE '[0-9]+'); do
+              skipped=$((skipped + n))
+            done
+            echo "skipped on this leg: ${skipped}"
+            if [ "${skipped}" -ne 0 ]; then
+              echo "FAIL: ${skipped} checks skipped on the leg that provisions every peer."
+              exit 1
+            fi
+          fi
 
       # Which checks ran, which skipped and with what reason is the single most useful thing
       # this workflow knows, and it is exactly what the console log does not preserve once a
