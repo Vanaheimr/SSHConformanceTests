@@ -12,9 +12,9 @@ version: 2
 # hand. Commit 7575e17 is what that looks like when it works, and it only worked
 # because the drift happened to be noticed.
 #
-# A nightly could close that by building against Hermod's master instead of the
-# pin, but it would answer in the wrong currency: a red night names no commit and
-# leaves nothing to merge. Dependabot answers in pull requests. And because
+# A nightly on its own would answer in the wrong currency: a red night that names
+# no commit leaves nothing to merge. Dependabot answers in pull requests. And
+# because
 # GitHub builds a pull_request run from refs/pull/N/merge — the PR merged into
 # master's current tip, not the PR's own commit — the verdict on such a PR is
 # "this pin, merged into master", which is exactly the question a pin bump asks.
@@ -28,6 +28,14 @@ version: 2
 #
 # .gitmodules names no branch for either submodule, so each is followed on its own
 # repository's default branch, which is master for both.
+#
+# Since 2026-10-04 nightly.yml also carries a referee job against both masters,
+# and the two are complementary rather than competing. This file stays the
+# mergeable answer -- one click, judged as "this pin merged into master". The
+# referee answers sooner, every night rather than once at 05:00, and it was built
+# to meet the objection above: it writes each pin and the full commit range
+# between that pin and its master into the night's summary before moving
+# anything, so a red morning names the commits rather than the date.
 
 updates:
   - package-ecosystem: gitsubmodule

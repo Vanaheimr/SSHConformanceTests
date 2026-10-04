@@ -42,10 +42,19 @@ name: Nightly
 #   still open, and deliberately so: it is a different mechanism (images, not a
 #   build) and setup-wsl.sh has no version knob to hang it on.
 #
-# What this workflow deliberately does NOT do is build against Hermod's master.
-# The submodules are checked out at their pinned commits, same as the gate. Drift
-# is dependabot.yml's job now, and it answers in mergeable pull requests rather
-# than in red mornings.
+# REFEREE -- the same suite against both submodules' current master.
+#
+#   This file used to say it deliberately did not do this, on dependabot.yml's
+#   argument: a red night names no commit and leaves nothing to merge, while a
+#   pin PR's verdict is "this pin merged into master". That argument was right
+#   and the pull request is still the mergeable answer, so the two now run side
+#   by side rather than one replacing the other.
+#
+#   What the referee adds is latency and the thing the objection asked for. It
+#   asks nightly instead of once at 05:00, and before moving anything it writes
+#   each pin and the whole commit range between that pin and its master into the
+#   summary -- so a red morning reads "these ten Hermod commits and this one
+#   Styx commit contain it", which is where a bisect would start.
 #
 # Two things worth knowing about scheduled workflows, both inherited from Hermod's
 # nightly: they only ever run on the default branch — so this file cannot be
@@ -379,4 +388,172 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: nightly-test-results-${{ matrix.leg }}
+          path: artifacts/*.trx
+
+  # ---------------------------------------------------------------------------
+  # The referee job: the same suite against both submodules' current master.
+  # ---------------------------------------------------------------------------
+  against-submodule-masters:
+    # Everything above tests the revisions the gitlinks pin, which is the right
+    # question for "would a fresh clone build". It is the wrong question for what
+    # this repository claims to be: a referee that can be pointed at any Hermod
+    # revision. A push to Hermod does not touch this repository at all, so no
+    # job here notices it.
+    #
+    # dependabot.yml closes that too, and its argument against a nightly doing
+    # it was specific: a red night names no commit and leaves nothing to merge,
+    # while a pin PR's verdict is "this pin merged into master", which is the
+    # question a bump actually asks. That argument stands, and this job does not
+    # replace it -- the PR remains the mergeable answer. What this adds is
+    # latency and the thing the objection asked for.
+    #
+    # Latency: dependabot proposes at 05:00 and GitHub applies its own ordering
+    # to when a PR appears, so a break can sit unseen for a working day. This
+    # asks every night, against master as it stands.
+    #
+    # And it names commits. Before moving anything, the step below writes the
+    # pinned revisions and then the full commit range between each pin and its
+    # master into the summary. A red morning therefore reads "these ten Hermod
+    # commits and this one Styx commit contain it", which is a day's worth of
+    # range and the same material a bisect would start from -- not a date.
+    #
+    # Red here is a finding rather than a breakage, and it is still fatal to the
+    # night on purpose, the way NTS's and DNS's referees are: nothing else in
+    # this workflow can go red for a reason outside this tree, so a red night
+    # means exactly one thing. If the mornings turn noisy because master is
+    # routinely ahead, continue-on-error on this job is the one-line answer.
+    #
+    # The whole suite runs, not a hermetic subset. NTS and DNS keep their
+    # referees to the offline gate because they have one; here the interop
+    # fixtures ARE the suite, so an offline-only referee would be a referee of
+    # almost nothing. That means this job provisions every peer, exactly as the
+    # gate's Debian leg does.
+    #
+    # Both submodules move, and Styx is not an afterthought: Hermod's own CI
+    # checks Styx out at master unpinned, so Hermod's master is only ever tested
+    # against Styx's master, and a lagging Styx pin is a combination nothing
+    # else verifies. dependabot.yml groups them into one PR for the same reason.
+    runs-on: ubuntu-latest
+    container: debian:13
+    steps:
+
+      # Before the checkout, and needed again afterwards to move the gitlinks.
+      - name: Install git and the .NET prerequisites (Debian container)
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # The pins are recorded before they are moved, because afterwards there is
+      # nothing left to compare against -- and the comparison is the point.
+      #
+      # A plain loop over .gitmodules rather than `git submodule foreach`: the
+      # body needs double quotes for the headings and single quotes for the
+      # markdown fences, and nesting those inside foreach's own quoted argument
+      # is how a fence ends up being read as command substitution by sh. A third
+      # submodule joins this loop by existing, with nothing to edit here.
+      - name: Move both submodules to master, and say what that changes
+        run: |
+          set -e
+          git config --global --add safe.directory '*'
+          {
+            echo '### What the gate pins'
+            echo '```'
+            git submodule status
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for sm in $(git config --file .gitmodules --get-regexp path | awk '{print $2}'); do
+            pin="$(git -C "${sm}" rev-parse HEAD)"
+            git -C "${sm}" fetch -q origin master
+            tip="$(git -C "${sm}" rev-parse FETCH_HEAD)"
+            n="$(git -C "${sm}" rev-list --count "${pin}..${tip}")"
+            {
+              echo
+              echo "#### ${sm} — ${n} commit(s) past the pin"
+              echo '```'
+              git -C "${sm}" log --oneline --no-decorate "${pin}..${tip}" || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "${sm}: ${pin} -> ${tip} (${n} commits)"
+            git -C "${sm}" checkout -q FETCH_HEAD
+          done
+
+      # From here on this is the gate's Debian leg, step for step. The comments
+      # live in ci.yml; repeating them here would guarantee the copies drift.
+      - name: Provision the interop peers (Debian container)
+        run: bash Tests/interop/setup-wsl.sh
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Start an ssh-agent holding one throwaway identity (Debian container)
+        run: |
+          eval "$(ssh-agent -s)"
+          ssh-keygen -t ed25519 -f "${RUNNER_TEMP}/referee-agent-key" -N "" -q
+          ssh-add -q "${RUNNER_TEMP}/referee-agent-key"
+          echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "${GITHUB_ENV}"
+
+      - name: Tighten the container HOME for Dropbear's path check (Debian container)
+        run: |
+          id
+          d="${HOME:?}"
+          while [ "${d}" != "/" ] && [ "${d}" != "." ]; do
+            ls -ld "${d}"
+            chown "$(id -u):$(id -g)" "${d}" || echo "  chown refused for ${d} (bind mount?)"
+            chmod go-w "${d}"
+            ls -ld "${d}"
+            d="$(dirname "${d}")"
+          done
+
+      - name: Build
+        run: dotnet build Tests/Tests.csproj --configuration Release
+
+      # A skip is a failure here for the same reason it is in the gate: every
+      # peer was installed three steps up, so a check that gates itself out
+      # could not use one that is demonstrably there, and a referee reporting
+      # agreement it never measured is worse than no referee. No runner check
+      # around it -- this job only ever runs on Linux.
+      - name: Test the suite against both masters
+        timeout-minutes: 25
+        shell: bash
+        run: |
+          set +e
+          dotnet test Tests/Tests.csproj --configuration Release --no-build \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=against-submodule-masters.trx" \
+            --results-directory artifacts > "${RUNNER_TEMP}/referee.out" 2>&1
+          rc=$?
+          cat "${RUNNER_TEMP}/referee.out"
+          skipped=0
+          passed=0
+          for n in $(grep -oE 'Skipped: +[0-9]+' "${RUNNER_TEMP}/referee.out" | grep -oE '[0-9]+'); do
+            skipped=$((skipped + n))
+          done
+          for n in $(grep -oE 'Passed: +[0-9]+' "${RUNNER_TEMP}/referee.out" | grep -oE '[0-9]+'); do
+            passed=$((passed + n))
+          done
+          {
+            echo
+            echo '### Verdict against both masters'
+            echo
+            echo "passed ${passed}, skipped ${skipped} (the gate's Debian leg: 95 passed, 0 skipped)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "${rc}" -eq 0 ] || exit "${rc}"
+          if [ "${skipped}" -ne 0 ]; then
+            echo "FAIL: ${skipped} checks skipped although every peer was provisioned."
+            exit 1
+          fi
+
+      # Named apart from the two legs above so a downloaded directory says which
+      # question produced it. InteropReport reads a directory recursively, and a
+      # referee's run mixed into the pinned ones would render a matrix that
+      # cannot be attributed.
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-test-results-against-submodule-masters
           path: artifacts/*.trx
