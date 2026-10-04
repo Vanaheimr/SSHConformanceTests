@@ -206,14 +206,15 @@ jobs:
       # developer Windows box, where those two cases skip by name — so the version spread this
       # matrix covers is between CI and the desk, not between the two legs.
       #
-      # The count above is an invariant, not a note, so it is checked. Every
-      # fixture here gates itself on its peer: a missing sshd or Dropbear makes
-      # the check call Assert.Ignore, NUnit records a skip rather than a
-      # failure, and the step exits 0 having asked nothing. That is the right
-      # behaviour on the Windows leg, where 55 of the 95 skip by name because
-      # the runner has no WSL distro, and it is a lie on the Debian leg, where
-      # setup-wsl.sh installed every peer four steps up. So a skip there fails
-      # the gate.
+      # "Nothing skipped" above is an invariant, not a note, so it is checked --
+      # the skips, that is, not the count, which grows every time a check is
+      # added. Every fixture here gates itself on its peer: a missing sshd or
+      # Dropbear makes the check call Assert.Ignore, NUnit records a skip rather
+      # than a failure, and the step exits 0 having asked nothing. That is the
+      # right behaviour on the Windows leg, where every check that needs a WSL
+      # peer skips by name because the runner has no WSL distro, and it is a lie
+      # on the Debian leg, where setup-wsl.sh installed every peer four steps
+      # up. So a skip there fails the gate.
       #
       # NTSConformanceTests paid for this lesson in full today: a lane that
       # provisioned its own peers reported agreement with chrony 4.9 for an

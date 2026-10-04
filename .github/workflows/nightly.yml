@@ -174,9 +174,10 @@ jobs:
           # way it does in ci.yml and for the same reason: setup-wsl.sh put
           # every peer there, so a fixture that gates itself out could not use
           # one that is installed, and a run of nothing but skips would be
-          # tabled as "passed". On Windows the skips are honest -- 55 of the 95,
-          # no WSL distro on the runner -- so the check is Linux-only, and the
-          # table says which of the two kinds of failure a run had.
+          # tabled as "passed". On Windows the skips are honest -- every check
+          # that needs a WSL peer skips, there being no WSL distro on the
+          # runner -- so the check is Linux-only, and the table says which of
+          # the two kinds of failure a run had.
           #
           # tee with PIPESTATUS rather than a plain redirect: the per-run output
           # has to stay visible inside its ::group:: fold, and the exit status
@@ -542,17 +543,25 @@ jobs:
           cat "${RUNNER_TEMP}/referee.out"
           skipped=0
           passed=0
+          failed=0
           for n in $(grep -oE 'Skipped: +[0-9]+' "${RUNNER_TEMP}/referee.out" | grep -oE '[0-9]+'); do
             skipped=$((skipped + n))
           done
           for n in $(grep -oE 'Passed: +[0-9]+' "${RUNNER_TEMP}/referee.out" | grep -oE '[0-9]+'); do
             passed=$((passed + n))
           done
+          for n in $(grep -oE 'Failed: +[0-9]+' "${RUNNER_TEMP}/referee.out" | grep -oE '[0-9]+'); do
+            failed=$((failed + n))
+          done
+          # Stated against itself rather than against a number written in here:
+          # a constant goes stale the first time a check is added, and the verdict
+          # never depended on it -- zero skips and a zero exit mean "everything ran
+          # and passed" for a suite of any size.
           {
             echo
             echo '### Verdict against both masters'
             echo
-            echo "passed ${passed}, skipped ${skipped} (the gate's Debian leg: 95 passed, 0 skipped)"
+            echo "${passed} of $((passed + skipped + failed)) checks passed, ${skipped} skipped, ${failed} failed."
           } >> "$GITHUB_STEP_SUMMARY"
           [ "${rc}" -eq 0 ] || exit "${rc}"
           if [ "${skipped}" -ne 0 ]; then
