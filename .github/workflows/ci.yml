@@ -232,13 +232,13 @@ jobs:
           dotnet test Tests/Tests.csproj --configuration Release --no-build \
             --logger "console;verbosity=normal" \
             --logger "trx;LogFileName=${{ matrix.leg }}.trx" \
-            --results-directory artifacts > test.out 2>&1
+            --results-directory artifacts > "${RUNNER_TEMP}/test.out" 2>&1
           rc=$?
-          cat test.out
+          cat "${RUNNER_TEMP}/test.out"
           [ "${rc}" -eq 0 ] || exit "${rc}"
           if [ "${RUNNER_OS}" = "Linux" ]; then
             skipped=0
-            for n in $(grep -oE 'Skipped: +[0-9]+' test.out | grep -oE '[0-9]+'); do
+            for n in $(grep -oE 'Skipped: +[0-9]+' "${RUNNER_TEMP}/test.out" | grep -oE '[0-9]+'); do
               skipped=$((skipped + n))
             done
             echo "skipped on this leg: ${skipped}"
