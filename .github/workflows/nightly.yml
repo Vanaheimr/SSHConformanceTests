@@ -250,7 +250,12 @@ jobs:
           SUMMARY="${RUNNER_TEMP}/upstream-summary.md"
           LOG="${RUNNER_TEMP}/upstream-test.txt"
           : > "${SUMMARY}"
-          note() { echo "$1" >> "${SUMMARY}"; }
+          # tee, so a note reaches the step log as well as the summary. Anybody
+          # investigating a red lane from the command line reads the log, and a
+          # plain redirect leaves the one thing they need first -- which upstream
+          # release this ran against -- visible only in a browser. The same
+          # redirect cost NTSConformanceTests a round trip today.
+          note() { echo "$1" | tee -a "${SUMMARY}"; }
           emit() {
             {
               echo '## Newest upstream OpenSSH (${{ matrix.leg }}, informational)'
