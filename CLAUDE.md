@@ -87,7 +87,7 @@ commits** (submodule first, then the pointer bump here) — see the push order i
 - Tests with NUnit 5 (`[CancelAfter]` on async tests); categories `Unit` / `Loopback` / `Interop` / `Slow`
 - English for all code, XML docs, comments and commit messages
 - Dependencies: `libs/Hermod` + `libs/Styx` git submodules, referenced via the `/Dependencies/`
-  solution folder in `SSH.slnx`; BouncyCastle comes in through Hermod
+  solution folder in `SSHConformanceTests.slnx`; BouncyCastle comes in through Hermod
 - No self-implemented crypto primitives — BCL first, BouncyCastle for gaps; in-house code only for
   modes/constructions (CTR, chacha20-poly1305@openssh.com, bcrypt_pbkdf, KDF) with official test vectors
 - [PLAN.md](PLAN.md) carries status markers (✅ done · 🔶 partial · ⬜ open) — keep them current

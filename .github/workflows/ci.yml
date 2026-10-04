@@ -190,15 +190,16 @@ jobs:
       # Paramiko, Plink and TinySsh — reach their peers through interop/WslInterop.cs,
       # which runs the same commands through wsl.exe on Windows and natively on Linux.
       # With the provisioning step above, the Debian leg is the first place the entire
-      # suite runs on every commit: all 95 checks, nothing skipped — about 30 seconds of
+      # suite runs on every commit: every check, nothing skipped — about 30 seconds of
       # test time on a hosted runner, 17 in a local Debian 13 provisioned the same way.
       # What PLAN §11.6 keeps for a separate nightly job is the *version spread* — the
       # OpenSSH 8.9/9.6/9.9 containers, the Tier 3 peers — not this suite at trixie's
       # own peer versions, which costs seconds.
       #
       # The Windows leg reaches those eight no further — the hosted images install no WSL
-      # distro — and lands at 40 of 95. What it adds is the Windows OpenSSH: a genuinely
-      # different build against a different TLS stack, driving the same server.
+      # distro — and runs only the checks that need none. What it adds is the Windows
+      # OpenSSH: a genuinely different build against a different TLS stack, driving the
+      # same server.
       #
       # It is not, however, an older one. That was assumed here at first and the artifacts
       # disproved it: the transport fixture passes 12 of 12 on this leg, both hybrid key

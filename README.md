@@ -20,7 +20,7 @@ ecosystem.
 ## Interoperability
 
 Every feature has to work against implementations that share no code with ours. Nine do —
-**93 checks pass, none fail** — and the generated per-test detail is in
+**94 checks pass, none fail** — and the generated per-test detail is in
 [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md). What is *not* covered is listed just as plainly,
 because a matrix that only shows green teaches nothing.
 
@@ -93,8 +93,8 @@ assembly. This repository is the harness around it: demo CLI, benchmarks and the
 
 ```bash
 git clone --recurse-submodules <repo-url>
-dotnet build SSH.slnx
-dotnet test  SSH.slnx
+dotnet build SSHConformanceTests.slnx
+dotnet test  SSHConformanceTests.slnx
 ```
 
 Cloning **must** use `--recurse-submodules`: the implementation and its tests live in `libs/Hermod`,
