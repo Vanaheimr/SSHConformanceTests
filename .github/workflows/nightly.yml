@@ -104,7 +104,9 @@ jobs:
       # tarball without a git binary, and a tarball cannot fetch submodules.
       - name: Install git and the .NET prerequisites (Debian container)
         if: runner.os == 'Linux'
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+          git config --system http.version HTTP/1.1
 
       - uses: actions/checkout@v7
         with:
@@ -439,8 +441,11 @@ jobs:
     steps:
 
       # Before the checkout, and needed again afterwards to move the gitlinks.
+      # HTTP/1.1 for the reason ci.yml gives; here it covers those fetches too.
       - name: Install git and the .NET prerequisites (Debian container)
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+          git config --system http.version HTTP/1.1
 
       # fetch-depth 0, which the gate's legs do not need and this job does. The
       # default is a depth-1 clone and a `submodule update --depth=1`, so each

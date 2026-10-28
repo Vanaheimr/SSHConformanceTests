@@ -75,9 +75,20 @@ jobs:
       # Deliberately minimal: only what git and the SDK install need. Every SSH peer —
       # openssh-client included — arrives with the provisioning step after the checkout,
       # because the script that owns the peer list lives in the repository.
+      #
+      # The git config line pins that git to HTTP/1.1. Debian's git negotiates HTTP/2 with
+      # github.com, and on 2026-10-15 NTSConformanceTests' nightly went red before its first
+      # test with "Error in the HTTP2 framing layer" while fetching a submodule — one checkout
+      # in roughly ninety. actions/checkout retries its main fetch but not the submodule
+      # update, so one dropped stream is a red run that says nothing about Hermod. This
+      # repository has not hit it yet; it runs the same git against the same host. HTTP/1.1
+      # takes the framing layer out of the picture. --system, so it holds for every git call
+      # in the job, whatever HOME or repository config actions/checkout sets up for its own.
       - name: Install git and the .NET prerequisites (Debian container)
         if: runner.os == 'Linux'
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libicu76 libssl3t64 libstdc++6 tzdata
+          git config --system http.version HTTP/1.1
 
       # Unlike Hermod's own CI, which checks Styx out as a sibling directory because nothing
       # pins it, this repository carries both dependencies as submodules — so the checkout
