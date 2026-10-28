@@ -42,7 +42,7 @@ Dropbear and TinySSH** — including our SFTP client against OpenSSH's own `sftp
 **Known gaps.** Certificates are so far only proven against OpenSSH, and only in the direction where we
 validate theirs. WinSCP, FileZilla and Apache MINA SSHD are candidates but not wired in. Everything above no longer runs
 only on a developer machine: since 2026-08-13 the Debian CI leg provisions every peer and runs the whole
-suite on each commit, and a nightly adds the newest upstream OpenSSH built from source — 10.5p1 at the
+suite on each commit, and a nightly adds the newest upstream OpenSSH built from source — 10.6p1 at the
 time of writing, against Debian's 10.0p2. What is still missing there is the other direction, **older**
 OpenSSH releases through era-matched container images (PLAN §11.6). Peers that are absent are **skipped with a precise reason**, never silently
 counted as passing — the matrix distinguishes "disagreed" from "no evidence either way".

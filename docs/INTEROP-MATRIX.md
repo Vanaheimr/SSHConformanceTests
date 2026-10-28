@@ -1,13 +1,13 @@
 # HermodSSH — interoperability matrix
 
 Generated from the interop test run — do not edit by hand.
-Run at 2026-08-12 23:29:18 UTC.
+Run at 2026-10-28 02:38:22 UTC.
 
 ## Summary
 
-**92 passed · 0 failed · 1 not exercised** across 9 peer(s).
+**94 passed · 0 failed · 0 not exercised** across 9 peer(s).
 
-> All exercised tests agreed. Some peers were unavailable on the machine that produced this run, so their rows record no evidence rather than success.
+> Every interop test passed.
 
 ## Capability × peer
 
@@ -15,7 +15,7 @@ Run at 2026-08-12 23:29:18 UTC.
 |---|---|---|---|---|---|---|---|---|---|
 | Algorithm negotiation | – | – | – | – | ✅ 1 | – | ✅ 1 | – | – |
 | Authentication | – | – | – | ✅ 3 | – | – | – | – | – |
-| Certificates | – | – | – | ✅ 2 | – | – | – | – | – |
+| Certificates | – | – | – | ✅ 3 | – | – | – | – | – |
 | Channel requests & flow control | – | – | – | – | – | ✅ 1 | – | – | – |
 | Host-key rotation (hostkeys-00) | – | – | – | ✅ 1 | – | – | – | – | – |
 | Host-key verification | ✅ 1 | ✅ 2 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 |
@@ -24,7 +24,7 @@ Run at 2026-08-12 23:29:18 UTC.
 | SFTP | ✅ 1 | – | – | ✅ 3 | ✅ 1 | – | ✅ 1 | – | ✅ 1 |
 | SSHFP DNS records | – | – | – | ✅ 3 | – | – | – | – | – |
 | Transport & key exchange | ✅ 1 | ✅ 6 | ✅ 1 | ✅ 17 | ✅ 2 | ✅ 6 | – | ✅ 2 | – |
-| ssh-agent | – | – | – | ⚪ | – | – | – | – | – |
+| ssh-agent | – | – | – | ✅ 1 | – | – | – | – | – |
 
 ## Detail
 
@@ -63,6 +63,7 @@ Run at 2026-08-12 23:29:18 UTC.
 - ✅ `OurServer_AuthenticatesRealOpenSshClient_WithPublicKey("ecdsa")` — Authentication
 - ✅ `OurServer_AuthenticatesRealOpenSshClient_WithPublicKey("ed25519")` — Authentication
 - ✅ `OurServer_AuthenticatesRealOpenSshClient_WithPublicKey("rsa")` — Authentication
+- ✅ `OpenSsh_EmptyCertPrincipals_MatchNothingFrom_10_3` — Certificates
 - ✅ `SshKeygenReads_OurCertificate` — Certificates
 - ✅ `WeValidate_SshKeygenSignedCertificate` — Certificates
 - ✅ `RealOpenSshClient_LearnsOurRotatedInHostKey` — Host-key rotation (hostkeys-00)
@@ -102,7 +103,7 @@ Run at 2026-08-12 23:29:18 UTC.
 - ✅ `OurServer_CompletesTransport_WithRealOpenSshClient("mlkem768x25519-sha256","ssh-ed25519","aes256-gcm@openssh.com","hmac-sha2-256","aes256-gcm@openssh.com")` — Transport & key exchange
 - ✅ `OurServer_CompletesTransport_WithRealOpenSshClient("sntrup761x25519-sha512","ssh-ed25519","chacha20-poly1305@openssh.com","hmac-sha2-256","chacha20-poly1305@openssh.com")` — Transport & key exchange
 - ✅ `OurServer_SendsExtInfo_RealOpenSshClientReceivesServerSigAlgs` — Transport & key exchange
-- ⚪ `RealAgent_ListsAndSigns` — ssh-agent — No ssh-agent reachable: The operation was canceled.
+- ✅ `RealAgent_ListsAndSigns` — ssh-agent
 
 ### Paramiko
 
