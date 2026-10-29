@@ -65,9 +65,15 @@ fail without the fix and a control proving the permitted case still works.
   forwarding checks against a real peer.
 - ⬜ **`-R` on the client side:** `SshRemoteForwarding.RequestRemoteForwardAsync` does not return the port
   the server allocated for port 0, and disposing its handle does not send `cancel-tcpip-forward`.
-- ⬜ **SFTP:** the server answers SETSTAT/FSETSTAT with OK without applying anything (chmod, mtime and
-  truncate silently "succeed"), does not implement READLINK/SYMLINK, and treats LSTAT as STAT. The client
-  has no setstat/readlink/symlink/realpath, and `SftpFileStream.SetLength` is unsupported.
+- ✅ **SFTP SETSTAT/FSETSTAT** (Hermod PR #178, `35dcc7c2`): the server answered both with OK and applied
+  nothing, so `sftp put -p` and `chmod` "succeeded" without effect — and an upload-only session that
+  preserves times was refused, since SETSTAT demanded every permission. Now size, times and the rwx bits
+  are applied (no setuid/setgid/sticky; on Windows owner-write is the read-only attribute), ownership is
+  refused with OP_UNSUPPORTED, a request applies in full or not at all, SETSTAT needs `Write`, and STAT
+  reports the real mode. `SftpClient.SetAttributesAsync` sends it. Pinned against the real `sftp` by
+  `OpenSshSftpInteropTests.RealSftpClient_PreservesTimesAndSetsPermissions_OnOurServer`.
+- ⬜ **SFTP, the rest:** READLINK/SYMLINK are not implemented and LSTAT is treated as STAT; the client has no
+  readlink/symlink/realpath, and `SftpFileStream.SetLength` is unsupported.
 - ⬜ **Private keys:** encrypted openssh-key-v1 is read only with `aes256-ctr` (ssh-keygen's default); an
   Ed25519 key in PKCS#8 PEM is not imported.
 - ⬜ **Façade:** `SshClientOptions.Credentials` takes key signers only — password and

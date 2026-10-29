@@ -310,6 +310,144 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
+        #region RealSftpClient_PreservesTimesAndSetsPermissions_OnOurServer
+
+        /// <summary>
+        /// The reference client's <c>put -p</c> and <c>chmod</c> against our SETSTAT.
+        ///
+        /// <para>
+        /// Both used to "work": the server answered every SETSTAT with OK and changed nothing, so sftp
+        /// exited 0, reported no error, and the uploaded file carried the time of the upload and its old
+        /// permissions. Only checking what landed on disk shows the difference — which is what this does.
+        /// On Windows the one permission with a counterpart is owner-write, the read-only attribute.
+        /// </para>
+        /// </summary>
+        [Test]
+        [CancelAfter(40000)]
+        public async Task RealSftpClient_PreservesTimesAndSetsPermissions_OnOurServer(CancellationToken CancellationToken)
+        {
+
+            var sftpCli    = FindOnPathOrSystem("sftp");
+            var sshKeygen  = FindOnPathOrSystem("ssh-keygen");
+            if (sftpCli is null || sshKeygen is null)
+                Assert.Ignore("No 'sftp'/'ssh-keygen' found.");
+
+            var workDir  = Path.Combine(Path.GetTempPath(), "hermod_sftpsetstat_" + Guid.NewGuid().ToString("N"));
+            var root     = Path.Combine(workDir, "root");
+            Directory.CreateDirectory(root);
+
+            var keyPath    = Path.Combine(workDir, "id");
+            var localSrc   = Path.Combine(workDir, "src.bin");
+            var batch      = Path.Combine(workDir, "batch.txt");
+            var knownHosts = Path.Combine(workDir, "known_hosts");
+            var emptyConf  = Path.Combine(workDir, "empty_conf");
+            File.WriteAllText(emptyConf, "");
+
+            // A time no upload could have by accident.
+            var then = new DateTime(2001, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+            await File.WriteAllBytesAsync(localSrc, RandomNumberGenerator.GetBytes(10_000), CancellationToken);
+            File.SetLastWriteTimeUtc(localSrc, then);
+
+            try
+            {
+
+                using (var keygen = Process.Start(new ProcessStartInfo(sshKeygen!) { ArgumentList = { "-t", "ed25519", "-f", keyPath, "-N", "", "-q" }, UseShellExecute = false, CreateNoWindow = true })!)
+                    await keygen.WaitForExitAsync(CancellationToken);
+
+                var publicLine = (await File.ReadAllTextAsync(keyPath + ".pub", CancellationToken)).Split(' ');
+                var publicBlob = Convert.FromBase64String(publicLine[1]);
+
+                var authenticator = SshUserAuthenticator.ForAuthorizedKeys(publicBlob);
+                var hostKey       = SshHostKey.GenerateEd25519();
+
+                using var listener = SshTcpListener.Start(new IPSocket(IPv4Address.Localhost, IPPort.Auto));
+                var port = listener.LocalEndPoint.Port.ToInt32();
+
+                Exception? serverError = null;
+                var serverTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var pipe = await listener.AcceptAsync(CancellationToken);
+                        using var transport = await SshTransport.ServerHandshakeAsync(pipe, hostKey, CancellationToken: CancellationToken);
+                        await UserAuthentication.ServerAuthenticateAsync(transport, authenticator, CancellationToken: CancellationToken);
+                        var duplex = await SshConnection.AcceptSubsystemAsync(transport, "sftp", CancellationToken);
+                        await SftpServer.ServeAsync(duplex, new LocalSftpFileSystem(root), CancellationToken: CancellationToken);
+                    }
+                    catch (Exception e) { serverError = e; throw; }
+                }, CancellationToken);
+
+                await File.WriteAllTextAsync(batch,
+                    $"put -p {localSrc.Replace('\\', '/')} /preserved.bin\n" +
+                    "chmod 444 /preserved.bin\n",
+                    CancellationToken);
+
+                using var client = new Process { StartInfo = new ProcessStartInfo(sftpCli!) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true } };
+                foreach (var arg in new[]
+                {
+                    "-F", emptyConf, "-P", port.ToString(),
+                    "-o", "StrictHostKeyChecking=no", "-o", $"UserKnownHostsFile={knownHosts}",
+                    "-i", keyPath, "-o", "IdentitiesOnly=yes",
+                    "-o", "PreferredAuthentications=publickey", "-o", "PasswordAuthentication=no",
+                    "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-v",
+                    "-b", batch, "hermoduser@127.0.0.1"
+                })
+                    client.StartInfo.ArgumentList.Add(arg);
+
+                client.Start();
+                var stdoutTask = client.StandardOutput.ReadToEndAsync();
+                var stderrTask = client.StandardError.ReadToEndAsync();
+
+                try
+                {
+
+                    await Task.WhenAny(client.WaitForExitAsync(CancellationToken), Task.Delay(TimeSpan.FromSeconds(25), CancellationToken)).ConfigureAwait(false);
+                    if (!client.HasExited)
+                    {
+                        try { client.Kill(true); } catch { }
+                        var stalled = await stderrTask;
+                        Assert.Fail($"sftp did not finish in time — stalled.\nserver error: {serverError}\nsftp -v log:\n{stalled}");
+                    }
+
+                    try { await serverTask; } catch { }
+                    var stderr   = await stderrTask;
+                    await stdoutTask;
+
+                    var uploaded = Path.Combine(root, "preserved.bin");
+
+                    Assert.Multiple(() => {
+
+                        Assert.That(client.ExitCode,                    Is.EqualTo(0), $"sftp should succeed. stderr:\n{stderr}");
+                        Assert.That(File.GetLastWriteTimeUtc(uploaded), Is.EqualTo(then), "put -p must carry the local modification time over");
+
+                        if (OperatingSystem.IsWindows())
+                            Assert.That(new FileInfo(uploaded).IsReadOnly, Is.True, "chmod 444 must make the file read-only");
+                        else
+                            Assert.That((Int32) File.GetUnixFileMode(uploaded), Is.EqualTo(0x124), "chmod 444 must land as mode 0444");
+
+                    });
+
+                }
+                catch (AssertionException) { throw; }
+                catch (Exception e)
+                {
+                    try { if (!client.HasExited) client.Kill(true); } catch { }
+                    var log = await stderrTask;
+                    throw new AssertionException($"OpenSSH sftp SETSTAT interop failed:\n{e.Message}\nsftp -v log:\n" + log, e);
+                }
+
+            }
+            finally
+            {
+                foreach (var file in Directory.Exists(workDir) ? Directory.EnumerateFiles(workDir, "*", SearchOption.AllDirectories) : [])
+                    try { File.SetAttributes(file, FileAttributes.Normal); } catch { }
+                try { Directory.Delete(workDir, recursive: true); } catch { }
+            }
+
+        }
+
+        #endregion
+
     }
 
 }
