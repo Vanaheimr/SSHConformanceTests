@@ -8,14 +8,12 @@ including **SFTP**, **post-quantum hybrid key exchange**, **public-key authentic
 **OpenSSH certificates**. Part of the [Vanaheimr Hermod](https://www.github.com/Vanaheimr/Hermod)
 ecosystem.
 
-> **Status:** milestones **M0–M8 are complete** — transport, post-quantum key exchange, authentication,
-> keys and certificates, the connection layer, SFTP v3 and forwarding, all validated against real
-> implementations. **M9** (hardening, audit stream, fuzz suite, security review) and **M10** (demo CLI,
-> benchmarks) are in place; the CI qualifier that used to sit here is settled — the whole suite gates
-> every commit, and a nightly adds three repeat runs plus the newest upstream OpenSSH. Only the
-> older-release half of the version matrix is still open. The full design,
-> feature set and the interoperability test program live in [PLAN.md](PLAN.md); repository conventions
-> are in [CLAUDE.md](CLAUDE.md). Progress is tracked with ✅ / 🔶 / ⬜ markers.
+Both roles come from one code base and cover the protocol end to end — transport, authentication,
+connection layer, SFTP v3 and forwarding. Every commit is checked against **nine independent SSH
+implementations**, and a nightly adds three repeat runs plus the newest upstream OpenSSH built from
+source. The few things still open are listed in one place,
+[PLAN.md §0](PLAN.md#0-status--open-work); the full design and the interoperability test program live
+in the rest of [PLAN.md](PLAN.md), repository conventions in [CLAUDE.md](CLAUDE.md).
 
 ## Interoperability
 
@@ -39,12 +37,14 @@ Dropbear and TinySSH** — including our SFTP client against OpenSSH's own `sftp
 | **Go `x/crypto/ssh`** | v0.54.0 | their client → our server | post-quantum `mlkem768x25519-sha256`, exec + exit status, host-key refusal, and our `openssh-key-v1` read with **no conversion step** | SFTP (a separate module), certificates; the harness in `Tests/interop/go/` needs a Go toolchain and is compiled on demand |
 | **curl / libssh2** | 8.14.1 / 1.11.1 | their client → our server | SFTP upload + download byte-for-byte through a third C lineage, host-key pinning via `--hostpubsha256` | no exec — curl speaks SFTP, not sessions |
 
-**Known gaps.** Certificates are so far only proven against OpenSSH, and only in the direction where we
-validate theirs. WinSCP, FileZilla and Apache MINA SSHD are candidates but not wired in. Everything above no longer runs
-only on a developer machine: since 2026-08-13 the Debian CI leg provisions every peer and runs the whole
-suite on each commit, and a nightly adds the newest upstream OpenSSH built from source — 10.6p1 at the
-time of writing, against Debian's 10.0p2. What is still missing there is the other direction, **older**
-OpenSSH releases through era-matched container images (PLAN §11.6). Peers that are absent are **skipped with a precise reason**, never silently
+**Where it runs.** All of the above runs on every commit, not only on a developer machine: the Debian CI
+leg provisions every peer and runs the whole suite with nothing skipped. A nightly builds the newest
+upstream OpenSSH from source — 10.6p1 at the time of writing, against Debian's 10.0p2.
+
+**Not covered yet.** Certificates are proven against OpenSSH only, and only in the direction where we
+validate theirs. The version spread runs forward only; **older** OpenSSH releases through era-matched
+container images are still to come (PLAN §11.6). WinSCP, FileZilla and Apache MINA SSHD are candidates
+but not wired in. Peers that are absent on a machine are **skipped with a precise reason**, never
 counted as passing — the matrix distinguishes "disagreed" from "no evidence either way".
 
 ## Features
@@ -70,7 +70,11 @@ counted as passing — the matrix distinguishes "disagreed" from "no evidence ei
   `TimeProvider`-driven timeouts, constant-time comparisons
 - ✅ **High-level façade** — `SshClient`/`SshServer` over a connection multiplexer: exec, SFTP,
   `direct-tcpip` and remote `-R` all concurrent on one connection; host-key rotation (`hostkeys-00@openssh.com`)
-- ✅ **IPv6 first-class**, and interoperability against eight independent implementations (see above)
+- ✅ **IPv6 first-class**, and interoperability against nine independent implementations (see above)
+
+**Out of scope by design:** SCP (OpenSSH itself runs it over SFTP now), X11 and agent forwarding,
+GSSAPI, compression, FIDO2 security keys, and every SHA-1 or legacy algorithm. The complete list, and
+what is still open rather than excluded, is in [PLAN.md §0](PLAN.md#0-status--open-work).
 
 ## Projects
 
