@@ -109,6 +109,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
             ("transport",        "Transport & key exchange"),
             ("keyexchange",      "Transport & key exchange"),
             ("kex",              "Transport & key exchange"),
+            ("rekey",            "Transport & key exchange"),
             ("extinfo",          "Algorithm negotiation"),
             ("sigalgs",          "Algorithm negotiation"),
             ("negotiat",         "Algorithm negotiation"),

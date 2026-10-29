@@ -49,8 +49,27 @@ fail without the fix and a control proving the permitted case still works.
   be set while `SshServer` enforced neither. `MaxPacketSize` now bounds `packet_length` from the first
   packet of the key exchange on (35 000–256 KiB, refused outside that range); `IdleTimeout` closes a
   connection without channel traffic — keepalives do not count — with a DISCONNECT and an audit event.
-- ⬜ **Automatic rekeying** after a data volume or time (RFC 4253 §9: 1 GB / 1 h) — only `RekeyAsync` on
-  request and answering a peer's rekey. `RekeyedEvent` is in the audit catalog but never raised.
+- ✅ **Automatic rekeying** (Hermod PR #181): `SshRekeyLimits` — default 1 GiB per direction / 1 h, plus the
+  2^31-packet ceiling of RFC 4344 — on `SshServerOptions`, `SshClientOptions` and the multiplexer. Both the
+  send and the receive path check the limits (OpenSSH's reader does too: a receiving connection sends
+  too little to rely on its own sends), a timer covers quiet connections, and the reader completes an
+  exchange that a sender started; what the peer sends before it sees our KEXINIT is held back until the
+  exchange is over, since answering it at once could block the reader on the very exchange it must
+  finish. Each rekey is a `RekeyedEvent`. Checked against real `ssh` and `sshd`, each side starting the
+  rekeys in turn (`OpenSshRekeyInteropTests`, `OurClient_Rekeys_AgainstRealOpenSshServer`) — and that
+  check found a **defect older than the feature**: we negotiated strict KEX afresh on every rekey, but
+  its marker belongs to the first KEXINIT only and OpenSSH sends it nowhere else, so on a rekey with
+  OpenSSH we stopped resetting the sequence numbers while OpenSSH went on, and the first packet under
+  the new keys was "Connection corrupted". Any rekey with OpenSSH failed this way, whoever started it;
+  our own two ends never noticed, since we repeated the marker. Strict KEX now holds for the connection
+  and the marker goes in the first KEXINIT only (`RekeyTests.StrictKex_HoldsForTheConnection_AcrossRekeys`,
+  verified to fail without the fix). The review found a deadlock in the first design, which held the send
+  lock from our KEXINIT to our NEWKEYS: the reader, which has to finish the exchange, also answers what
+  it reads (a channel confirmation, a keepalive reply) and waited there for that lock for good. What is
+  sent during an exchange is now queued and written after NEWKEYS, as OpenSSH does; only channel data,
+  which the application sends and never the reader, waits for the exchange instead
+  (`AutomaticRekeyTests.ThePacketThatUsesUpTheKeys_IsAnsweredAfterTheExchange`, which hangs on the old
+  transport).
 - ⬜ **Rekey strictness on receive:** OpenSSH ≥ 10.4 disconnects a peer that sends non-KEX traffic during
   a post-auth rekey. We never *send* it (gate (c), §11.1); whether to *refuse* it too is undecided.
 - ⬜ **RSA host certificates** are advertised only as `ssh-rsa-cert-v01@openssh.com`;
@@ -76,8 +95,17 @@ fail without the fix and a control proving the permitted case still works.
   readlink/symlink/realpath, and `SftpFileStream.SetLength` is unsupported.
 - ⬜ **Private keys:** encrypted openssh-key-v1 is read only with `aes256-ctr` (ssh-keygen's default); an
   Ed25519 key in PKCS#8 PEM is not imported.
-- ⬜ **Façade:** `SshClientOptions.Credentials` takes key signers only — password and
-  keyboard-interactive exist in `UserAuthentication` but not on `SshClient`; there are no ProxyJump,
+- ✅ **Façade logs in with a password and keyboard-interactive** (Hermod PR #183): `SshClientOptions.Password`
+  and `.KeyboardInteractive` beside the keys. `ClientAuthenticateAsync` opens with a `none` request, as
+  OpenSSH's client does, and from then on tries keys, keyboard-interactive and the password only while the
+  server lists the method — so a password never goes to a server that takes none, a password-only server
+  is not first offered every key (each would cost an attempt), and a partial success moves on to the
+  method the server asks for next: `publickey,password` and `publickey,publickey` chains complete, where
+  the password used to be skipped after a partial success. Hermetic in `FacadeLoginTests`; against real
+  servers in `AsyncSshServerInteropTests` (password, keyboard-interactive with two prompts — AsyncSSH asks
+  a callback, where sshd and Dropbear would need a Linux account with a known password) and
+  `OurClient_AuthenticatesWithTwoKeys_AgainstRealOpenSshServer` (`AuthenticationMethods publickey,publickey`).
+- ⬜ **Façade, the rest:** there are no ProxyJump,
   keepalive or connect-timeout options; remote `-R` is reachable only through the static
   `SshRemoteForwarding` helper; the `-L` listener lives in the demo CLI, not the library; `SshServer`
   offers no way to register a subsystem other than `sftp`.
@@ -93,9 +121,10 @@ fail without the fix and a control proving the permitted case still works.
 - ⬜ **Holes inside wired peers:** certificates are proven against OpenSSH only (AsyncSSH and Go could
   issue and verify them too); PuTTY's `psftp`; Go's SFTP module. TinySSH authentication stays out of
   reach by design (§11.1).
-- ⬜ **Two behaviour gates cannot be asserted against a real OpenSSH** — the IANA agent-forwarding names
-  and the post-auth-rekey disconnect cannot be provoked from outside (§11.1). Both are pinned by
-  hermetic tests only.
+- 🔶 **Two behaviour gates against a real OpenSSH:** the post-auth-rekey disconnect (≥ 10.4) is now
+  exercised — our client starts rekeys while `sshd` streams at it, and the nightly runs that against the
+  newest release; its first result there is still to come. The IANA agent-forwarding names still cannot be
+  provoked from outside (§11.1) and stay pinned by hermetic tests only.
 - ⬜ **Windows figures** in the M9 notes were measured on an LF working tree and want re-measuring on a
   fresh clone (§12).
 

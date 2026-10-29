@@ -307,6 +307,32 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         #endregion
 
 
+        #region PythonPeerCommand(Script, Arguments)
+
+        /// <summary>
+        /// The shell command that runs one of the Python peers in <c>interop/python/</c> with the
+        /// provisioned virtual environment - for <see cref="StartServerAsync"/>, when the peer is a
+        /// server our client is to log in to.
+        /// </summary>
+        /// <param name="Script">The script's file name, e.g. <c>asyncssh_server.py</c>.</param>
+        /// <param name="Arguments">Its arguments, each passed as one word.</param>
+        public static String PythonPeerCommand(String Script, params String[] Arguments)
+        {
+
+            var (interopDirectory, venvPython, reason) = harness.Value;
+
+            if (reason is not null || interopDirectory is null || venvPython is null)
+                throw new InvalidOperationException(reason ?? "The WSL interop harness is unavailable.");
+
+            return String.Join(" ", new[] { ToWslPath(venvPython), ToWslPath(Path.Combine(interopDirectory, "python", Script)) }
+                                        .Concat(Arguments)
+                                        .Select(word => "'" + word.Replace("'", "'\\''") + "'"));
+
+        }
+
+        #endregion
+
+
         #region (private, static) Locate()
 
         /// <summary>

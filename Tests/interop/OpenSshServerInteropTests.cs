@@ -18,6 +18,7 @@
 #region Usings
 
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 
 using NUnit.Framework;
 
@@ -71,7 +72,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// Start an unprivileged <c>sshd</c> that trusts exactly one key: the one we just generated.
         /// </summary>
         /// <param name="WithSftp">Also offer the <c>sftp</c> subsystem.</param>
-        private static async Task<Daemon> StartSshdAsync(CancellationToken CancellationToken, Boolean WithSftp = false)
+        /// <param name="ExtraOptions">Further <c>-o</c> options for sshd, verbatim.</param>
+        private static async Task<Daemon> StartSshdAsync(CancellationToken CancellationToken, Boolean WithSftp = false, String ExtraOptions = "")
         {
 
             WslInterop.SkipIfUnavailable();
@@ -127,6 +129,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                  $"-o StrictModes=no -o UsePAM=no -o PidFile=none " +
                                  $"-o PasswordAuthentication=no -o KbdInteractiveAuthentication=no " +
                                  subsystem +
+                                 (ExtraOptions.Length > 0 ? ExtraOptions + " " : "") +
                                  $"-o ListenAddress=127.0.0.1",
                              CancellationToken);
 
@@ -149,6 +152,70 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
+
+        #region OurClient_Rekeys_AgainstRealOpenSshServer
+
+        /// <summary>
+        /// Rekeying against the reference server, started from either end: our client with a 64 KiB
+        /// limit renews the keys while sshd streams 16 MiB at it - so sshd's data keeps arriving after our
+        /// KEXINIT went out - and, the other way round, an sshd with <c>RekeyLimit 64K</c> renews them and
+        /// our client follows. OpenSSH 10.4 and later drop a peer that sends anything but KEX messages
+        /// during such an exchange; the nightly runs this against the newest release.
+        ///
+        /// <para>
+        /// Why so much: sshd sends a whole channel window (2 MiB) before it waits for us, so what is
+        /// already in flight when our KEXINIT goes out arrives under the old key, held back until the
+        /// exchange is over. Our end can rekey only about once per window it grants.
+        /// </para>
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        [TestCase(true,  TestName = "OurClient_Rekeys_AgainstRealOpenSshServer(we start the rekeys)")]
+        [TestCase(false, TestName = "OurClient_Rekeys_AgainstRealOpenSshServer(sshd starts the rekeys)")]
+        public async Task OurClient_Rekeys_AgainstRealOpenSshServer(Boolean WeStart, CancellationToken CancellationToken)
+        {
+
+            // sshd rekeys on every 64 KiB it sends; 2 MiB are plenty for that, and 16 MiB would be 500 rekeys.
+            var size   = WeStart ? 16 * 1024 * 1024 : 2 * 1024 * 1024;
+
+            var daemon = await StartSshdAsync(CancellationToken, ExtraOptions: WeStart ? "" : "-o RekeyLimit=64K");
+            var user   = await WhoAsync(CancellationToken);
+
+            try
+            {
+
+                await using var client = await SshClient.ConnectAsync(
+                                             "127.0.0.1",
+                                             (UInt16) daemon.Port,
+                                             new SshClientOptions {
+                                                 Username       = user,
+                                                 Credentials    = [ daemon.UserKey ],
+                                                 VerifyHostKey  = blob => blob.AsSpan().SequenceEqual(daemon.HostKeyBlob),
+                                                 RekeyLimits    = WeStart ? new SshRekeyLimits { DataVolume = 64 * 1024, Interval = null } : null
+                                             },
+                                             CancellationToken);
+
+                var result = await client.ExecuteAsync($"head -c {size} /dev/zero", CancellationToken);
+                var kexes  = client.Multiplexer.Transport.KeyExchangeCount;
+
+                TestContext.Out.WriteLine($"{result.StandardOutputBytes.Length} bytes, {kexes} key exchanges");
+
+                Assert.Multiple(() => {
+                    Assert.That(result.ExitCode,                    Is.EqualTo(0), $"sshd log:\n{daemon.Server.Output}");
+                    Assert.That(result.StandardOutputBytes.Length,  Is.EqualTo(size), "every byte across the rekeys");
+                    Assert.That(result.StandardOutputBytes.All(b => b == 0), Is.True);
+                    Assert.That(kexes,                              Is.GreaterThanOrEqualTo(5), "many rekeys on the way");
+                });
+
+            }
+            finally
+            {
+                await StopAsync(daemon);
+            }
+
+        }
+
+        #endregion
 
         #region OurClient_RunsCommand_OnRealOpenSshServer
 
@@ -195,6 +262,68 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             }
 
         }
+
+        #endregion
+
+        #region OurClient_AuthenticatesWithTwoKeys_AgainstRealOpenSshServer
+
+        /// <summary>
+        /// A multi-factor chain, judged by the reference server: <c>AuthenticationMethods
+        /// publickey,publickey</c> makes the first accepted key a partial success, and only a second,
+        /// different key lets the user in. A key sshd does not know comes first, so the chain also has to
+        /// survive a refusal on the way.
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        public async Task OurClient_AuthenticatesWithTwoKeys_AgainstRealOpenSshServer(CancellationToken CancellationToken)
+        {
+
+            var daemon    = await StartSshdAsync(CancellationToken, ExtraOptions: "-o AuthenticationMethods=publickey,publickey -o LogLevel=VERBOSE");
+            var user      = await WhoAsync(CancellationToken);
+            var secondKey = SshHostKey.GenerateEd25519();
+
+            try
+            {
+
+                var (added, _, addError) = await WslInterop.RunAsync([
+                                               "-e", "bash", "-c",
+                                               $"echo 'ssh-ed25519 {Convert.ToBase64String(secondKey.PublicKeyBlob)} second' >> {daemon.WslRoot}/authorized_keys"
+                                           ], CancellationToken);
+
+                if (added != 0)
+                    Assert.Ignore($"Could not add the second key: {addError}");
+
+                await using var client = await SshClient.ConnectAsync(
+                                             "127.0.0.1",
+                                             (UInt16) daemon.Port,
+                                             new SshClientOptions {
+                                                 Username      = user,
+                                                 Credentials   = [ SshHostKey.GenerateEd25519(), daemon.UserKey, secondKey ],
+                                                 VerifyHostKey = blob => blob.AsSpan().SequenceEqual(daemon.HostKeyBlob)
+                                             },
+                                             CancellationToken);
+
+                var result = await client.ExecuteAsync($"echo {Marker}", CancellationToken);
+
+                // sshd logs a partial success at VERBOSE only, hence the log level above. The key it finally
+                // accepts is the second one it knows - with the chain ignored, it would have been the first.
+                Assert.Multiple(() => {
+                    Assert.That(result.StandardOutput,  Does.Contain(Marker), $"both keys together let us in.\n{daemon.Server.Output}");
+                    Assert.That(daemon.Server.Output,   Does.Match(LogLine("Partial", user, daemon.UserKey)), "sshd took the first key it knows as one factor of two");
+                    Assert.That(daemon.Server.Output,   Does.Match(LogLine("Accepted", user, secondKey)),     "and the second as the other");
+                });
+
+            }
+            finally
+            {
+                await StopAsync(daemon);
+            }
+
+        }
+
+        // "Partial publickey for user from 127.0.0.1 port 53638 ssh2: ED25519 SHA256:…", on one line.
+        private static String LogLine(String Outcome, String User, ISshHostKey Key)
+            => $"{Outcome} publickey for {Regex.Escape(User)} .*{Regex.Escape(SshFingerprint.Sha256(Key.PublicKeyBlob))}";
 
         #endregion
 

@@ -16,7 +16,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 |------------------|------------------------------------------------------------------------------|
 | `setup-wsl.sh`   | Provision the peers on any Debian-family Linux (idempotent; root/sudo for apt). |
 | `.venv-interop/` | The Python peers (AsyncSSH, Paramiko), created by the script. Git-ignored.    |
-| `python/`        | Peer drivers speaking a JSON contract with `WslInterop.RunPeerDriverAsync`.   |
+| `python/`        | Peer drivers speaking a JSON contract with `WslInterop.RunPeerDriverAsync`, and `asyncssh_server.py`, a server for our client (`WslInterop.PythonPeerCommand`). |
 | `WslInterop.cs`  | Runs the peers — through WSL on Windows, directly on Linux: process plumbing, addressing, peer logs, skip reasons. |
 | `go/`            | A small `golang.org/x/crypto/ssh` harness (added when that peer is wired in). |
 
@@ -26,7 +26,8 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 |---|---|---|
 | OpenSSH (`ssh`, `sftp`, `ssh-keygen`) | client | Windows process |
 | SSH.NET | client | in-process (NuGet) |
-| AsyncSSH, Paramiko | client | WSL + `python/*_driver.py` |
+| AsyncSSH | **both** | WSL + `python/asyncssh_driver.py`, and `python/asyncssh_server.py` as a server for our client (password, keyboard-interactive) |
+| Paramiko | client | WSL + `python/paramiko_driver.py` |
 | Dropbear | **both** | WSL (`dbclient`, and `dropbear` as a server for our client) |
 | TinySSH | server | WSL (`socat` + `tinysshd`), exercising our client |
 
