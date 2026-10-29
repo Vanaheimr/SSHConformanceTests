@@ -28,18 +28,20 @@ conformance suite **95 of 96** on a developer machine (ssh-agent skips without a
 **every check, none skipped,** on the Debian CI leg — nine independent peer implementations
 ([matrix](docs/INTEROP-MATRIX.md)); the newest upstream OpenSSH, **10.6p1**, **44 of 44** in the nightly.
 
-### 0.1 Security — found by the code audit of 2026-10-29, not yet fixed
+### 0.1 Security — found by the code audit of 2026-10-29, fixed the same day
 
-Both are the same class as review finding (4) in §12: a restriction someone wrote down that the server
-silently does not apply. Neither affects a server that grants forwarding and ptys to everyone anyway.
+Both were the same class as review finding (4) in §12: a restriction someone wrote down that the server
+silently did not apply. Fixed in Hermod PR #168 (`5b5b2395`), each with a regression test verified to
+fail without the fix and a control proving the permitted case still works.
 
-1. ⬜ **Remote forwarding ignores per-key restrictions.** `SshServer` gives
-   `SshRemoteForwarding.ServeRemoteForwards` only its own `ForwardingPolicy`, not the session's
-   `SshSessionRestrictions`. `no-port-forwarding` / `restrict` therefore stop `direct-tcpip` but **not**
-   `tcpip-forward` (`-R`) whenever the server policy permits remote forwards.
-2. ⬜ **Certificate `permit-*` extensions are never consulted.** `SshCertificate.Extensions` is parsed and
-   never read: a user certificate issued *without* `permit-pty` or `permit-port-forwarding` still gets a
-   pty and forwarding. OpenSSH grants these only when the extension is present.
+1. ✅ **Remote forwarding ignored per-key restrictions.** `SshServer` gave
+   `SshRemoteForwarding.ServeRemoteForwards` only its own `ForwardingPolicy`, so `no-port-forwarding` /
+   `restrict` stopped `direct-tcpip` but not `tcpip-forward` (`-R`). The session's restrictions now narrow
+   the remote half too (`AuthorizedKeyOptionTests.NoPortForwarding_AlsoRefusesRemoteForwards`).
+2. ✅ **Certificate `permit-*` extensions were never consulted.** A user certificate issued *without*
+   `permit-pty` or `permit-port-forwarding` still got a pty and forwarding. `FromCertificate` now reads both
+   extensions, which *grant*, as with OpenSSH (`CertificateRestrictionTests.PermitExtensions_*`,
+   `CertificateWithoutPermitPty_GetsNoTerminal`, `CertificateWithoutPermitPortForwarding_CannotForward`).
 
 ### 0.2 Implementation gaps
 
@@ -53,8 +55,14 @@ silently does not apply. Neither affects a server that grants forwarding and pty
   `rsa-sha2-256/512-cert-v01@openssh.com` are missing. Interop effect not yet measured.
 - ⬜ **Several host keys:** only the first configured key performs the handshake; the others are
   announced through `hostkeys-00@openssh.com` but cannot be selected by algorithm.
-- ⬜ **`tcpip-forward`:** the bind address must be an IP literal (`localhost` and `""` are refused), port 0
-  gets no allocated port back, and `cancel-tcpip-forward` is not implemented.
+- ✅ **`tcpip-forward` the way OpenSSH sends it** (Hermod PR #170, `9eecf543`): a plain `ssh -R 8080:host:80`
+  asks for `"localhost"`, which the server used to refuse because it took IP literals only — so the
+  commonest `-R` failed against a real client. `localhost` now binds the loopback addresses, `""`/`*` the
+  wildcard (if the policy permits it), port 0 is allocated and reported (RFC 4254 §7.1), and
+  `cancel-tcpip-forward` exists. Found by, and pinned in, `OpenSshForwardingInteropTests` — the first
+  forwarding checks against a real peer.
+- ⬜ **`-R` on the client side:** `SshRemoteForwarding.RequestRemoteForwardAsync` does not return the port
+  the server allocated for port 0, and disposing its handle does not send `cancel-tcpip-forward`.
 - ⬜ **SFTP:** the server answers SETSTAT/FSETSTAT with OK without applying anything (chmod, mtime and
   truncate silently "succeed"), does not implement READLINK/SYMLINK, and treats LSTAT as STAT. The client
   has no setstat/readlink/symlink/realpath, and `SftpFileStream.SetLength` is unsupported.
