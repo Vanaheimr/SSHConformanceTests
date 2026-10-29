@@ -18,7 +18,7 @@ in the rest of [PLAN.md](PLAN.md), repository conventions in [CLAUDE.md](CLAUDE.
 ## Interoperability
 
 Every feature has to work against implementations that share no code with ours. Nine do —
-**94 checks pass, none fail** — and the generated per-test detail is in
+**100 checks pass, none fail** — and the generated per-test detail is in
 [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md). What is *not* covered is listed just as plainly,
 because a matrix that only shows green teaches nothing.
 
