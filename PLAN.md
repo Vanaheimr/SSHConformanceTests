@@ -45,8 +45,10 @@ fail without the fix and a control proving the permitted case still works.
 
 ### 0.2 Implementation gaps
 
-- 🔶 **Server limits:** `SshServerLimits.MaxPacketSize` and `IdleTimeout` can be set, but `SshServer`
-  does not enforce them (its own XML doc says so; the M9 row lists them among the enforced limits).
+- ✅ **Server limits** (Hermod PR #172, `7cf10354`): `SshServerLimits.MaxPacketSize` and `IdleTimeout` could
+  be set while `SshServer` enforced neither. `MaxPacketSize` now bounds `packet_length` from the first
+  packet of the key exchange on (35 000–256 KiB, refused outside that range); `IdleTimeout` closes a
+  connection without channel traffic — keepalives do not count — with a DISCONNECT and an audit event.
 - ⬜ **Automatic rekeying** after a data volume or time (RFC 4253 §9: 1 GB / 1 h) — only `RekeyAsync` on
   request and answering a peer's rekey. `RekeyedEvent` is in the audit catalog but never raised.
 - ⬜ **Rekey strictness on receive:** OpenSSH ≥ 10.4 disconnects a peer that sends non-KEX traffic during
