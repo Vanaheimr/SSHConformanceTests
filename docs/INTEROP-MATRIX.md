@@ -1,20 +1,20 @@
 # HermodSSH — interoperability matrix
 
 Generated from the interop test run — do not edit by hand.
-Run at 2026-10-29 17:47:44 UTC.
+Run at 2026-10-30 15:56:46 UTC.
 
 ## Summary
 
-**100 passed · 0 failed · 0 not exercised** across 9 peer(s).
+**107 passed · 0 failed · 1 not exercised** across 9 peer(s).
 
-> Every interop test passed.
+> All exercised tests agreed. Some peers were unavailable on the machine that produced this run, so their rows record no evidence rather than success.
 
 ## Capability × peer
 
 | Capability | AsyncSSH | Dropbear | Go x/crypto/ssh | OpenSSH | Paramiko | PuTTY | SSH.NET | TinySSH | curl / libssh |
 |---|---|---|---|---|---|---|---|---|---|
 | Algorithm negotiation | – | – | – | – | ✅ 1 | – | ✅ 1 | – | – |
-| Authentication | – | – | – | ✅ 3 | – | – | – | – | – |
+| Authentication | ✅ 3 | – | – | ✅ 4 | – | – | – | – | – |
 | Certificates | – | – | – | ✅ 3 | – | – | – | – | – |
 | Channel requests & flow control | – | – | – | – | – | ✅ 1 | – | – | – |
 | Host-key rotation (hostkeys-00) | – | – | – | ✅ 1 | – | – | – | – | – |
@@ -24,13 +24,16 @@ Run at 2026-10-29 17:47:44 UTC.
 | Remote command execution | ✅ 2 | ✅ 3 | ✅ 2 | ✅ 4 | ✅ 2 | ✅ 2 | ✅ 3 | – | – |
 | SFTP | ✅ 1 | – | – | ✅ 4 | ✅ 1 | – | ✅ 1 | – | ✅ 1 |
 | SSHFP DNS records | – | – | – | ✅ 3 | – | – | – | – | – |
-| Transport & key exchange | ✅ 1 | ✅ 6 | ✅ 1 | ✅ 17 | ✅ 2 | ✅ 6 | – | ✅ 2 | – |
-| ssh-agent | – | – | – | ✅ 1 | – | – | – | – | – |
+| Transport & key exchange | ✅ 1 | ✅ 6 | ✅ 1 | ✅ 21 | ✅ 2 | ✅ 6 | – | ✅ 2 | – |
+| ssh-agent | – | – | – | ⚪ | – | – | – | – | – |
 
 ## Detail
 
 ### AsyncSSH
 
+- ✅ `OurClient_AWrongPassword_IsAnAuthenticationError_OnAsyncSshServer` — Authentication
+- ✅ `OurClient_AuthenticatesWithAPassword_OnAsyncSshServer` — Authentication
+- ✅ `OurClient_AuthenticatesWithKeyboardInteractive_OnAsyncSshServer` — Authentication
 - ✅ `AsyncSsh_RejectsAWrongHostKey` — Host-key verification
 - ✅ `AsyncSsh_RunsCommand_OnOurServer("fail",42)` — Remote command execution
 - ✅ `AsyncSsh_RunsCommand_OnOurServer("hello",0)` — Remote command execution
@@ -61,6 +64,7 @@ Run at 2026-10-29 17:47:44 UTC.
 
 ### OpenSSH
 
+- ✅ `OurClient_AuthenticatesWithTwoKeys_AgainstRealOpenSshServer` — Authentication
 - ✅ `OurServer_AuthenticatesRealOpenSshClient_WithPublicKey("ecdsa")` — Authentication
 - ✅ `OurServer_AuthenticatesRealOpenSshClient_WithPublicKey("ed25519")` — Authentication
 - ✅ `OurServer_AuthenticatesRealOpenSshClient_WithPublicKey("rsa")` — Authentication
@@ -98,6 +102,8 @@ Run at 2026-10-29 17:47:44 UTC.
 - ✅ `OurClient_CompletesTransport_WithRealOpenSshServer("ecdh-sha2-nistp521")` — Transport & key exchange
 - ✅ `OurClient_CompletesTransport_WithRealOpenSshServer("mlkem768x25519-sha256")` — Transport & key exchange
 - ✅ `OurClient_CompletesTransport_WithRealOpenSshServer("sntrup761x25519-sha512@openssh.com")` — Transport & key exchange
+- ✅ `OurClient_Rekeys_AgainstRealOpenSshServer(sshd starts the rekeys)` — Transport & key exchange
+- ✅ `OurClient_Rekeys_AgainstRealOpenSshServer(we start the rekeys)` — Transport & key exchange
 - ✅ `OurServer_CompletesTransport_WithRealOpenSshClient("curve25519-sha256","ecdsa-sha2-nistp256","aes256-gcm@openssh.com","hmac-sha2-256","aes256-gcm@openssh.com")` — Transport & key exchange
 - ✅ `OurServer_CompletesTransport_WithRealOpenSshClient("curve25519-sha256","rsa-sha2-512","aes256-gcm@openssh.com","hmac-sha2-256","aes256-gcm@openssh.com")` — Transport & key exchange
 - ✅ `OurServer_CompletesTransport_WithRealOpenSshClient("curve25519-sha256","ssh-ed25519","aes256-ctr","hmac-sha2-256-etm@openssh.com","aes256-ctr")` — Transport & key exchange
@@ -110,7 +116,9 @@ Run at 2026-10-29 17:47:44 UTC.
 - ✅ `OurServer_CompletesTransport_WithRealOpenSshClient("mlkem768x25519-sha256","ssh-ed25519","aes256-gcm@openssh.com","hmac-sha2-256","aes256-gcm@openssh.com")` — Transport & key exchange
 - ✅ `OurServer_CompletesTransport_WithRealOpenSshClient("sntrup761x25519-sha512","ssh-ed25519","chacha20-poly1305@openssh.com","hmac-sha2-256","chacha20-poly1305@openssh.com")` — Transport & key exchange
 - ✅ `OurServer_SendsExtInfo_RealOpenSshClientReceivesServerSigAlgs` — Transport & key exchange
-- ✅ `RealAgent_ListsAndSigns` — ssh-agent
+- ✅ `RealOpenSshClient_Rekeys_WithOurServer(our server starts the rekeys)` — Transport & key exchange
+- ✅ `RealOpenSshClient_Rekeys_WithOurServer(ssh starts the rekeys)` — Transport & key exchange
+- ⚪ `RealAgent_ListsAndSigns` — ssh-agent — No ssh-agent reachable: The operation was canceled.
 
 ### Paramiko
 

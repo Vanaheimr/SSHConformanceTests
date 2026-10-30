@@ -121,10 +121,12 @@ fail without the fix and a control proving the permitted case still works.
 - ⬜ **Holes inside wired peers:** certificates are proven against OpenSSH only (AsyncSSH and Go could
   issue and verify them too); PuTTY's `psftp`; Go's SFTP module. TinySSH authentication stays out of
   reach by design (§11.1).
-- 🔶 **Two behaviour gates against a real OpenSSH:** the post-auth-rekey disconnect (≥ 10.4) is now
-  exercised — our client starts rekeys while `sshd` streams at it, and the nightly runs that against the
-  newest release; its first result there is still to come. The IANA agent-forwarding names still cannot be
-  provoked from outside (§11.1) and stay pinned by hermetic tests only.
+- ✅ **The post-auth-rekey gate against a real OpenSSH** (≥ 10.4 disconnects a peer that sends non-KEX
+  traffic during a rekey): our client and server rekey while data streams, against `ssh` and `sshd`, each
+  side starting the rekeys in turn. The nightly of 2026-10-30 passed all four against upstream
+  OpenSSH 10.6p1, together with the other 51 OpenSSH checks.
+- ⬜ **The IANA agent-forwarding names** still cannot be provoked from a real OpenSSH (§11.1) and stay
+  pinned by hermetic tests only.
 - ⬜ **Windows figures** in the M9 notes were measured on an LF working tree and want re-measuring on a
   fresh clone (§12).
 
