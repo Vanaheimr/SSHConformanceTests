@@ -74,8 +74,17 @@ fail without the fix and a control proving the permitted case still works.
   a post-auth rekey. We never *send* it (gate (c), §11.1); whether to *refuse* it too is undecided.
 - ⬜ **RSA host certificates** are advertised only as `ssh-rsa-cert-v01@openssh.com`;
   `rsa-sha2-256/512-cert-v01@openssh.com` are missing. Interop effect not yet measured.
-- ⬜ **Several host keys:** only the first configured key performs the handshake; the others are
-  announced through `hostkeys-00@openssh.com` but cannot be selected by algorithm.
+- ✅ **Several host keys** (Hermod PR #193): only the first of `SshServerOptions.HostKeys` ever signed,
+  so a client that knew the host by another of its keys was refused — real `ssh` with only our RSA key in
+  `known_hosts` failed "host key verification". The server now offers every key's algorithms (in key order)
+  and the client's choice picks the key, the first that can sign it; that key then stays the host key for
+  the connection, rekeys offer nothing else, and our client refuses a host key that changes in a rekey, as
+  OpenSSH's does. A certificate beside its plain key is chosen by algorithm the same way. Hermetic in
+  `SeveralHostKeysTests`; against real OpenSSH in `OpenSshSeveralHostKeysInteropTests` (`ssh` knowing only
+  the RSA key — verified to fail without the change — and `ssh-keyscan -t ed25519,ecdsa,rsa`). The scan found
+  a **defect older than the feature**: `ssh-keyscan` introduces itself as `SSH-2.0-OpenSSH-keyscan`, and we
+  refused the minus sign RFC 4253 §4.2 forbids in the software version — so no `ssh-keyscan` could read our
+  server at all. The rule now binds what we send, not what we accept.
 - ✅ **`tcpip-forward` the way OpenSSH sends it** (Hermod PR #170, `9eecf543`): a plain `ssh -R 8080:host:80`
   asks for `"localhost"`, which the server used to refuse because it took IP literals only — so the
   commonest `-R` failed against a real client. `localhost` now binds the loopback addresses, `""`/`*` the
