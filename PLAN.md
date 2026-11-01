@@ -70,9 +70,13 @@ fail without the fix and a control proving the permitted case still works.
   which the application sends and never the reader, waits for the exchange instead
   (`AutomaticRekeyTests.ThePacketThatUsesUpTheKeys_IsAnsweredAfterTheExchange`, which hangs on the old
   transport).
-- ⬜ **Rekey strictness on receive:** OpenSSH ≥ 10.4 disconnects a peer that sends non-KEX traffic during
-  a post-auth rekey. We never *send* it (gate (c), §11.1). **Decided 2026-11-01:** we refuse it too, as
-  OpenSSH does — not yet implemented.
+- ✅ **Rekey strictness on receive** (Hermod PR #199): OpenSSH ≥ 10.4 disconnects a peer that sends
+  non-KEX traffic during a post-auth rekey. We never *send* it (gate (c), §11.1), and since 2026-11-01 we
+  refuse it too: from the peer's KEXINIT to its NEWKEYS, `ReceivePacketAsync` refuses everything RFC 4253
+  §7.1 does not allow there — connection traffic, a service request, a second KEXINIT — naming the packet.
+  Such a packet used to fail the exchange only by accident, as "Expected SSH_MSG_KEX_ECDH_REPLY", naming
+  the packet it wanted; and a wrong *guessed* packet that was no key exchange packet was dropped unseen. Pinned by `RekeyStrictnessTests` (10, each failing without the change); the interop suite,
+  with the OpenSSH rekey-under-load tests, stays green (111 of 112, ssh-agent skipped locally).
 - ⬜ **RSA host certificates** are advertised only as `ssh-rsa-cert-v01@openssh.com`;
   `rsa-sha2-256/512-cert-v01@openssh.com` are missing. Interop effect not yet measured.
 - ✅ **Several host keys** (Hermod PR #193): only the first of `SshServerOptions.HostKeys` ever signed,
