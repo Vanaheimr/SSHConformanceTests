@@ -1,11 +1,11 @@
 # HermodSSH — interoperability matrix
 
 Generated from the interop test run — do not edit by hand.
-Run at 2026-11-01 12:15:45 UTC.
+Run at 2026-11-01 17:25:58 UTC.
 
 ## Summary
 
-**109 passed · 0 failed · 1 not exercised** across 9 peer(s).
+**110 passed · 0 failed · 1 not exercised** across 9 peer(s).
 
 > All exercised tests agreed. Some peers were unavailable on the machine that produced this run, so their rows record no evidence rather than success.
 
@@ -16,7 +16,7 @@ Run at 2026-11-01 12:15:45 UTC.
 | Algorithm negotiation | – | – | – | – | ✅ 1 | – | ✅ 1 | – | – |
 | Authentication | ✅ 3 | – | – | ✅ 4 | – | – | – | – | – |
 | Certificates | – | – | – | ✅ 3 | – | – | – | – | – |
-| Channel requests & flow control | – | – | – | – | – | ✅ 1 | – | – | – |
+| Channel requests & flow control | – | – | – | ✅ 1 | – | ✅ 1 | – | – | – |
 | Host-key rotation (hostkeys-00) | – | – | – | ✅ 1 | – | – | – | – | – |
 | Host-key verification | ✅ 1 | ✅ 2 | ✅ 1 | ✅ 3 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 |
 | Key formats (openssh-key-v1, PEM) | – | ✅ 1 | – | ✅ 8 | – | ✅ 1 | – | – | – |
@@ -71,6 +71,7 @@ Run at 2026-11-01 12:15:45 UTC.
 - ✅ `OpenSsh_EmptyCertPrincipals_MatchNothingFrom_10_3` — Certificates
 - ✅ `SshKeygenReads_OurCertificate` — Certificates
 - ✅ `WeValidate_SshKeygenSignedCertificate` — Certificates
+- ✅ `OurClient_KeepAlive_IsAnsweredByRealOpenSshServer` — Channel requests & flow control
 - ✅ `RealOpenSshClient_LearnsOurRotatedInHostKey` — Host-key rotation (hostkeys-00)
 - ✅ `OurClient_RejectsAWrongOpenSshHostKey` — Host-key verification
 - ✅ `RealOpenSshClient_KnowingOnlyOurRsaHostKey_LogsIn` — Host-key verification
