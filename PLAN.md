@@ -71,7 +71,8 @@ fail without the fix and a control proving the permitted case still works.
   (`AutomaticRekeyTests.ThePacketThatUsesUpTheKeys_IsAnsweredAfterTheExchange`, which hangs on the old
   transport).
 - ⬜ **Rekey strictness on receive:** OpenSSH ≥ 10.4 disconnects a peer that sends non-KEX traffic during
-  a post-auth rekey. We never *send* it (gate (c), §11.1); whether to *refuse* it too is undecided.
+  a post-auth rekey. We never *send* it (gate (c), §11.1). **Decided 2026-11-01:** we refuse it too, as
+  OpenSSH does — not yet implemented.
 - ⬜ **RSA host certificates** are advertised only as `ssh-rsa-cert-v01@openssh.com`;
   `rsa-sha2-256/512-cert-v01@openssh.com` are missing. Interop effect not yet measured.
 - ✅ **Several host keys** (Hermod PR #193): only the first of `SshServerOptions.HostKeys` ever signed,
@@ -115,8 +116,16 @@ fail without the fix and a control proving the permitted case still works.
   servers in `AsyncSshServerInteropTests` (password, keyboard-interactive with two prompts — AsyncSSH asks
   a callback, where sshd and Dropbear would need a Linux account with a known password) and
   `OurClient_AuthenticatesWithTwoKeys_AgainstRealOpenSshServer` (`AuthenticationMethods publickey,publickey`).
-- ⬜ **Façade, the rest:** there are no ProxyJump,
-  keepalive or connect-timeout options; remote `-R` is reachable only through the static
+- ✅ **Façade: connect timeout and keepalive** (Hermod PR #198): `SshClientOptions.ConnectTimeout` bounds
+  the TCP connection, the version exchange and the key exchange (OpenSSH's `ConnectTimeout`) with a
+  `TimeoutException` — not authentication, which may be waiting for a person — and a failed handshake now
+  lets the socket go. `KeepAliveInterval`/`KeepAliveCountMax` (`ServerAliveInterval`/`ServerAliveCountMax`)
+  send `keepalive@openssh.com`; any reply counts, sshd's refusal included, and after the last unanswered probe
+  the connection is cut and everything waiting on it fails with a `TimeoutException` instead of waiting for TCP.
+  Hermetic in `FacadeLivenessTests` (a silent server at connect time and after login, the caller's own
+  cancellation, a slow keyboard-interactive answer); against real sshd in
+  `OurClient_KeepAlive_IsAnsweredByRealOpenSshServer`.
+- ⬜ **Façade, the rest:** there are no ProxyJump options; remote `-R` is reachable only through the static
   `SshRemoteForwarding` helper; the `-L` listener lives in the demo CLI, not the library; `SshServer`
   offers no way to register a subsystem other than `sftp`.
 - ⬜ **Server details:** `env` is accepted up to size caps but without a name allow-list (sshd's
