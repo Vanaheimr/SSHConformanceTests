@@ -327,6 +327,59 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
+        #region OurClient_KeepAlive_IsAnsweredByRealOpenSshServer
+
+        /// <summary>
+        /// Our keepalive probes against the reference server, during a command that keeps the channel
+        /// quiet for longer than several of them: sshd refuses <c>keepalive@openssh.com</c> - it is a
+        /// client's request it does not serve - and that refusal has to count as the answer it is, or the
+        /// client would give up a perfectly live connection.
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        public async Task OurClient_KeepAlive_IsAnsweredByRealOpenSshServer(CancellationToken CancellationToken)
+        {
+
+            // sshd logs every global request at DEBUG1.
+            var daemon = await StartSshdAsync(CancellationToken, ExtraOptions: "-o LogLevel=DEBUG");
+            var user   = await WhoAsync(CancellationToken);
+
+            try
+            {
+
+                await using var client = await SshClient.ConnectAsync(
+                                             "127.0.0.1",
+                                             (UInt16) daemon.Port,
+                                             new SshClientOptions {
+                                                 Username           = user,
+                                                 Credentials        = [ daemon.UserKey ],
+                                                 VerifyHostKey      = blob => blob.AsSpan().SequenceEqual(daemon.HostKeyBlob),
+                                                 KeepAliveInterval  = TimeSpan.FromMilliseconds(300),
+                                                 KeepAliveCountMax  = 2
+                                             },
+                                             CancellationToken);
+
+                var quiet = await client.ExecuteAsync($"sleep 3; echo {Marker}", CancellationToken);
+                var after = await client.ExecuteAsync($"echo {Marker}",          CancellationToken);
+
+                var probes = Regex.Matches(daemon.Server.Output, @"rtype keepalive@openssh\.com want_reply 1").Count;
+
+                Assert.Multiple(() => {
+                    Assert.That(quiet.StandardOutput, Does.Contain(Marker), $"the connection outlived the quiet command.\n{daemon.Server.Output}");
+                    Assert.That(after.StandardOutput, Does.Contain(Marker), "and still takes commands after it");
+                    Assert.That(probes,               Is.GreaterThanOrEqualTo(4), $"sshd saw the probes.\n{daemon.Server.Output}");
+                });
+
+            }
+            finally
+            {
+                await StopAsync(daemon);
+            }
+
+        }
+
+        #endregion
+
         #region OurClient_SeesRemoteExitStatus_FromRealOpenSshServer
 
         /// <summary>
