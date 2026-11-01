@@ -77,8 +77,15 @@ fail without the fix and a control proving the permitted case still works.
   Such a packet used to fail the exchange only by accident, as "Expected SSH_MSG_KEX_ECDH_REPLY", naming
   the packet it wanted; and a wrong *guessed* packet that was no key exchange packet was dropped unseen. Pinned by `RekeyStrictnessTests` (10, each failing without the change); the interop suite,
   with the OpenSSH rekey-under-load tests, stays green (111 of 112, ssh-agent skipped locally).
-- ⬜ **RSA host certificates** are advertised only as `ssh-rsa-cert-v01@openssh.com`;
-  `rsa-sha2-256/512-cert-v01@openssh.com` are missing. Interop effect not yet measured.
+- ✅ **RSA host certificates with SHA-2** (Hermod PR #203): an RSA certificate was offered only as
+  `ssh-rsa-cert-v01@openssh.com` — SHA-1 as an algorithm, refused by OpenSSH since 8.8 — and signed with
+  SHA-512 whatever was negotiated. Measured before the fix: a real `ssh` trusting our CA failed with "no
+  matching host key type found". Now `CertifiedKey` offers `rsa-sha2-512/256-cert-v01@openssh.com` and signs
+  with the hash the algorithm names; our client asks for those two; the client binds the host's signature
+  to the negotiated algorithm (key type and hash), as OpenSSH does; and `hostkeys-00` announces keys, never
+  certificates, each once, as sshd does. Pinned by `RsaHostCertificateTests` and, against OpenSSH, by
+  `RealOpenSshClient_TrustingOurCa_AcceptsOurRsaHostCertificate` (our server) and
+  `OurClient_VerifiesAnRsaHostCertificate_FromRealOpenSshServer` (sshd with `HostCertificate`).
 - ✅ **Several host keys** (Hermod PR #193): only the first of `SshServerOptions.HostKeys` ever signed,
   so a client that knew the host by another of its keys was refused — real `ssh` with only our RSA key in
   `known_hosts` failed "host key verification". The server now offers every key's algorithms (in key order)
