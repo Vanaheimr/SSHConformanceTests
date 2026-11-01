@@ -1,11 +1,11 @@
 # HermodSSH — interoperability matrix
 
 Generated from the interop test run — do not edit by hand.
-Run at 2026-10-30 15:56:46 UTC.
+Run at 2026-11-01 12:15:45 UTC.
 
 ## Summary
 
-**107 passed · 0 failed · 1 not exercised** across 9 peer(s).
+**109 passed · 0 failed · 1 not exercised** across 9 peer(s).
 
 > All exercised tests agreed. Some peers were unavailable on the machine that produced this run, so their rows record no evidence rather than success.
 
@@ -18,7 +18,7 @@ Run at 2026-10-30 15:56:46 UTC.
 | Certificates | – | – | – | ✅ 3 | – | – | – | – | – |
 | Channel requests & flow control | – | – | – | – | – | ✅ 1 | – | – | – |
 | Host-key rotation (hostkeys-00) | – | – | – | ✅ 1 | – | – | – | – | – |
-| Host-key verification | ✅ 1 | ✅ 2 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 |
+| Host-key verification | ✅ 1 | ✅ 2 | ✅ 1 | ✅ 3 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 | ✅ 1 |
 | Key formats (openssh-key-v1, PEM) | – | ✅ 1 | – | ✅ 8 | – | ✅ 1 | – | – | – |
 | Port forwarding | – | – | – | ✅ 5 | – | – | – | – | – |
 | Remote command execution | ✅ 2 | ✅ 3 | ✅ 2 | ✅ 4 | ✅ 2 | ✅ 2 | ✅ 3 | – | – |
@@ -73,6 +73,8 @@ Run at 2026-10-30 15:56:46 UTC.
 - ✅ `WeValidate_SshKeygenSignedCertificate` — Certificates
 - ✅ `RealOpenSshClient_LearnsOurRotatedInHostKey` — Host-key rotation (hostkeys-00)
 - ✅ `OurClient_RejectsAWrongOpenSshHostKey` — Host-key verification
+- ✅ `RealOpenSshClient_KnowingOnlyOurRsaHostKey_LogsIn` — Host-key verification
+- ✅ `RealSshKeyscan_GetsEveryHostKey` — Host-key verification
 - ✅ `SshKeygenReads_OurOpenSshPrivateKey("ecdsa-sha2-nistp256")` — Key formats (openssh-key-v1, PEM)
 - ✅ `SshKeygenReads_OurOpenSshPrivateKey("ssh-ed25519")` — Key formats (openssh-key-v1, PEM)
 - ✅ `SshKeygenReads_OurOpenSshPrivateKey("ssh-rsa")` — Key formats (openssh-key-v1, PEM)

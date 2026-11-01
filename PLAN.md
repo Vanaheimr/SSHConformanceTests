@@ -84,7 +84,8 @@ fail without the fix and a control proving the permitted case still works.
   the RSA key — verified to fail without the change — and `ssh-keyscan -t ed25519,ecdsa,rsa`). The scan found
   a **defect older than the feature**: `ssh-keyscan` introduces itself as `SSH-2.0-OpenSSH-keyscan`, and we
   refused the minus sign RFC 4253 §4.2 forbids in the software version — so no `ssh-keyscan` could read our
-  server at all. The rule now binds what we send, not what we accept.
+  server at all. The rule now binds what we send, not what we accept. Both checks passed in the nightly of
+  2026-11-01 against Debian's OpenSSH 10.0p2 (three runs) and upstream 10.6p1.
 - ✅ **`tcpip-forward` the way OpenSSH sends it** (Hermod PR #170, `9eecf543`): a plain `ssh -R 8080:host:80`
   asks for `"localhost"`, which the server used to refuse because it took IP literals only — so the
   commonest `-R` failed against a real client. `localhost` now binds the loopback addresses, `""`/`*` the
