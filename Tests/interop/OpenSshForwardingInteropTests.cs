@@ -167,6 +167,95 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         }
 
         /// <summary>
+        /// A loopback service that reads each connection to its end and only then answers, with what it
+        /// read reversed: an answer arrives only if the asker's half-close crossed the tunnel as such.
+        /// </summary>
+        private sealed class AnswerAfterEofService : IDisposable
+        {
+
+            private readonly System.Net.Sockets.TcpListener  listener = new (System.Net.IPAddress.Loopback, 0);
+            private readonly CancellationTokenSource         cts      = new ();
+
+            public UInt16 Port { get; }
+
+            public AnswerAfterEofService()
+            {
+
+                listener.Start();
+                Port = (UInt16) ((System.Net.IPEndPoint) listener.LocalEndpoint).Port;
+
+                _ = Task.Run(async () => {
+                    while (!cts.IsCancellationRequested)
+                    {
+                        var client = await listener.AcceptTcpClientAsync(cts.Token);
+                        _ = Task.Run(async () => {
+                            using (client)
+                            {
+                                var stream   = client.GetStream();
+                                using var question = new MemoryStream();
+                                await stream.CopyToAsync(question, cts.Token);
+                                var answer = question.ToArray();
+                                Array.Reverse(answer);
+                                await stream.WriteAsync(answer, cts.Token);
+                            }
+                        });
+                    }
+                });
+
+            }
+
+            public void Dispose()
+            {
+                cts.Cancel();
+                listener.Stop();
+            }
+
+        }
+
+        /// <summary>
+        /// Connect to the entry of a tunnel, send <paramref name="Question"/>, shut down the sending side,
+        /// and read the answer to its end. Retries while the entry is not listening yet, as
+        /// <see cref="AskThroughAsync"/> does.
+        /// </summary>
+        private static async Task<String> AskAndHalfCloseThroughAsync(UInt16 EntryPort, String Question, Process Ssh, CancellationToken CancellationToken)
+        {
+
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+
+            while (true)
+            {
+
+                if (Ssh.HasExited)
+                    throw new AssertionException($"ssh exited with {Ssh.ExitCode} before the tunnel on port {EntryPort} answered.");
+
+                using var client = new System.Net.Sockets.TcpClient();
+
+                try
+                {
+                    await client.ConnectAsync(System.Net.IPAddress.Loopback, EntryPort, CancellationToken);
+                }
+                catch (System.Net.Sockets.SocketException) when (DateTimeOffset.UtcNow < deadline)
+                {
+                    await Task.Delay(200, CancellationToken);
+                    continue;
+                }
+
+                var stream = client.GetStream();
+                await stream.WriteAsync(Encoding.ASCII.GetBytes(Question), CancellationToken);
+                client.Client.Shutdown(System.Net.Sockets.SocketShutdown.Send);
+
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(10));
+
+                using var answer = new MemoryStream();
+                await stream.CopyToAsync(answer, timeout.Token);
+                return Encoding.ASCII.GetString(answer.ToArray());
+
+            }
+
+        }
+
+        /// <summary>
         /// Run <c>ssh -N</c> with the given forwarding arguments against a fresh server of ours that
         /// permits loopback forwarding, and hand the running client to <paramref name="Exercise"/>.
         /// </summary>
@@ -337,6 +426,34 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 var reply = await AskThroughAsync(entryPort, ssh, CancellationToken);
                 Assert.That(reply, Is.EqualTo("pong:ping"), "the bytes must come back through -L and the echo service");
+
+            }, CancellationToken);
+
+        }
+
+        #endregion
+
+        #region RealOpenSshClient_HalfCloses_ThroughOurServer
+
+        /// <summary>
+        /// A half-close crosses our server in both kinds of tunnel: the real client's end of input reaches
+        /// a service that answers only after it, and the answer comes back. With <c>-L</c> the end crosses
+        /// our <c>direct-tcpip</c> dial, with <c>-R</c> our listener.
+        /// </summary>
+        [Test]
+        [CancelAfter(45000)]
+        [TestCase("-L")]
+        [TestCase("-R")]
+        public async Task RealOpenSshClient_HalfCloses_ThroughOurServer(String Direction, CancellationToken CancellationToken)
+        {
+
+            using var service = new AnswerAfterEofService();
+            var entryPort     = FreeLoopbackPort();
+
+            await RunAsync([ Direction, $"127.0.0.1:{entryPort}:127.0.0.1:{service.Port}" ], async (ssh, stderr) => {
+
+                var answer = await AskAndHalfCloseThroughAsync(entryPort, "the whole question", ssh, CancellationToken);
+                Assert.That(answer, Is.EqualTo("noitseuq elohw eht"), "the answer that comes only after the end of the question");
 
             }, CancellationToken);
 
