@@ -127,6 +127,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
                   hermod-ssh ca --ca ./ca -s ./id_ed25519.pub -I alice@2026 -n alice,admin
                   hermod-ssh serve  -a ./authorized_keys -p 2222 --sftp-root ./root
                   hermod-ssh exec   -i ./id_ed25519 -p 2222 demo@127.0.0.1 "uname -a"
+                  hermod-ssh exec   -i ./id_ed25519 -J admin@bastion.example.org demo@10.0.0.5 "uname -a"
                   hermod-ssh sftp   -i ./id_ed25519 -p 2222 demo@127.0.0.1 put ./file.bin /file.bin
                   hermod-ssh forward -i ./id_ed25519 -p 2222 -L 15432:db.internal:5432 demo@127.0.0.1
                   hermod-ssh forward -i ./id_ed25519 -p 2222 -R 8080:127.0.0.1:3000 demo@127.0.0.1

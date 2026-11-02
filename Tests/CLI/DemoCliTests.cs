@@ -25,6 +25,7 @@ using NUnit.Framework;
 
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
 using org.GraphDefined.Vanaheimr.Hermod.SSH.CLI;
+using org.GraphDefined.Vanaheimr.Hermod.SSH.Client;
 
 #endregion
 
@@ -181,6 +182,60 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             {
                 await ctrlC.CancelAsync();
                 echo.Stop();
+            }
+
+        }
+
+        #endregion
+
+        #region Exec_ThroughAJumpHost
+
+        /// <summary>
+        /// <c>exec -J</c>: a command reaches one <c>serve</c> through another, and a jump host nobody
+        /// answers on is named in the failure instead of being skipped.
+        /// </summary>
+        [Test]
+        [CancelAfter(30000)]
+        public async Task Exec_ThroughAJumpHost(CancellationToken CancellationToken)
+        {
+
+            var userKey   = Path.Combine(dir, "user");
+            var authKeys  = Path.Combine(dir, "authorized_keys");
+
+            Assert.That(await Commands.KeygenAsync(["keygen", "-t", "ed25519", "-f", userKey], CancellationToken), Is.EqualTo(0));
+            File.Copy(userKey + ".pub", authKeys);
+
+            var jumpPort   = FreePort();
+            var serverPort = FreePort();
+
+            using var ctrlC = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
+
+            try
+            {
+
+                var jumpHost = Commands.ServeAsync(["serve", "-a", authKeys, "-k", Path.Combine(dir, "jump_host_key"),   "-p", $"{jumpPort}"],   ctrlC.Token);
+                var server   = Commands.ServeAsync(["serve", "-a", authKeys, "-k", Path.Combine(dir, "server_host_key"), "-p", $"{serverPort}"], ctrlC.Token);
+
+                (await ConnectedAsync(jumpPort,   CancellationToken)).Dispose();
+                (await ConnectedAsync(serverPort, CancellationToken)).Dispose();
+
+                Assert.That(await Commands.ExecAsync(["exec", "-i", userKey, "-p", $"{serverPort}", "-J", $"admin@127.0.0.1:{jumpPort}", "achim@127.0.0.1", "uname"], CancellationToken),
+                            Is.EqualTo(0), "the command ran on the server, through the jump host");
+
+                var nobody  = FreePort();
+                var failure = await Assert.ThrowsAsync<SshJumpHostException>(async () =>
+                                  await Commands.ExecAsync(["exec", "-i", userKey, "-p", $"{serverPort}", "-J", $"127.0.0.1:{nobody}", "achim@127.0.0.1", "uname"], CancellationToken));
+
+                Assert.That(failure!.JumpHost.Port, Is.EqualTo(nobody), "the jump host that did not answer");
+
+                await ctrlC.CancelAsync();
+
+                Assert.That(await Task.WhenAll(jumpHost, server), Is.EqualTo(new[] { 0, 0 }));
+
+            }
+            finally
+            {
+                await ctrlC.CancelAsync();
             }
 
         }

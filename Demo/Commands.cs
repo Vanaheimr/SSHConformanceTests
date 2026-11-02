@@ -150,7 +150,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
             var rest = Positional(Arguments);
             if (Opt(Arguments, "-i", "--identity") is null || rest.Count < 2)
-                return Usage("exec -i <key> [-p <port>] <user@host> <command...>");
+                return Usage("exec -i <key> [-p <port>] [-J <jump hosts>] <user@host> <command...>");
 
             await using var client = await ConnectClientAsync(Arguments, rest[0], CancellationToken);
 
@@ -173,7 +173,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
             var rest = Positional(Arguments);
             if (Opt(Arguments, "-i", "--identity") is null || rest.Count < 1)
-                return Usage("connect -i <key> [-p <port>] <user@host> [command...]");
+                return Usage("connect -i <key> [-p <port>] [-J <jump hosts>] <user@host> [command...]");
 
             await using var client  = await ConnectClientAsync(Arguments, rest[0], CancellationToken);
             var command             = String.Join(' ', rest.Skip(1));
@@ -216,7 +216,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
             var rest = Positional(Arguments);
             if (Opt(Arguments, "-i", "--identity") is null || rest.Count < 2)
-                return Usage("sftp -i <key> [-p <port>] <user@host> <ls <path> | get <remote> <local> | put <local> <remote>>");
+                return Usage("sftp -i <key> [-p <port>] [-J <jump hosts>] <user@host> <ls <path> | get <remote> <local> | put <local> <remote>>");
 
             await using var client = await ConnectClientAsync(Arguments, rest[0], CancellationToken);
             var sftp               = await client.OpenSftpClientAsync(CancellationToken);
@@ -261,7 +261,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
         public static async Task<Int32> ForwardAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 
-            const String usage = "forward -i <key> [-p <port>] <-L|-R> [<bind>:]<port>:<host>:<hostport> <user@host>";
+            const String usage = "forward -i <key> [-p <port>] [-J <jump hosts>] <-L|-R> [<bind>:]<port>:<host>:<hostport> <user@host>";
 
             var rest   = Positional(Arguments);
             var local  = Opt(Arguments, "-L", "--local");
@@ -437,15 +437,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
         {
             var identity     = Opt(Arguments, "-i", "--identity")!;
             var portStr      = Opt(Arguments, "-p", "--port") ?? "22";
+            var jumpHosts    = Opt(Arguments, "-J", "--jump");
             var (user, host) = SplitTarget(Target);
             var key          = SshKeyGenerator.LoadPrivateKey(await File.ReadAllTextAsync(identity, CancellationToken)).Key;
 
-            Console.Error.WriteLine($"Warning: accepting host key of {host} without verification (demo) — "
+            Console.Error.WriteLine($"Warning: accepting host key of {host}{(jumpHosts is null ? "" : $" and of every jump host ({jumpHosts})")} without verification (demo) — "
                                     + "this connection is not protected against a machine-in-the-middle.");
             return await SshClient.ConnectAsync(host, UInt16.Parse(portStr), new SshClientOptions {
                 Username      = user,
                 VerifyHostKey = SshHostKeyVerification.AcceptAnyUnsafe,
-                Credentials   = [ key ]
+                Credentials   = [ key ],
+                // -J [user@]host[:port],… as ssh takes it; every jump host borrows the key above.
+                ProxyJump     = jumpHosts is null ? [] : SshJumpHost.ParseChain(jumpHosts)
             }, CancellationToken);
         }
 

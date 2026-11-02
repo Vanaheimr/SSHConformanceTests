@@ -158,8 +158,18 @@ fail without the fix and a control proving the permitted case still works.
   `OurClient_LocalForwards_ThroughRealOpenSshServer_HalfCloseIncluded`, whose target answers only after
   our end of input, so it fails without the half-close. The demo's `forward` takes `-L` and now `-R`, each
   with an optional bind address (`DemoCliTests.Forward_LocalAndRemote_ThroughTheDemoServer`).
-- ⬜ **Façade, the rest:** there are no ProxyJump options; `SshServer` offers no way to register a
-  subsystem other than `sftp`.
+- ✅ **Façade: ProxyJump** (Hermod PR #212): `SshClientOptions.ProxyJump` takes the `SshJumpHost`
+  chain (`SshJumpHost.ParseChain` reads `-J`), and `JumpHostOptions` gives every jump host its own
+  host-key decision and credentials. Each hop is a client of its own over a `direct-tcpip` tunnel of the
+  one before, which it owns, so disposing closes the chain from the server back; a failure names the hop
+  (`SshJumpHostException`, hop *n* of *m*) and closes the hops already reached. Without `JumpHostOptions` a
+  jump host borrows the server's options and the user its `user@` names, but not the password or the
+  keyboard-interactive answers it would read in the clear, nor `HostKeysReceived`. Hermetic in
+  `FacadeProxyJumpTests` (two hops with their own keys, a wrong key at hop 2, borrowing, the password not
+  lent; each guarantee checked to fail without its code); against sshd as every hop and the server in
+  `OurClient_JumpsThroughRealOpenSshServer` (one and two hops). The demo CLI's client verbs take `-J`.
+  The single-channel `SshProxyJump.ConnectThroughAsync` stays for transport-level callers.
+- ⬜ **Façade, the rest:** `SshServer` offers no way to register a subsystem other than `sftp`.
 - ✅ **Forwarding carries half-closes everywhere** (Hermod PR #207): our server's `direct-tcpip`
   dial and the `-R` relay on both sides ended both directions on the first EOF, so a half-close cut off
   the answer still on its way (an HTTP/1.0 server, `nc -N`, anything that answers whole requests). All of
