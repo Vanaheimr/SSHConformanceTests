@@ -403,6 +403,102 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
+        #region OurClient_LocalForwards_ThroughRealOpenSshServer_HalfCloseIncluded
+
+        /// <summary>
+        /// <c>ssh -L 0:host:port</c> from our client against the reference server: our client listens, and
+        /// a connection made there reaches a target on sshd's side through a <c>direct-tcpip</c> channel.
+        /// The target reads to the end of its input before it answers, so the answer arrives only if the
+        /// local side's half-close reached it as an end of input, and the connection outlived it.
+        /// </summary>
+        /// <remarks>
+        /// The target is started by a command run over the same SSH connection, so it listens where sshd
+        /// connects whatever the WSL networking mode. It writes its port to a file, renamed into place so
+        /// that nobody reads half of it.
+        /// </remarks>
+        [Test]
+        [CancelAfter(120000)]
+        public async Task OurClient_LocalForwards_ThroughRealOpenSshServer_HalfCloseIncluded(CancellationToken CancellationToken)
+        {
+
+            const String target = """
+                                  import os, socket, sys
+                                  listener = socket.socket()
+                                  listener.bind(("127.0.0.1", 0))
+                                  listener.listen(1)
+                                  with open(sys.argv[1] + ".tmp", "w") as f:
+                                      f.write(str(listener.getsockname()[1]))
+                                  os.rename(sys.argv[1] + ".tmp", sys.argv[1])
+                                  connection, _ = listener.accept()
+                                  data = b""
+                                  while True:
+                                      chunk = connection.recv(65536)
+                                      if not chunk:
+                                          break
+                                      data += chunk
+                                  connection.sendall(data[::-1])
+                                  connection.close()
+                                  """;
+
+            var daemon = await StartSshdAsync(CancellationToken);
+            var user   = await WhoAsync(CancellationToken);
+
+            try
+            {
+
+                await using var client = await SshClient.ConnectAsync(
+                                             "127.0.0.1",
+                                             (UInt16) daemon.Port,
+                                             new SshClientOptions {
+                                                 Username      = user,
+                                                 Credentials   = [ daemon.UserKey ],
+                                                 VerifyHostKey = blob => blob.AsSpan().SequenceEqual(daemon.HostKeyBlob)
+                                             },
+                                             CancellationToken);
+
+                var dir      = (await client.ExecuteAsync("mktemp -d", CancellationToken)).StandardOutput.Trim();
+                var portFile = $"{dir}/port";
+                var serving  = client.ExecuteAsync($"timeout 60 python3 -c '{target}' {portFile}", CancellationToken).AsTask();
+
+                UInt16 targetPort;
+                while (!UInt16.TryParse((await client.ExecuteAsync($"cat {portFile} 2>/dev/null", CancellationToken)).StandardOutput.Trim(), out targetPort))
+                {
+                    Assert.That(serving.IsCompleted, Is.False, $"the target ended before it listened.\n{(serving.IsCompleted ? serving.Result.StandardError : "")}");
+                    await Task.Delay(100, CancellationToken);
+                }
+
+                await using var forward = client.StartLocalForward(new IPSocket(IPv4Address.Localhost, IPPort.Auto), "127.0.0.1", targetPort);
+
+                using var local = new System.Net.Sockets.TcpClient();
+                await local.ConnectAsync(System.Net.IPAddress.Loopback, forward.LocalEndPoint.Port.ToInt32(), CancellationToken);
+
+                var stream = local.GetStream();
+                await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(Marker), CancellationToken);
+                local.Client.Shutdown(System.Net.Sockets.SocketShutdown.Send);
+
+                var answer = new MemoryStream();
+                await stream.CopyToAsync(answer, CancellationToken);
+
+                var served = await serving;
+
+                Assert.Multiple(() => {
+                    Assert.That(System.Text.Encoding.UTF8.GetString(answer.ToArray()), Is.EqualTo(new String(Marker.Reverse().ToArray())),
+                                $"the target saw the end of our input, and its answer came back.\n{daemon.Server.Output}");
+                    Assert.That(served.ExitCode, Is.Zero, served.StandardError);
+                });
+
+                await client.ExecuteAsync($"rm -rf {dir}", CancellationToken);
+
+            }
+            finally
+            {
+                await StopAsync(daemon);
+            }
+
+        }
+
+        #endregion
+
         #region OurClient_RemoteForwards_OnAnAllocatedPort_ThroughRealOpenSshServer
 
         /// <summary>

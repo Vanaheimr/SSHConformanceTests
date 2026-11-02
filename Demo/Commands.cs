@@ -254,50 +254,114 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
         #region forward
 
         /// <summary>
-        /// Local port forward (<c>ssh -L</c>): bind a local port and tunnel each connection through the server.
+        /// Port forwarding, either way: <c>-L</c> listens here and tunnels each connection through the server
+        /// (<c>ssh -L</c>); <c>-R</c> has the server listen and tunnels each connection back to here
+        /// (<c>ssh -R</c>). Port 0 lets the OS, or the server, choose the port.
         /// </summary>
         public static async Task<Int32> ForwardAsync(String[] Arguments, CancellationToken CancellationToken)
         {
 
-            var rest = Positional(Arguments);
-            var spec = Opt(Arguments, "-L", "--local");
-            if (Opt(Arguments, "-i", "--identity") is null || rest.Count < 1 || spec is null)
-                return Usage("forward -i <key> [-p <port>] -L <localport>:<host>:<hostport> <user@host>");
+            const String usage = "forward -i <key> [-p <port>] <-L|-R> [<bind>:]<port>:<host>:<hostport> <user@host>";
 
-            // Parse localport:host:hostport
-            var parts = spec.Split(':');
-            if (parts.Length != 3)
-                return Usage("forward … -L <localport>:<host>:<hostport> …");
-            var localPort  = UInt16.Parse(parts[0]);
-            var remoteHost = parts[1];
-            var remotePort = UInt16.Parse(parts[2]);
+            var rest   = Positional(Arguments);
+            var local  = Opt(Arguments, "-L", "--local");
+            var remote = Opt(Arguments, "-R", "--remote");
+
+            if (Opt(Arguments, "-i", "--identity") is null || rest.Count < 1 || (local is null) == (remote is null))
+                return Usage(usage);
+
+            if (!TryParseForward(local ?? remote!, out var bind, out var port, out var host, out var hostPort))
+                return Usage(usage);
+
+            // -L binds here, so its bind address is ours to resolve; -R hands its own to the server as typed.
+            IIPAddress? bindAddress = null;
+            if (local is not null && bind is not null)
+            {
+
+                bindAddress = bind switch {
+                    "" or "*"    => IPv6Address.Any,
+                    "localhost"  => IPv4Address.Localhost,
+                    _            => IPAddress.TryParse(bind, out var parsed) ? parsed : null
+                };
+
+                if (bindAddress is null)
+                    return Fail($"-L binds an IP address, 'localhost' or '*', not '{bind}'");
+
+            }
 
             await using var client = await ConnectClientAsync(Arguments, rest[0], CancellationToken);
 
-            var listener = new TcpListener(System.Net.IPAddress.Loopback, localPort);
-            listener.Start();
-            Console.WriteLine($"Forwarding 127.0.0.1:{localPort} → {remoteHost}:{remotePort} (through {rest[0]}) — Ctrl+C to stop");
-
-            try
+            if (local is not null)
             {
-                while (!CancellationToken.IsCancellationRequested)
-                {
-                    var socket = await listener.AcceptTcpClientAsync(CancellationToken);
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            var tunnel = await client.OpenTcpStreamAsync(remoteHost, remotePort, CancellationToken);
-                            await SshChannelRelay.RelayAsync(tunnel, socket.GetStream(), CancellationToken);
-                        }
-                        catch { }
-                    }, CancellationToken);
-                }
+                await using var forward = client.StartLocalForward(new IPSocket(bindAddress ?? IPv4Address.Localhost, IPPort.Parse(port)), host, hostPort);
+                Console.WriteLine($"Forwarding {forward.LocalEndPoint} → {host}:{hostPort} (through {rest[0]}) — Ctrl+C to stop");
+                await WaitForCtrlCAsync(CancellationToken);
             }
-            finally { listener.Stop(); }
+            else
+            {
+                await using var forward = await client.RequestRemoteForwardAsync(bind ?? "localhost", port, host, hostPort, CancellationToken);
+                Console.WriteLine($"Forwarding {forward.BindHost}:{forward.BoundPort} on {rest[0]} → {host}:{hostPort} (here) — Ctrl+C to stop");
+                await WaitForCtrlCAsync(CancellationToken);
+            }
 
             return 0;
 
+        }
+
+        // [<bind>:]<port>:<host>:<hostport>, as ssh takes it; an IPv6 bind address or host goes in brackets.
+        private static Boolean TryParseForward(String Spec, out String? Bind, out UInt16 Port, out String Host, out UInt16 HostPort)
+        {
+
+            Bind     = null;
+            Port     = 0;
+            Host     = "";
+            HostPort = 0;
+
+            var parts = new List<String>();
+            var rest  = Spec;
+
+            while (rest.Length > 0)
+            {
+
+                String part;
+
+                if (rest.StartsWith('['))
+                {
+                    var close = rest.IndexOf(']');
+                    if (close < 0 || (close + 1 < rest.Length && rest[close + 1] != ':'))
+                        return false;
+                    part = rest[1..close];
+                    rest = close + 1 < rest.Length ? rest[(close + 2)..] : "";
+                }
+                else
+                {
+                    var colon = rest.IndexOf(':');
+                    part = colon < 0 ? rest      : rest[..colon];
+                    rest = colon < 0 ? ""        : rest[(colon + 1)..];
+                }
+
+                parts.Add(part);
+
+            }
+
+            if (parts.Count is < 3 or > 4)
+                return false;
+
+            if (parts.Count == 4)
+                Bind = parts[0];
+
+            Host = parts[^2];
+
+            return UInt16.TryParse(parts[^3], out Port) &&
+                   UInt16.TryParse(parts[^1], out HostPort) &&
+                   Host.Length > 0;
+
+        }
+
+        private static async Task WaitForCtrlCAsync(CancellationToken CancellationToken)
+        {
+            try { await Task.Delay(Timeout.Infinite, CancellationToken); }
+            catch (OperationCanceledException) { }
         }
 
         #endregion

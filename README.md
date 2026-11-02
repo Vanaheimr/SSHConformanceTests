@@ -136,12 +136,13 @@ hermod-ssh exec  -i ./id_ed25519 -p 2222 demo@127.0.0.1 "uname -a"
 ```
 
 `connect`, `sftp`, `forward` and `play` work too: an interactive session, SFTP put/ls/get, a local
-`-L` tunnel, and replaying a recorded session with its original timing.
+`-L` or remote `-R` tunnel, and replaying a recorded session with its original timing.
 
 ```bash
 hermod-ssh connect -i ./id_ed25519 -p 2222 demo@127.0.0.1
 hermod-ssh sftp    -i ./id_ed25519 -p 2222 demo@127.0.0.1 put ./firmware.bin /firmware.bin
 hermod-ssh forward -i ./id_ed25519 -p 2222 -L 8080:example.com:80 demo@127.0.0.1
+hermod-ssh forward -i ./id_ed25519 -p 2222 -R 8080:127.0.0.1:3000 demo@127.0.0.1
 hermod-ssh play    ./session.cast --speed 2
 ```
 

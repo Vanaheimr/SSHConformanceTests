@@ -149,8 +149,20 @@ fail without the fix and a control proving the permitted case still works.
   `OpenTcpStreamAsync`, so `-R` no longer needs the static `SshRemoteForwarding` helper and the client's
   multiplexer. Hermetic in `Facade_RemoteForward_ThroughTheServerListener` (port 0 next to an exec,
   cancel); `OurClient_RemoteForwards_OnAnAllocatedPort_ThroughRealOpenSshServer` now goes through it.
-- ⬜ **Façade, the rest:** there are no ProxyJump options; the `-L` listener lives in the demo CLI, not the
-  library; `SshServer` offers no way to register a subsystem other than `sftp`.
+- ✅ **Façade: local forwarding** (Hermod PR #206): `SshClient.StartLocalForward` listens on an
+  `IPSocket` (port 0 allowed, `LocalEndPoint` reports it) and tunnels each connection in a `direct-tcpip`
+  channel of its own, naming the real originator. Unlike the demo CLI's loop it replaces, it carries
+  half-closes both ways instead of tearing down on the first EOF, and it ends with its client. Hermetic in
+  `Facade_LocalForward_ThroughTheServer` (two connections at once, dispose) and
+  `Facade_LocalForward_EndsWithTheClient`; against sshd in
+  `OurClient_LocalForwards_ThroughRealOpenSshServer_HalfCloseIncluded`, whose target answers only after
+  our end of input, so it fails without the half-close. The demo's `forward` takes `-L` and now `-R`, each
+  with an optional bind address (`DemoCliTests.Forward_LocalAndRemote_ThroughTheDemoServer`).
+- ⬜ **Façade, the rest:** there are no ProxyJump options; `SshServer` offers no way to register a
+  subsystem other than `sftp`.
+- ⬜ **Forwarding, half-close elsewhere:** our server's `direct-tcpip` relay and the `-R` relay on both
+  sides (`SshRemoteForwarding`) still end both directions on the first EOF, so a half-close cuts off the
+  answer still on its way.
 - ⬜ **Server details:** `env` is accepted up to size caps but without a name allow-list (sshd's
   `AcceptEnv`); an incoming `agent-connect` channel is refused without an audit event.
 
