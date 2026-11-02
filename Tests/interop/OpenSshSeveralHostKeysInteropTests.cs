@@ -156,6 +156,97 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
+        #region RealOpenSshClient_TrustingOurCa_AcceptsOurRsaHostCertificate
+
+        /// <summary>
+        /// A client that trusts the host's CA rather than its key - <c>@cert-authority</c> in
+        /// <c>known_hosts</c> - and allows only an RSA certificate algorithm. OpenSSH has refused
+        /// <c>ssh-rsa-cert-v01@openssh.com</c>, which means SHA-1, since 8.8, and that was the only name
+        /// our server offered an RSA certificate under.
+        /// </summary>
+        [TestCase(SshAlgorithmNames.HostKey.RsaSha2_512Cert)]
+        [TestCase(SshAlgorithmNames.HostKey.RsaSha2_256Cert)]
+        [CancelAfter(40000)]
+        public async Task RealOpenSshClient_TrustingOurCa_AcceptsOurRsaHostCertificate(String Algorithm, CancellationToken CancellationToken)
+        {
+
+            var ssh       = FindOnPathOrSystem("ssh");
+            var sshKeygen = FindOnPathOrSystem("ssh-keygen");
+            if (ssh is null || sshKeygen is null)
+                Assert.Ignore("No 'ssh'/'ssh-keygen' found.");
+
+            var keyPath    = Path.Combine(Path.GetTempPath(), "hermod_shk_" + Guid.NewGuid().ToString("N"));
+            var knownHosts = Path.Combine(Path.GetTempPath(), "hermod_kh_"  + Guid.NewGuid().ToString("N"));
+            var emptyConf  = Path.GetTempFileName();
+
+            var ca         = SshHostKey.GenerateEd25519();
+            var rsa        = SshHostKey.GenerateRsa(3072);
+            var certified  = new CertifiedKey(rsa,
+                                              new OpenSshCertificateBuilder {
+                                                  Serial       = 7,
+                                                  Type         = SshCertType.Host,
+                                                  KeyId        = "hermod-rsa-host",
+                                                  Principals   = [ "127.0.0.1", "localhost" ],
+                                                  ValidAfter   = DateTimeOffset.UtcNow.AddHours(-1),
+                                                  ValidBefore  = DateTimeOffset.UtcNow.AddHours(1)
+                                              }.Sign(rsa.PublicKeyBlob, ca));
+
+            SshServer? server = null;
+
+            try
+            {
+
+                await RunAsync(sshKeygen!, [ "-t", "ed25519", "-f", keyPath, "-N", "", "-q" ], CancellationToken);
+                var publicBlob = Convert.FromBase64String((await File.ReadAllTextAsync(keyPath + ".pub", CancellationToken)).Split(' ')[1]);
+
+                server = new SshServer(new SshServerOptions {
+                    HostKeys           = [ rsa, certified ],
+                    Authenticator      = SshUserAuthenticator.ForAuthorizedKeys(publicBlob),
+                    ExecHandler        = async (context, ct) => { await context.WriteAsync("certified\n", ct); return 0; },
+                    AdvertiseHostKeys  = false
+                });
+
+                await server.StartAsync(new IPSocket(IPv4Address.Localhost, IPPort.Auto), CancellationToken);
+                var port = server.LocalEndPoint.Port.ToInt32();
+
+                // The CA only: the RSA key itself is unknown, so only the certificate can get ssh in.
+                await File.WriteAllTextAsync(knownHosts,
+                                             $"@cert-authority * ssh-ed25519 {Convert.ToBase64String(ca.PublicKeyBlob)}\n",
+                                             CancellationToken);
+
+                var (exitCode, stdout, stderr) = await RunAsync(ssh!, [
+                                                     "-F", emptyConf, "-p", port.ToString(), "-v",
+                                                     "-o", "StrictHostKeyChecking=yes", "-o", $"UserKnownHostsFile={knownHosts}",
+                                                     "-o", $"HostKeyAlgorithms={Algorithm}",
+                                                     "-o", "UpdateHostKeys=no",
+                                                     "-i", keyPath, "-o", "IdentitiesOnly=yes",
+                                                     "-o", "PreferredAuthentications=publickey", "-o", "PasswordAuthentication=no",
+                                                     "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                                                     "hermoduser@127.0.0.1", "hello"
+                                                 ], CancellationToken);
+
+                Assert.Multiple(() => {
+                    Assert.That(exitCode, Is.EqualTo(0), $"ssh must accept the RSA host certificate. stderr:\n{stderr}");
+                    Assert.That(stdout,   Is.EqualTo("certified\n"));
+                    Assert.That(stderr,   Does.Contain($"kex: host key algorithm: {Algorithm}"), stderr);
+                    Assert.That(stderr,   Does.Contain("Server host certificate: ssh-rsa-cert-v01@openssh.com"), stderr);
+                });
+
+            }
+            finally
+            {
+                if (server is not null)
+                    await server.DisposeAsync();
+                try { File.Delete(keyPath);          } catch { }
+                try { File.Delete(keyPath + ".pub"); } catch { }
+                try { File.Delete(knownHosts);       } catch { }
+                try { File.Delete(emptyConf);        } catch { }
+            }
+
+        }
+
+        #endregion
+
         #region RealSshKeyscan_GetsEveryHostKey
 
         /// <summary>
