@@ -270,10 +270,29 @@ Not scheduled yet, but next in line.
       Transport's design and SSH's differ.
   - **Alongside on the same connection:** SFTP for firmware and logs, `-R` for diagnostic access, `exec`
     for maintenance — the actual gain over one WebSocket per station.
+  - **An admin console — the same mechanism with another protocol in it** (the parked
+    "admin-console subsystem", confirmed 2026-11-02). An application that carries its own SSH server —
+    a charging station, a CSMS backend — offers its management under a name of its own, say
+    `admin@graphdefined.com`, reached with `ssh -t -s … admin@graphdefined.com`:
+    - *No operating-system shell:* the application answers the commands itself, against its own objects
+      — `status`, `config get|set …`, `logs tail --level warn`, `connector 2 unlock`, `reboot --soft`.
+      On a device, on Windows or in a container there is often no shell worth exposing; the console can
+      do exactly what the application offers and nothing else.
+    - *A grant for exactly this:* the client names what it wants, so the server can tie this one
+      subsystem to a condition — only certificates with the principal `admin`, say — instead of the
+      all-or-nothing of "shell or no shell". `SubsystemRequestedEvent` already audits the request.
+    - *A session, not single commands:* `exec` is one free-form command per channel; a subsystem is a
+      lasting session with a protocol of its own that can be versioned (`admin-v2@…`).
+    - *For people and for tools:* with a PTY an interactive console; without one, a machine-readable
+      protocol in the framing above (JSON-RPC, say) — or a name of its own for the tool.
+    - *Alongside:* SFTP for logs and firmware and `-R` for diagnostic access on the same connection.
+    - *What exists already:* `ExecHandler` and `ShellHandler` take application-defined commands without
+      an operating-system shell, so the console could be a `ShellHandler` today. What is missing is the
+      name, and with it a grant for this console alone.
   - **Tests:** `ssh -s <name>` against our server; our client against `sshd` with a `Subsystem` line;
     NETCONF (RFC 6242) as an existing standard subsystem to check the mechanism against.
   - Known subsystems for reference: `sftp`, `netconf` (RFC 6242), `snmp` (RFC 5592), `publickey`
-    (RFC 4819), `powershell` (PowerShell remoting). Supersedes the parked "admin-console subsystem".
+    (RFC 4819), `powershell` (PowerShell remoting).
 
 ---
 
