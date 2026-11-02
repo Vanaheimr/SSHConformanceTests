@@ -145,9 +145,12 @@ fail without the fix and a control proving the permitted case still works.
   Hermetic in `FacadeLivenessTests` (a silent server at connect time and after login, the caller's own
   cancellation, a slow keyboard-interactive answer); against real sshd in
   `OurClient_KeepAlive_IsAnsweredByRealOpenSshServer`.
-- ⬜ **Façade, the rest:** there are no ProxyJump options; remote `-R` is reachable only through the static
-  `SshRemoteForwarding` helper; the `-L` listener lives in the demo CLI, not the library; `SshServer`
-  offers no way to register a subsystem other than `sftp`.
+- ✅ **Façade: remote forwarding** (Hermod PR #205): `SshClient.RequestRemoteForwardAsync` beside
+  `OpenTcpStreamAsync`, so `-R` no longer needs the static `SshRemoteForwarding` helper and the client's
+  multiplexer. Hermetic in `Facade_RemoteForward_ThroughTheServerListener` (port 0 next to an exec,
+  cancel); `OurClient_RemoteForwards_OnAnAllocatedPort_ThroughRealOpenSshServer` now goes through it.
+- ⬜ **Façade, the rest:** there are no ProxyJump options; the `-L` listener lives in the demo CLI, not the
+  library; `SshServer` offers no way to register a subsystem other than `sftp`.
 - ⬜ **Server details:** `env` is accepted up to size caps but without a name allow-list (sshd's
   `AcceptEnv`); an incoming `agent-connect` channel is refused without an audit event.
 

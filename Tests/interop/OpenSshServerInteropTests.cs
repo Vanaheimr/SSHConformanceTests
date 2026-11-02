@@ -453,12 +453,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                              },
                                              CancellationToken);
 
-                var forward = await SshRemoteForwarding.RequestRemoteForwardAsync(client.Multiplexer,
-                                                                                  BindHost,
-                                                                                  0,
-                                                                                  "127.0.0.1",
-                                                                                  (UInt16) ((System.Net.IPEndPoint) target.LocalEndpoint).Port,
-                                                                                  CancellationToken);
+                var forward = await client.RequestRemoteForwardAsync(BindHost,
+                                                                     0,
+                                                                     "127.0.0.1",
+                                                                     (UInt16) ((System.Net.IPEndPoint) target.LocalEndpoint).Port,
+                                                                     CancellationToken);
 
                 var connect = $"timeout 10 bash -c 'cat < /dev/tcp/127.0.0.1/{forward.BoundPort}'";
 
