@@ -219,6 +219,62 @@ PuTTY `.ppk` import, SFTP versions above 3, and every SHA-1 or legacy constructi
 signatures, DH group-exchange and SHA-1 groups, CBC, 3DES, encrypt-and-MAC HMACs) — with no opt-in.
 X11 and agent-forwarding *requests* are refused and audited.
 
+### 0.6 Hot topics
+
+Not scheduled yet, but next in line.
+
+- ⬜ **Custom subsystems on both sides — the SSH route to what EVQI Transport is after.** EVQI Transport
+  wants several independent streams, OCPP among them, multiplexed in parallel over one or more TCP
+  connections. An SSH connection already is that: channels with their own flow control, opened and closed
+  independently, next to SFTP, forwards and `exec` on the same authenticated connection. What is missing is
+  a way to put an application protocol of one's own on a channel by name (RFC 4254 §6.5).
+  - **Server:** `SshServerOptions.Subsystems`, a table of name → handler that gets the channel as a
+    stream, with audit (`SubsystemRequestedEvent` exists) and access profiles as for `sftp`.
+    `SshSessionChannel.ServeAsync` already takes such a table; the façade fills it with `sftp` only.
+  - **Client:** `SshClient.OpenSubsystemAsync(name)` → `Stream`. Today only by hand:
+    `Multiplexer.OpenChannelAsync("session")`, a `subsystem` request, `channel.AsStream()` — what
+    `OpenSftpClientAsync` does inside.
+  - **OCPP over a subsystem — decided 2026-11-02:**
+    - *Framing:* a length prefix plus a type byte — `uint32` length (big-endian, as SSH and SFTP frame
+      theirs) of what follows, one type byte, then the payload. WebSocket gives OCPP-J its message
+      boundaries; a channel is a byte stream. Types:
+      - *text message* and *binary message* — OCPP-J is text; the binary type leaves room for encodings
+        such as CBOR;
+      - *close* with a `uint16` code and a UTF-8 reason, taking WebSocket's close codes (1000 normal, 1008
+        policy violation, …) — an SSH channel's CLOSE carries no reason, and this is the one thing a
+        stream of OCPP messages misses most when it ends.
+
+      Weighed against real WebSocket frames (Hermod has the codec, `HTTP1/WebSocket/WebSocketFrame.cs`):
+      their client-to-server masking is pointless inside SSH, fragmentation, interleaved control frames
+      and 64-bit lengths widen the parser for nothing SSH does not already give, and there is no HTTP
+      handshake to negotiate extensions in — so it would have been a WebSocket dialect anyway. Still to
+      fix: the cap on a frame's length, checked before anything is allocated, as everywhere else; and
+      whether an application-level ping is wanted — SSH keepalive proves the peer's SSH layer answers,
+      not that its OCPP handler still reads.
+    - *Names and versions:* versioned names such as `ocpp2.0.1@…`, and a generic `ocpp@…` — names without
+      `@` belong to the IANA (RFC 4251 §6). A client asks for versioned names in order and the server
+      refuses what it does not speak, in place of `Sec-WebSocket-Protocol`. With the generic name the
+      version is not in the name, so it has to be agreed inside the stream; how is still open.
+    - *Identity:* the station logs in with an SSH key or an SSH certificate instead of Basic Auth or a TLS
+      client certificate (OCPP security profiles 1–3); its ID is the user name, or the certificate's key
+      ID or principal. Certificates bring expiry and revocation without a TLS PKI.
+    - *Behaves like the classic WebSocket:* one full-duplex stream of messages per station; either side
+      sends a CALL whenever it likes — the CSMS calls the station (`RemoteStartTransaction`, `Reset`) on
+      the same stream — and both keep reading and match results to calls by message ID. The channel's
+      EOF and CLOSE end it, where WebSocket has its close handshake.
+    - *Liveness:* SSH keepalive (`KeepAliveInterval` on the client, `ClientAlive*` on the server) in place
+      of WebSocket ping/pong.
+    - *More than one TCP connection:* SSH multiplexes over one; a channel cannot move to another
+      connection, and one lost segment stalls every channel on it (TCP head-of-line blocking). Spreading
+      streams over several connections would be a pool above `SshClient` — the point where EVQI
+      Transport's design and SSH's differ.
+  - **Alongside on the same connection:** SFTP for firmware and logs, `-R` for diagnostic access, `exec`
+    for maintenance — the actual gain over one WebSocket per station.
+  - **Tests:** `ssh -s <name>` against our server; our client against `sshd` with a `Subsystem` line;
+    NETCONF (RFC 6242) as an existing standard subsystem to check the mechanism against.
+  - Known subsystems for reference: `sftp`, `netconf` (RFC 6242), `snmp` (RFC 5592), `publickey`
+    (RFC 4819), `powershell` (PowerShell remoting). Supersedes the parked "admin-console subsystem".
+
 ---
 
 ## 1. Goals & Non-Goals
@@ -256,7 +312,7 @@ X11 and agent-forwarding *requests* are refused and audited.
 - Full interactive shell **hosting** in the server (protocol support yes: `pty-req`, `shell`, `exec`; actual PTY hosting via ConPTY only as a demo/extension)
 
 ### Parked "fun/optional" features (kept as a backlog, not scheduled in v1)
-Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the WS stack — strong later candidate for firewalled devices), `~/.ssh/config` reader, agent forwarding, FIDO2/`sk-*` security keys, Unix-domain-socket forwarding, admin-console subsystem, honeypot/tarpit listener. **Committed for v1 from this backlog:** TOTP 2FA, session recording, keystroke-timing obfuscation, ProxyJump, SFTP quotas/bandwidth, typed audit stream, pre-auth banner (see Goals).
+Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the WS stack — strong later candidate for firewalled devices), `~/.ssh/config` reader, agent forwarding, FIDO2/`sk-*` security keys, Unix-domain-socket forwarding, admin-console subsystem (now part of the custom-subsystems hot topic, §0.6), honeypot/tarpit listener. **Committed for v1 from this backlog:** TOTP 2FA, session recording, keystroke-timing obfuscation, ProxyJump, SFTP quotas/bandwidth, typed audit stream, pre-auth banner (see Goals).
 
 ### Optional follow-ups (non-blocking technical debt)
 
