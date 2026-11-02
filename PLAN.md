@@ -160,9 +160,17 @@ fail without the fix and a control proving the permitted case still works.
   with an optional bind address (`DemoCliTests.Forward_LocalAndRemote_ThroughTheDemoServer`).
 - ⬜ **Façade, the rest:** there are no ProxyJump options; `SshServer` offers no way to register a
   subsystem other than `sftp`.
-- ⬜ **Forwarding, half-close elsewhere:** our server's `direct-tcpip` relay and the `-R` relay on both
-  sides (`SshRemoteForwarding`) still end both directions on the first EOF, so a half-close cuts off the
-  answer still on its way.
+- ✅ **Forwarding carries half-closes everywhere** (Hermod PR #207): our server's `direct-tcpip`
+  dial and the `-R` relay on both sides ended both directions on the first EOF, so a half-close cut off
+  the answer still on its way (an HTTP/1.0 server, `nc -N`, anything that answers whole requests). All of
+  them now share `SshTcpRelay`, the relay `SshLocalForward` brought: an end passes on as a channel EOF or
+  a socket shutdown, a break ends both, and the peer's channel close stops reading the socket. Hermetic
+  in `HalfCloseForwardingTests` (`-L` and `-R`, each with either side ending first; each relay checked to
+  fail on its own without the fix); against real peers in `RealOpenSshClient_HalfCloses_ThroughOurServer`
+  (`ssh -L`/`-R` through our server) and `OurClient_RemoteForward_HalfCloses_ThroughRealOpenSshServer`.
+  Left as it is: the single-channel `SshForwarding.ServeDirectTcpIpAsync`, which predates the
+  multiplexer, serves one forward per call and is used only by tests; its `SshChannelDuplex` has no way
+  to send an EOF alone.
 - ⬜ **Server details:** `env` is accepted up to size caps but without a name allow-list (sshd's
   `AcceptEnv`); an incoming `agent-connect` channel is refused without an audit event.
 

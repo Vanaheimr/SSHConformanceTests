@@ -499,6 +499,90 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
+        #region OurClient_RemoteForward_HalfCloses_ThroughRealOpenSshServer
+
+        /// <summary>
+        /// A half-close crosses our client's end of a <c>-R</c> forward: on sshd's side a command connects
+        /// to the forward, sends a question and shuts down its sending side; on ours a target reads to the
+        /// end and only then answers. The answer arrives only if the end of input reached the target as such.
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        public async Task OurClient_RemoteForward_HalfCloses_ThroughRealOpenSshServer(CancellationToken CancellationToken)
+        {
+
+            const String asker = """
+                                 import socket, sys
+                                 connection = socket.create_connection(("127.0.0.1", int(sys.argv[1])))
+                                 connection.sendall(sys.argv[2].encode())
+                                 connection.shutdown(socket.SHUT_WR)
+                                 answer = b""
+                                 while True:
+                                     chunk = connection.recv(65536)
+                                     if not chunk:
+                                         break
+                                     answer += chunk
+                                 sys.stdout.write(answer.decode())
+                                 """;
+
+            var daemon = await StartSshdAsync(CancellationToken);
+            var user   = await WhoAsync(CancellationToken);
+
+            var target = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            target.Start();
+
+            _ = Task.Run(async () => {
+                try
+                {
+                    while (true)
+                    {
+                        using var connection = await target.AcceptTcpClientAsync(CancellationToken);
+                        var stream   = connection.GetStream();
+                        using var question = new MemoryStream();
+                        await stream.CopyToAsync(question, CancellationToken);
+                        var answer = question.ToArray();
+                        Array.Reverse(answer);
+                        await stream.WriteAsync(answer, CancellationToken);
+                    }
+                }
+                catch { }
+            }, CancellationToken);
+
+            try
+            {
+
+                await using var client = await SshClient.ConnectAsync(
+                                             "127.0.0.1",
+                                             (UInt16) daemon.Port,
+                                             new SshClientOptions {
+                                                 Username      = user,
+                                                 Credentials   = [ daemon.UserKey ],
+                                                 VerifyHostKey = blob => blob.AsSpan().SequenceEqual(daemon.HostKeyBlob)
+                                             },
+                                             CancellationToken);
+
+                await using var forward = await client.RequestRemoteForwardAsync("127.0.0.1",
+                                                                                0,
+                                                                                "127.0.0.1",
+                                                                                (UInt16) ((System.Net.IPEndPoint) target.LocalEndpoint).Port,
+                                                                                CancellationToken);
+
+                var asked = await client.ExecuteAsync($"timeout 10 python3 -c '{asker}' {forward.BoundPort} {Marker}", CancellationToken);
+
+                Assert.That(asked.StandardOutput, Is.EqualTo(new String(Marker.Reverse().ToArray())),
+                            $"the target's answer to the whole question.\n{asked.StandardError}\n{daemon.Server.Output}");
+
+            }
+            finally
+            {
+                target.Stop();
+                await StopAsync(daemon);
+            }
+
+        }
+
+        #endregion
+
         #region OurClient_RemoteForwards_OnAnAllocatedPort_ThroughRealOpenSshServer
 
         /// <summary>
