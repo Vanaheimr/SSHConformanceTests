@@ -59,7 +59,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         private const String Marker = "OPENSSH_SERVER_INTEROP_OK";
 
-        private sealed record Daemon(WslServer Server, Byte[] HostKeyBlob, ISshHostKey UserKey, String WslRoot, String WindowsRoot)
+        private sealed record Daemon(WslServer Server, Byte[] HostKeyBlob, ISshHostKey UserKey, String WslRoot, String WindowsRoot, Byte[]? HostCertificateBlob = null)
         {
             /// <summary>
             /// The port the daemon ended up on — chosen by the harness, which may have had to retry.
@@ -73,7 +73,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// </summary>
         /// <param name="WithSftp">Also offer the <c>sftp</c> subsystem.</param>
         /// <param name="ExtraOptions">Further <c>-o</c> options for sshd, verbatim.</param>
-        private static async Task<Daemon> StartSshdAsync(CancellationToken CancellationToken, Boolean WithSftp = false, String ExtraOptions = "")
+        /// <param name="HostKeyType">The host key's type, as <c>ssh-keygen -t</c> takes it.</param>
+        /// <param name="WithHostCertificate">Also present a host certificate for that key (sshd's <c>HostCertificate</c>), issued by a CA that <c>ssh-keygen</c> makes for it.</param>
+        private static async Task<Daemon> StartSshdAsync(CancellationToken CancellationToken, Boolean WithSftp = false, String ExtraOptions = "", String HostKeyType = "ed25519", Boolean WithHostCertificate = false)
         {
 
             WslInterop.SkipIfUnavailable();
@@ -96,7 +98,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                   $"mkdir -p {wslRoot} && chmod 700 {wslRoot} && " +
                                                   $"cp {staging}/user.pub {wslRoot}/authorized_keys && " +
                                                   $"chmod 600 {wslRoot}/authorized_keys && " +
-                                                  $"ssh-keygen -t ed25519 -f {wslRoot}/hostkey -N '' -q"
+                                                  $"ssh-keygen -t {HostKeyType} -f {wslRoot}/hostkey -N '' -q" +
+                                                  (WithHostCertificate
+                                                       ? $" && ssh-keygen -t ed25519 -f {wslRoot}/ca -N '' -q" +
+                                                         $" && ssh-keygen -q -s {wslRoot}/ca -I hermod-interop-host -h -n 127.0.0.1 {wslRoot}/hostkey.pub"
+                                                       : "")
                                               ], CancellationToken);
 
             if (prepared != 0)
@@ -111,8 +117,24 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var hostKeyBlob = Convert.FromBase64String(
                                   hostKeyText.Split('\n')
-                                             .First(line => line.StartsWith("ssh-ed25519", StringComparison.Ordinal))
+                                             .First(line => line.Length > 0)
                                              .Split(' ')[1]);
+
+            Byte[]? hostCertificateBlob = null;
+
+            if (WithHostCertificate)
+            {
+
+                var (read, certificateText, readError) = await WslInterop.RunAsync([
+                                                             "-e", "cat", $"{wslRoot}/hostkey-cert.pub"
+                                                         ], CancellationToken);
+
+                if (read != 0)
+                    Assert.Ignore($"Could not read the sshd host certificate: {readError}");
+
+                hostCertificateBlob = Convert.FromBase64String(certificateText.Trim().Split(' ')[1]);
+
+            }
 
             var subsystem = WithSftp ? "-o Subsystem=\"sftp /usr/lib/openssh/sftp-server\" " : "";
 
@@ -125,6 +147,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                              port =>
                                  $"$(mkdir -p /run/sshd 2>/dev/null; command -v sshd || echo /usr/sbin/sshd) -D -e -p {port} " +
                                  $"-h {wslRoot}/hostkey " +
+                                 (WithHostCertificate ? $"-o HostCertificate={wslRoot}/hostkey-cert.pub " : "") +
                                  $"-o AuthorizedKeysFile={wslRoot}/authorized_keys " +
                                  $"-o StrictModes=no -o UsePAM=no -o PidFile=none " +
                                  $"-o PasswordAuthentication=no -o KbdInteractiveAuthentication=no " +
@@ -133,7 +156,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                  $"-o ListenAddress=127.0.0.1",
                              CancellationToken);
 
-            return new Daemon(daemon, hostKeyBlob, userKey, wslRoot, windowsRoot);
+            return new Daemon(daemon, hostKeyBlob, userKey, wslRoot, windowsRoot, hostCertificateBlob);
 
         }
 
@@ -607,6 +630,56 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                 $"our client must complete {KeyExchange} with a real sshd.\n{daemon.Server.Output}");
                     Assert.That(algorithms.StrictKex, Is.True,
                                 "OpenSSH has offered strict KEX since 9.6, so the Terrapin countermeasure must be in force");
+                });
+
+                await pipe.Output.CompleteAsync();
+                await pipe.Input. CompleteAsync();
+
+            }
+            finally
+            {
+                await StopAsync(daemon);
+            }
+
+        }
+
+        #endregion
+
+        #region OurClient_VerifiesAnRsaHostCertificate_FromRealOpenSshServer
+
+        /// <summary>
+        /// sshd with an RSA host key and a <c>HostCertificate</c> for it, and our client asking for the
+        /// certificate under one SHA-2 algorithm: the exchange must agree on it, sshd must sign with that
+        /// hash, and our client - which now binds the signature to the negotiated algorithm - must accept
+        /// what it signed.
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        [TestCase(SshAlgorithmNames.HostKey.RsaSha2_512Cert)]
+        [TestCase(SshAlgorithmNames.HostKey.RsaSha2_256Cert)]
+        public async Task OurClient_VerifiesAnRsaHostCertificate_FromRealOpenSshServer(String Algorithm, CancellationToken CancellationToken)
+        {
+
+            var daemon = await StartSshdAsync(CancellationToken, HostKeyType: "rsa", WithHostCertificate: true);
+            var user   = await WhoAsync(CancellationToken);
+
+            try
+            {
+
+                var pipe = await SshTcp.ConnectAsync(new IPSocket(IPv4Address.Localhost, IPPort.Parse(daemon.Port)), CancellationToken);
+
+                using var transport = await SshTransport.ClientHandshakeAsync(
+                                          pipe,
+                                          VerifyHostKey:      blob => blob.AsSpan().SequenceEqual(daemon.HostCertificateBlob),
+                                          HostKeyAlgorithms:  [ Algorithm ],
+                                          CancellationToken:  CancellationToken);
+
+                var authenticated = await UserAuthentication.ClientAuthenticateAsync(transport, user, [ daemon.UserKey ], CancellationToken: CancellationToken);
+
+                Assert.Multiple(() => {
+                    Assert.That(transport.Algorithms.HostKey, Is.EqualTo(Algorithm), $"sshd log:\n{daemon.Server.Output}");
+                    Assert.That(transport.ServerHostKey,      Is.EqualTo(daemon.HostCertificateBlob), "the certificate is the host key");
+                    Assert.That(authenticated,                Is.True, $"sshd log:\n{daemon.Server.Output}");
                 });
 
                 await pipe.Output.CompleteAsync();
