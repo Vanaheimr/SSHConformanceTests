@@ -104,8 +104,17 @@ fail without the fix and a control proving the permitted case still works.
   wildcard (if the policy permits it), port 0 is allocated and reported (RFC 4254 §7.1), and
   `cancel-tcpip-forward` exists. Found by, and pinned in, `OpenSshForwardingInteropTests` — the first
   forwarding checks against a real peer.
-- ⬜ **`-R` on the client side:** `SshRemoteForwarding.RequestRemoteForwardAsync` does not return the port
-  the server allocated for port 0, and disposing its handle does not send `cancel-tcpip-forward`.
+- ✅ **`-R` on the client side** (Hermod PR #204): `RequestRemoteForwardAsync` returns an
+  `SshRemoteForward` that says which port the server chose for port 0 (`BoundPort`); `CancelAsync` sends
+  `cancel-tcpip-forward` and waits for the answer, disposing sends it without waiting. Before, the port was
+  dropped and the server listened on until the connection ended. Each `forwarded-tcpip` channel must now
+  name a forward this connection asked for — address as asked, bound port — as OpenSSH's client demands:
+  before, every forward took channels from one shared queue, so with two forwards a connection could come
+  out at the other one's target, and the server could reach a local target under any name. The channels
+  reach their forward through the multiplexer's new `ChannelResponder` slot, which hands a channel to its
+  feature instead of queueing it (the channel-open counterpart of `GlobalRequestResponder`). Pinned in
+  `OurClient_RemoteForwards_OnAnAllocatedPort_ThroughRealOpenSshServer` (`localhost`, `127.0.0.1`): sshd
+  chooses the port, a connection made on its side reaches our target, and after the cancel nothing listens.
 - ✅ **SFTP SETSTAT/FSETSTAT** (Hermod PR #178, `35dcc7c2`): the server answered both with OK and applied
   nothing, so `sftp put -p` and `chmod` "succeeded" without effect — and an upload-only session that
   preserves times was refused, since SETSTAT demanded every permission. Now size, times and the rwx bits

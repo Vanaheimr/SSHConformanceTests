@@ -403,6 +403,92 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
+        #region OurClient_RemoteForwards_OnAnAllocatedPort_ThroughRealOpenSshServer
+
+        /// <summary>
+        /// <c>ssh -R 0:host:port</c> from our client against the reference server: sshd chooses the port,
+        /// our client learns which, and a connection made on sshd's side comes out at a target on ours. Its
+        /// <c>forwarded-tcpip</c> channel has to name the forward exactly as asked for, or our client refuses
+        /// it. Cancelling sends <c>cancel-tcpip-forward</c>, and sshd stops listening.
+        /// </summary>
+        /// <remarks>
+        /// The connection on sshd's side is made by a command run over the same SSH connection, so it is
+        /// made where sshd listens whatever the WSL networking mode.
+        /// </remarks>
+        [TestCase("localhost")]
+        [TestCase("127.0.0.1")]
+        [CancelAfter(120000)]
+        public async Task OurClient_RemoteForwards_OnAnAllocatedPort_ThroughRealOpenSshServer(String BindHost, CancellationToken CancellationToken)
+        {
+
+            // sshd logs the global requests it serves at DEBUG1.
+            var daemon = await StartSshdAsync(CancellationToken, ExtraOptions: "-o LogLevel=DEBUG");
+            var user   = await WhoAsync(CancellationToken);
+
+            var target = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            target.Start();
+
+            _ = Task.Run(async () => {
+                try
+                {
+                    while (true)
+                    {
+                        using var connection = await target.AcceptTcpClientAsync(CancellationToken);
+                        await connection.GetStream().WriteAsync(System.Text.Encoding.UTF8.GetBytes(Marker), CancellationToken);
+                    }
+                }
+                catch { }
+            }, CancellationToken);
+
+            try
+            {
+
+                await using var client = await SshClient.ConnectAsync(
+                                             "127.0.0.1",
+                                             (UInt16) daemon.Port,
+                                             new SshClientOptions {
+                                                 Username      = user,
+                                                 Credentials   = [ daemon.UserKey ],
+                                                 VerifyHostKey = blob => blob.AsSpan().SequenceEqual(daemon.HostKeyBlob)
+                                             },
+                                             CancellationToken);
+
+                var forward = await SshRemoteForwarding.RequestRemoteForwardAsync(client.Multiplexer,
+                                                                                  BindHost,
+                                                                                  0,
+                                                                                  "127.0.0.1",
+                                                                                  (UInt16) ((System.Net.IPEndPoint) target.LocalEndpoint).Port,
+                                                                                  CancellationToken);
+
+                var connect = $"timeout 10 bash -c 'cat < /dev/tcp/127.0.0.1/{forward.BoundPort}'";
+
+                var through = await client.ExecuteAsync(connect, CancellationToken);
+
+                Assert.Multiple(() => {
+                    Assert.That(forward.BoundPort,      Is.Not.Zero,          "the port sshd chose");
+                    Assert.That(through.StandardOutput, Is.EqualTo(Marker),   $"a connection on sshd's side reached our target.\n{through.StandardError}\n{daemon.Server.Output}");
+                });
+
+                Assert.That(await forward.CancelAsync(CancellationToken), Is.True, $"sshd cancelled the forward.\n{daemon.Server.Output}");
+
+                var after = await client.ExecuteAsync(connect, CancellationToken);
+
+                Assert.Multiple(() => {
+                    Assert.That(after.ExitCode,         Is.Not.Zero,          $"nothing listens on a cancelled forward.\n{after.StandardOutput}");
+                    Assert.That(daemon.Server.Output,   Does.Contain("rtype cancel-tcpip-forward"));
+                });
+
+            }
+            finally
+            {
+                target.Stop();
+                await StopAsync(daemon);
+            }
+
+        }
+
+        #endregion
+
         #region OurClient_SeesRemoteExitStatus_FromRealOpenSshServer
 
         /// <summary>
