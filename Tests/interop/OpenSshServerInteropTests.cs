@@ -499,6 +499,55 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
+        #region OurClient_JumpsThroughRealOpenSshServer
+
+        /// <summary>
+        /// <c>ssh -J</c> from our client with sshd as every jump host and as the server: each hop is a
+        /// <c>direct-tcpip</c> tunnel sshd opens to itself, and the login at its end runs through it. The
+        /// jump hosts borrow the server's options, so one key and one host-key check serve every hop.
+        /// </summary>
+        [TestCase(1)]
+        [TestCase(2)]
+        [CancelAfter(120000)]
+        public async Task OurClient_JumpsThroughRealOpenSshServer(Int32 Hops, CancellationToken CancellationToken)
+        {
+
+            // sshd logs every direct-tcpip channel it opens at DEBUG1.
+            var daemon = await StartSshdAsync(CancellationToken, ExtraOptions: "-o LogLevel=DEBUG");
+            var user   = await WhoAsync(CancellationToken);
+
+            try
+            {
+
+                await using var client = await SshClient.ConnectAsync(
+                                             "127.0.0.1",
+                                             (UInt16) daemon.Port,
+                                             new SshClientOptions {
+                                                 Username       = user,
+                                                 Credentials    = [ daemon.UserKey ],
+                                                 VerifyHostKey  = blob => blob.AsSpan().SequenceEqual(daemon.HostKeyBlob),
+                                                 ProxyJump      = Enumerable.Repeat(new SshJumpHost("127.0.0.1", (UInt16) daemon.Port), Hops).ToArray()
+                                             },
+                                             CancellationToken);
+
+                var result = await client.ExecuteAsync($"echo {Marker}", CancellationToken);
+
+                Assert.Multiple(() => {
+                    Assert.That(result.StandardOutput.Trim(), Is.EqualTo(Marker), $"exec at the end of the chain.\n{result.StandardError}");
+                    Assert.That(Regex.Matches(daemon.Server.Output, "server_request_direct_tcpip").Count, Is.EqualTo(Hops),
+                                $"one tunnel per jump host.\n{daemon.Server.Output}");
+                });
+
+            }
+            finally
+            {
+                await StopAsync(daemon);
+            }
+
+        }
+
+        #endregion
+
         #region OurClient_RemoteForward_HalfCloses_ThroughRealOpenSshServer
 
         /// <summary>
