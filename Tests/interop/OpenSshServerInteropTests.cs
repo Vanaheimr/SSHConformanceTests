@@ -25,6 +25,7 @@ using NUnit.Framework;
 using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
 using org.GraphDefined.Vanaheimr.Hermod.SSH.Client;
+using org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP;
 
 #endregion
 
@@ -802,6 +803,82 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                     Assert.That(downloaded, Is.EqualTo(payload),
                                 $"the round-trip through OpenSSH's sftp-server must be byte-for-byte.\n{daemon.Server.Output}");
                     Assert.That(listing.Select(entry => entry.Name), Does.Contain("payload.bin"));
+                });
+
+            }
+            finally
+            {
+                await StopAsync(daemon);
+            }
+
+        }
+
+        #endregion
+
+        #region OurSftpClient_MakesSymlinksAndTruncates_WithRealSftpServer
+
+        /// <summary>
+        /// Our client's SYMLINK, READLINK, LSTAT and truncation through an open stream against OpenSSH's
+        /// <c>sftp-server</c>, checked from the shell on its side: <c>readlink</c> shows the link was made
+        /// with the arguments in OpenSSH's order, and <c>stat</c> that the file was cut to length.
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        public async Task OurSftpClient_MakesSymlinksAndTruncates_WithRealSftpServer(CancellationToken CancellationToken)
+        {
+
+            var daemon  = await StartSshdAsync(CancellationToken, WithSftp: true);
+            var user    = await WhoAsync(CancellationToken);
+
+            var payload = RandomNumberGenerator.GetBytes(10_000);
+            var data    = $"{daemon.WslRoot}/data.bin";
+            var link    = $"{daemon.WslRoot}/link.bin";
+
+            try
+            {
+
+                await using var client = await SshClient.ConnectAsync(
+                                             "127.0.0.1",
+                                             (UInt16) daemon.Port,
+                                             new SshClientOptions {
+                                                 Username      = user,
+                                                 Credentials   = [ daemon.UserKey ],
+                                                 VerifyHostKey = blob => blob.AsSpan().SequenceEqual(daemon.HostKeyBlob)
+                                             },
+                                             CancellationToken);
+
+                var sftp = await client.OpenSftpClientAsync(CancellationToken);
+
+                await sftp.UploadAsync(data, payload, CancellationToken);
+                await sftp.CreateSymbolicLinkAsync(link, "data.bin", CancellationToken);
+
+                var readLink  = await sftp.ReadLinkAsync(link, CancellationToken);
+                var lstat     = await sftp.LStatAsync(link, CancellationToken);
+                var stat      = await sftp.StatAsync(link, CancellationToken);
+                var through   = await sftp.DownloadAsync(link, CancellationToken);
+                var realLink  = await sftp.RealPathAsync(link, CancellationToken);
+                var realData  = await sftp.RealPathAsync(data, CancellationToken);
+                var onTheirs  = await client.ExecuteAsync($"readlink {link}", CancellationToken);
+
+                await using (var stream = await sftp.OpenFileStreamAsync(data, SftpOpenFlags.Read | SftpOpenFlags.Write, CancellationToken))
+                    await stream.SetLengthAsync(1_000, CancellationToken);
+
+                var size = await client.ExecuteAsync($"stat -c %s {data}", CancellationToken);
+
+                await sftp.RemoveAsync(link, CancellationToken);
+
+                var left = await client.ExecuteAsync($"ls {daemon.WslRoot}", CancellationToken);
+
+                Assert.Multiple(() => {
+                    Assert.That(onTheirs.StandardOutput.Trim(), Is.EqualTo("data.bin"), $"the link sshd made, as its shell sees it.\n{daemon.Server.Output}");
+                    Assert.That(readLink,                       Is.EqualTo("data.bin"));
+                    Assert.That(lstat.IsSymbolicLink,           Is.True,  "LSTAT shows the link");
+                    Assert.That(stat.IsSymbolicLink,            Is.False, "STAT shows the file");
+                    Assert.That(stat.Size,                      Is.EqualTo(payload.Length));
+                    Assert.That(through,                        Is.EqualTo(payload), "a download through the link");
+                    Assert.That(realLink,                       Is.EqualTo(realData), "REALPATH resolves the link");
+                    Assert.That(size.StandardOutput.Trim(),     Is.EqualTo("1000"),  "SetLength cut the file on sshd's side");
+                    Assert.That(left.StandardOutput,            Does.Contain("data.bin").And.Not.Contain("link.bin"), "REMOVE took the link, not the file");
                 });
 
             }
