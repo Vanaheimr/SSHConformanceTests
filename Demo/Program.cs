@@ -115,7 +115,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
                   serve      Run a demo SSH server (authorized_keys auth, exec + SFTP + forwarding) [ready]
                   connect    Open an interactive session (stdin/stdout streamed)                   [ready]
                   sftp       Transfer files over SFTP (ls / get / put)                             [ready]
-                  forward    Local port forwarding (ssh -L)                                        [ready]
+                  forward    Port forwarding, local (ssh -L) or remote (ssh -R)                    [ready]
                   play       Replay a recorded asciicast session                                  [ready]
 
                   help       Show this help
@@ -129,6 +129,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
                   hermod-ssh exec   -i ./id_ed25519 -p 2222 demo@127.0.0.1 "uname -a"
                   hermod-ssh sftp   -i ./id_ed25519 -p 2222 demo@127.0.0.1 put ./file.bin /file.bin
                   hermod-ssh forward -i ./id_ed25519 -p 2222 -L 15432:db.internal:5432 demo@127.0.0.1
+                  hermod-ssh forward -i ./id_ed25519 -p 2222 -R 8080:127.0.0.1:3000 demo@127.0.0.1
                   hermod-ssh play   ./session.cast --speed 2
                 """);
 
