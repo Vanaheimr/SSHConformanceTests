@@ -119,14 +119,20 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// <summary>
         /// Start our server on every interface and work out the address the peer must dial.
         /// </summary>
+        /// <param name="UserKey">The client's key, when a test has to certify it first.</param>
+        /// <param name="Authenticator">Who may log in, instead of exactly the client's key.</param>
+        /// <param name="HostKeys">What the server presents, instead of a plain Ed25519 key.</param>
         private static async Task<(SshServer Server, String Host, Int32 Port, ISshHostKey HostKey, String KeyPathWsl, String WindowsRoot, RecordingAuditSink Audit)>
-            StartAsync(CancellationToken CancellationToken)
+            StartAsync(CancellationToken            CancellationToken,
+                       ISshHostKey?                 UserKey        = null,
+                       ISshUserAuthenticator?       Authenticator  = null,
+                       IReadOnlyList<ISshHostKey>?  HostKeys       = null)
         {
 
             SkipIfUnavailable();
 
             var hostKey     = SshHostKey.GenerateEd25519();
-            var userKey     = SshHostKey.GenerateEd25519();
+            var userKey     = UserKey ?? SshHostKey.GenerateEd25519();
             var windowsRoot = Path.Combine(Path.GetTempPath(), "hermod_go_" + Guid.NewGuid().ToString("N"));
 
             Directory.CreateDirectory(windowsRoot);
@@ -135,8 +141,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var audit  = new RecordingAuditSink();
 
             var server = new SshServer(new SshServerOptions {
-                             HostKeys      = [ hostKey ],
-                             Authenticator = SshUserAuthenticator.ForAuthorizedKeys(userKey.PublicKeyBlob),
+                             HostKeys      = HostKeys ?? [ hostKey ],
+                             Authenticator = Authenticator ?? SshUserAuthenticator.ForAuthorizedKeys(userKey.PublicKeyBlob),
                              AuditSink     = audit,
                              ExecHandler   = async (context, ct) => {
                                                  await context.WriteAsync($"hermod ran: {context.Command}\n", ct);
@@ -243,6 +249,155 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                     Assert.That(result.StdOut, Is.EqualTo("hermod ran: pq\n"),
                                 "traffic after NEWKEYS must decrypt, which only holds if the shared secret matches");
                 });
+
+            }
+            finally
+            {
+                await server.DisposeAsync();
+                try { Directory.Delete(windowsRoot, recursive: true); } catch { }
+            }
+
+        }
+
+        #endregion
+
+        #region GoCrypto_LogsInWithOurUserCertificate
+
+        /// <summary>
+        /// Go logs in with a user certificate our mini-CA issued (<c>NewCertSigner</c>): x/crypto parses our
+        /// certificate format, and our server lets it in on the strength of the CA alone. Without the
+        /// certificate the same key is turned away.
+        /// </summary>
+        [Test]
+        [CancelAfter(180000)]
+        public async Task GoCrypto_LogsInWithOurUserCertificate(CancellationToken CancellationToken)
+        {
+
+            var ca      = SshHostKey.GenerateEd25519();
+            var userKey = SshHostKey.GenerateEd25519();
+
+            var (server, host, port, hostKey, keyPath, windowsRoot, audit) =
+                await StartAsync(CancellationToken,
+                                 UserKey:        userKey,
+                                 Authenticator:  new SshAuthenticationPolicy().WithCertificateAuthority(new SshCertificateAuthorityTrust().TrustCA(ca)));
+
+            try
+            {
+
+                var certPath = Path.Combine(windowsRoot, "user-cert.pub");
+                await File.WriteAllTextAsync(certPath, InteropCertificates.CertificateLine(InteropCertificates.User(userKey, ca, "hermoduser")) + "\n", CancellationToken);
+
+                var withCertificate = Configuration("exec", host, port, keyPath, hostKey);
+                withCertificate["command"]   = "whoami";
+                withCertificate["cert_path"] = WslInterop.ToWslPath(certPath);
+
+                var withoutCertificate = Configuration("exec", host, port, keyPath, hostKey);
+                withoutCertificate["command"] = "whoami";
+
+                var certified = await RunAsync(withCertificate,    CancellationToken);
+                var plain     = await RunAsync(withoutCertificate, CancellationToken);
+
+                Assert.Multiple(() => {
+                    Assert.That(certified.Ok,     Is.True,  $"Go could not log in with our certificate.\n{certified.FailureReport}\n--- our server's audit ---\n{audit.Report}");
+                    Assert.That(certified.StdOut, Is.EqualTo("hermod ran: whoami\n"));
+                    Assert.That(plain.Ok,         Is.False, "the key without its certificate is not let in");
+                });
+
+            }
+            finally
+            {
+                await server.DisposeAsync();
+                try { Directory.Delete(windowsRoot, recursive: true); } catch { }
+            }
+
+        }
+
+        #endregion
+
+        #region GoCrypto_LogsInWithACertificateItIssued
+
+        /// <summary>
+        /// Go signs a user certificate itself (<c>Certificate.SignCert</c>) with a CA key our generator
+        /// wrote, and logs in with it: our server validates a certificate from another implementation's
+        /// issuer - and turns it away when it names somebody else.
+        /// </summary>
+        [TestCase("hermoduser",   true)]
+        [TestCase("someone-else", false)]
+        [CancelAfter(180000)]
+        public async Task GoCrypto_LogsInWithACertificateItIssued(String Principal, Boolean LetIn, CancellationToken CancellationToken)
+        {
+
+            var ca = SshHostKey.GenerateEd25519();
+
+            var (server, host, port, hostKey, keyPath, windowsRoot, audit) =
+                await StartAsync(CancellationToken,
+                                 Authenticator: new SshAuthenticationPolicy().WithCertificateAuthority(new SshCertificateAuthorityTrust().TrustCA(ca)));
+
+            try
+            {
+
+                var caPath = Path.Combine(windowsRoot, "ca");
+                await SshKeyGenerator.WriteKeyPairAsync(ca, caPath, "interop-ca", CancellationToken);
+
+                var configuration = Configuration("exec", host, port, keyPath, hostKey);
+                configuration["command"]            = "whoami";
+                configuration["issue_with_ca_path"] = WslInterop.ToWslPath(caPath);
+                configuration["principals"]         = new[] { Principal };
+
+                var result = await RunAsync(configuration, CancellationToken);
+
+                Assert.That(result.Ok, Is.EqualTo(LetIn),
+                            $"a certificate Go issued for '{Principal}'.\n{result.FailureReport}\n--- our server's audit ---\n{audit.Report}");
+
+            }
+            finally
+            {
+                await server.DisposeAsync();
+                try { Directory.Delete(windowsRoot, recursive: true); } catch { }
+            }
+
+        }
+
+        #endregion
+
+        #region GoCrypto_VerifiesOurHostCertificate
+
+        /// <summary>
+        /// Our server presents a host certificate our mini-CA issued, and Go trusts nothing but that CA
+        /// (<c>CertChecker.IsHostAuthority</c>): it accepts the certificate for the address it dialled, and
+        /// refuses one issued for another name.
+        /// </summary>
+        [TestCase(true)]
+        [TestCase(false)]
+        [CancelAfter(180000)]
+        public async Task GoCrypto_VerifiesOurHostCertificate(Boolean ForTheDialledAddress, CancellationToken CancellationToken)
+        {
+
+            SkipIfUnavailable();
+
+            var dialled = await WslInterop.ResolveWindowsHostAsync(CancellationToken);
+            if (dialled is null)
+                Assert.Ignore("WSL cannot reach a listener on the Windows host.");
+
+            var ca          = SshHostKey.GenerateEd25519();
+            var certified   = InteropCertificates.Host(SshHostKey.GenerateEd25519(), ca, ForTheDialledAddress ? dialled! : "elsewhere.example.org");
+
+            var (server, host, port, hostKey, keyPath, windowsRoot, _) =
+                await StartAsync(CancellationToken, HostKeys: [ certified ]);
+
+            try
+            {
+
+                var configuration = Configuration("connect", host, port, keyPath, hostKey);
+                configuration["host_ca_b64"] = Convert.ToBase64String(ca.PublicKeyBlob);
+
+                var result = await RunAsync(configuration, CancellationToken);
+
+                TestContext.Out.WriteLine(result.Ok ? "Go accepted our host certificate"
+                                                    : $"Go refused it: {result.ErrorType}: {result.Error}");
+
+                Assert.That(result.Ok, Is.EqualTo(ForTheDialledAddress),
+                            $"our host certificate for {(ForTheDialledAddress ? host : "another name")}.\n{result.FailureReport}");
 
             }
             finally

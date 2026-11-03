@@ -17,11 +17,16 @@
 #   command                        (exec)
 #   upload_path, download_path, remote_path   (sftp)
 #   kex_algs, encryption_algs      (optional lists constraining what the peer offers)
+#   cert_path                      (optional) log in with this OpenSSH certificate for the key
+#   issue_with_ca_path, principals (optional) issue a user certificate for the key with this CA
+#                                  private key, as AsyncSSH does, and log in with it
+#   A host certificate is checked through known_hosts: an @cert-authority line trusts the CA.
 
 import asyncio
 import json
 import logging
 import sys
+import time
 import traceback
 
 import asyncssh
@@ -93,6 +98,20 @@ async def _run(config, result):
         options["kex_algs"] = config["kex_algs"]
     if config.get("encryption_algs"):
         options["encryption_algs"] = config["encryption_algs"]
+
+    # A certificate we issued, or one AsyncSSH issues itself - the key alone is not offered then.
+    if config.get("cert_path"):
+        options["client_keys"] = [(config["key_path"], config["cert_path"])]
+    elif config.get("issue_with_ca_path"):
+        ca   = asyncssh.read_private_key(config["issue_with_ca_path"])
+        user = asyncssh.read_private_key(config["key_path"])
+        now  = int(time.time())
+        cert = ca.generate_user_certificate(user.convert_to_public(), "issued-by-asyncssh",
+                                            serial       = 4711,
+                                            principals   = config.get("principals", []),
+                                            valid_after  = now - 3600,
+                                            valid_before = now + 3600)
+        options["client_keys"] = [(user, cert)]
 
     result["stage"] = "connecting"
 

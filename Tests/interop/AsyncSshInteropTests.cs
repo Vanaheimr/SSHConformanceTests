@@ -90,15 +90,23 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// <param name="TrustedHostKey">
         /// The host key to write into known_hosts — pass a foreign key to test rejection.
         /// </param>
-        private static async Task<Fixture> StartAsync(CancellationToken   CancellationToken,
-                                                      ISftpFileSystem?    FileSystem      = null,
-                                                      ISshHostKey?        TrustedHostKey  = null)
+        /// <param name="UserKey">The client's key, when a test has to certify it first.</param>
+        /// <param name="Authenticator">Who may log in, instead of exactly the client's key.</param>
+        /// <param name="HostKeys">What the server presents, instead of a plain Ed25519 key.</param>
+        /// <param name="KnownHosts">The whole known_hosts file, instead of the server's key for its address.</param>
+        private static async Task<Fixture> StartAsync(CancellationToken            CancellationToken,
+                                                      ISftpFileSystem?             FileSystem      = null,
+                                                      ISshHostKey?                 TrustedHostKey  = null,
+                                                      ISshHostKey?                 UserKey         = null,
+                                                      ISshUserAuthenticator?       Authenticator   = null,
+                                                      IReadOnlyList<ISshHostKey>?  HostKeys        = null,
+                                                      String?                      KnownHosts      = null)
         {
 
             WslInterop.SkipIfUnavailable();
 
             var hostKey = SshHostKey.GenerateEd25519();
-            var userKey = SshHostKey.GenerateEd25519();
+            var userKey = UserKey ?? SshHostKey.GenerateEd25519();
 
             var keyPath    = Path.Combine(Path.GetTempPath(), "hermod_asyncssh_" + Guid.NewGuid().ToString("N"));
             var knownHosts = keyPath + ".known_hosts";
@@ -108,8 +116,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var audit  = new RecordingAuditSink();
 
             var server = new SshServer(new SshServerOptions {
-                             HostKeys        = [ hostKey ],
-                             Authenticator   = SshUserAuthenticator.ForAuthorizedKeys(userKey.PublicKeyBlob),
+                             HostKeys        = HostKeys ?? [ hostKey ],
+                             Authenticator   = Authenticator ?? SshUserAuthenticator.ForAuthorizedKeys(userKey.PublicKeyBlob),
                              SftpFileSystem  = FileSystem,
                              AuditSink       = audit,
                              ExecHandler     = async (context, ct) => {
@@ -131,7 +139,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var trusted = TrustedHostKey ?? hostKey;
             await File.WriteAllTextAsync(knownHosts,
-                                         $"[{host}]:{port} ssh-ed25519 {Convert.ToBase64String(trusted.PublicKeyBlob)}\n",
+                                         KnownHosts ?? $"[{host}]:{port} ssh-ed25519 {Convert.ToBase64String(trusted.PublicKeyBlob)}\n",
                                          CancellationToken);
 
             return new Fixture(server,
@@ -287,6 +295,148 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             {
                 try { File.Delete(uploadPath);   } catch { }
                 try { File.Delete(downloadPath); } catch { }
+                await StopAsync(fixture);
+            }
+
+        }
+
+        #endregion
+
+        #region AsyncSsh_LogsInWithOurUserCertificate
+
+        /// <summary>
+        /// AsyncSSH logs in with a user certificate our mini-CA issued: it reads our certificate format and
+        /// sends it, and our server lets it in on the strength of the CA alone. Without the certificate the
+        /// same key is turned away - our server knows no plain key.
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        public async Task AsyncSsh_LogsInWithOurUserCertificate(CancellationToken CancellationToken)
+        {
+
+            var ca       = SshHostKey.GenerateEd25519();
+            var userKey  = SshHostKey.GenerateEd25519();
+            var fixture  = await StartAsync(CancellationToken,
+                                            UserKey:        userKey,
+                                            Authenticator:  new SshAuthenticationPolicy().WithCertificateAuthority(new SshCertificateAuthorityTrust().TrustCA(ca)));
+            var certPath = Path.Combine(Path.GetTempPath(), "hermod_asyncssh_" + Guid.NewGuid().ToString("N") + "-cert.pub");
+
+            try
+            {
+
+                await File.WriteAllTextAsync(certPath, InteropCertificates.CertificateLine(InteropCertificates.User(userKey, ca, "hermoduser")) + "\n", CancellationToken);
+
+                var withCertificate = fixture.BaseConfiguration("exec");
+                withCertificate["command"]   = "whoami";
+                withCertificate["cert_path"] = WslInterop.ToWslPath(certPath);
+
+                var withoutCertificate = fixture.BaseConfiguration("exec");
+                withoutCertificate["command"] = "whoami";
+
+                var certified = await RunAsync(withCertificate,    CancellationToken);
+                var plain     = await RunAsync(withoutCertificate, CancellationToken);
+
+                Assert.Multiple(() => {
+                    Assert.That(certified.Ok,     Is.True,  $"AsyncSSH could not log in with our certificate.\n{certified.FailureReport}\n--- our server's audit ---\n{fixture.Audit.Report}");
+                    Assert.That(certified.StdOut, Is.EqualTo("hermod ran: whoami\n"));
+                    Assert.That(plain.Ok,         Is.False, "the key without its certificate is not let in");
+                });
+
+            }
+            finally
+            {
+                try { File.Delete(certPath); } catch { }
+                await StopAsync(fixture);
+            }
+
+        }
+
+        #endregion
+
+        #region AsyncSsh_LogsInWithACertificateItIssued
+
+        /// <summary>
+        /// AsyncSSH issues a user certificate itself, with a CA key our generator wrote, and logs in with
+        /// it: our server validates a certificate from another implementation's issuer - and turns it away
+        /// when it names somebody else.
+        /// </summary>
+        [TestCase("hermoduser",   true)]
+        [TestCase("someone-else", false)]
+        [CancelAfter(120000)]
+        public async Task AsyncSsh_LogsInWithACertificateItIssued(String Principal, Boolean LetIn, CancellationToken CancellationToken)
+        {
+
+            var ca      = SshHostKey.GenerateEd25519();
+            var fixture = await StartAsync(CancellationToken,
+                                           Authenticator: new SshAuthenticationPolicy().WithCertificateAuthority(new SshCertificateAuthorityTrust().TrustCA(ca)));
+            var caPath  = Path.Combine(Path.GetTempPath(), "hermod_asyncssh_ca_" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+
+                await SshKeyGenerator.WriteKeyPairAsync(ca, caPath, "interop-ca", CancellationToken);
+
+                var configuration = fixture.BaseConfiguration("exec");
+                configuration["command"]            = "whoami";
+                configuration["issue_with_ca_path"] = WslInterop.ToWslPath(caPath);
+                configuration["principals"]         = new[] { Principal };
+
+                var result = await RunAsync(configuration, CancellationToken);
+
+                Assert.That(result.Ok, Is.EqualTo(LetIn),
+                            $"a certificate AsyncSSH issued for '{Principal}'.\n{result.FailureReport}\n--- our server's audit ---\n{fixture.Audit.Report}");
+
+            }
+            finally
+            {
+                try { File.Delete(caPath);          } catch { }
+                try { File.Delete(caPath + ".pub"); } catch { }
+                await StopAsync(fixture);
+            }
+
+        }
+
+        #endregion
+
+        #region AsyncSsh_VerifiesOurHostCertificate
+
+        /// <summary>
+        /// Our server presents a host certificate our mini-CA issued, and AsyncSSH trusts nothing but that
+        /// CA (an <c>@cert-authority</c> line): it accepts the certificate for the address it dialled, and
+        /// refuses one issued for another name.
+        /// </summary>
+        [TestCase(true)]
+        [TestCase(false)]
+        [CancelAfter(120000)]
+        public async Task AsyncSsh_VerifiesOurHostCertificate(Boolean ForTheDialledAddress, CancellationToken CancellationToken)
+        {
+
+            WslInterop.SkipIfUnavailable();
+
+            var host = await WslInterop.ResolveWindowsHostAsync(CancellationToken);
+            if (host is null)
+                Assert.Ignore("WSL cannot reach a listener on the Windows host.");
+
+            var ca      = SshHostKey.GenerateEd25519();
+            var hostKey = InteropCertificates.Host(SshHostKey.GenerateEd25519(), ca, ForTheDialledAddress ? host! : "elsewhere.example.org");
+            var fixture = await StartAsync(CancellationToken,
+                                           HostKeys:   [ hostKey ],
+                                           KnownHosts: $"@cert-authority * {InteropCertificates.PublicKeyLine(ca)}\n");
+
+            try
+            {
+
+                var result = await RunAsync(fixture.BaseConfiguration("connect"), CancellationToken);
+
+                TestContext.Out.WriteLine(result.Ok ? $"AsyncSSH accepted our host certificate — {result.AlgorithmSummary}"
+                                                    : $"AsyncSSH refused it: {result.ErrorType}: {result.Error}");
+
+                Assert.That(result.Ok, Is.EqualTo(ForTheDialledAddress),
+                            $"our host certificate for {(ForTheDialledAddress ? host : "another name")}.\n{result.FailureReport}");
+
+            }
+            finally
+            {
                 await StopAsync(fixture);
             }
 
