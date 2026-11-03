@@ -257,6 +257,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         private static String? resolvedHost;
         private static readonly SemaphoreSlim resolveLock = new (1, 1);
 
+        // The first probe of a run may meet a WSL that is still starting, and then neither address
+        // answers for a moment although nothing is blocked: it read as a firewall problem and skipped
+        // the first WSL test of a run, while every later one passed. So the first probe gets a few
+        // more tries; later ones stay single, so a machine that really is blocked does not pay this
+        // for every test.
+        private static Boolean firstProbeDone;
+        private const Int32 FirstProbeAttempts = 5;
+        private static readonly TimeSpan firstProbeRetryDelay = TimeSpan.FromSeconds(1);
+
         // One identifier per test-host process, and a directory of its own for the peers it starts. A
         // second test run on this machine gets a different one, which is what lets InteropPeerCleanup
         // sweep our leftovers without touching peers that another run is still using.
@@ -549,6 +558,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// default gateway (correct under the default NAT networking). Returns <c>null</c> when neither
         /// answers — which on an otherwise healthy machine means the Windows firewall is blocking the
         /// test listener, an environment problem that must not be reported as an interop failure.
+        /// The first probe of a run is tried several times, because a WSL that is still starting does
+        /// not answer either.
         /// </para>
         /// </summary>
         public static async Task<String?> ResolveWindowsHostAsync(CancellationToken CancellationToken)
@@ -594,13 +605,24 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                               exit 1
                               """;
 
-                var (exitCode, stdout, _) = await RunAsync(["-e", "bash", "-c", probe], CancellationToken).ConfigureAwait(false);
+                var attempts = firstProbeDone ? 1 : FirstProbeAttempts;
+                firstProbeDone = true;
+
+                for (var attempt = 1; attempt <= attempts && resolvedHost is null; attempt++)
+                {
+
+                    if (attempt > 1)
+                        await Task.Delay(firstProbeRetryDelay, CancellationToken).ConfigureAwait(false);
+
+                    var (exitCode, stdout, _) = await RunAsync(["-e", "bash", "-c", probe], CancellationToken).ConfigureAwait(false);
+
+                    if (exitCode == 0)
+                        resolvedHost = stdout.Trim();
+
+                }
 
                 probeListener.Stop();
                 await accepting.ConfigureAwait(false);
-
-                if (exitCode == 0)
-                    resolvedHost = stdout.Trim();
 
                 return resolvedHost;
 
