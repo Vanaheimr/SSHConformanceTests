@@ -122,8 +122,24 @@ fail without the fix and a control proving the permitted case still works.
   refused with OP_UNSUPPORTED, a request applies in full or not at all, SETSTAT needs `Write`, and STAT
   reports the real mode. `SftpClient.SetAttributesAsync` sends it. Pinned against the real `sftp` by
   `OpenSshSftpInteropTests.RealSftpClient_PreservesTimesAndSetsPermissions_OnOurServer`.
-- ⬜ **SFTP, the rest:** READLINK/SYMLINK are not implemented and LSTAT is treated as STAT; the client has no
-  readlink/symlink/realpath, and `SftpFileStream.SetLength` is unsupported.
+- ✅ **SFTP symbolic links and truncation** (Hermod PR #214): SYMLINK, READLINK and LSTAT on both
+  sides (`ISftpFileSystem.LStatAsync`/`ReadLinkAsync`/`CreateSymbolicLinkAsync`, defaulting to STAT and to
+  "unsupported" for a store without links), `SftpClient.RealPathAsync`, and `SftpFileStream.SetLength`
+  through FSETSTAT. SYMLINK takes its arguments in OpenSSH's order, target first, against the draft's. A
+  listing shows links as links; REMOVE and RENAME act on the link, RMDIR refuses one; a link counts against
+  the file-count quota and needs the Create permission.
+  - **Security fix in the root jail:** `LocalSftpFileSystem` checked paths only as written and let the
+    operating system follow links, so a link inside the root leading out of it - put there by anyone -
+    opened the jail for reading, writing and listing. Links are now followed by the jail itself, every
+    hop checked against the root, with a loop limit of 40; one that leads out is refused, READLINK does
+    not show where, and the link itself can still be looked at and removed. A client can only make links
+    into the root, stored relative to the link. Not covered: another process swapping a directory on the
+    path for a link between the check and the open.
+  - Hermetic in `SftpSymlinkTests` (each guarantee checked to fail without its code: the jail, the target
+    check, REMOVE on the link); against real peers in `RealSftpClient_MakesAndFollowsSymlinks_OnOurServer`
+    (`ln -s`, `get` through the link, `rm`) and `OurSftpClient_MakesSymlinksAndTruncates_WithRealSftpServer`
+    (`readlink` and `stat` on sshd's side) - which alone catch a swapped argument order, since our own
+    client and server would agree on it.
 - ⬜ **Private keys:** encrypted openssh-key-v1 is read only with `aes256-ctr` (ssh-keygen's default); an
   Ed25519 key in PKCS#8 PEM is not imported.
 - ✅ **Façade logs in with a password and keyboard-interactive** (Hermod PR #183): `SshClientOptions.Password`
