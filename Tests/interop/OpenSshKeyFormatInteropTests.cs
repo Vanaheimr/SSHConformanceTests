@@ -282,6 +282,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 var loaded   = SshKeyGenerator.LoadPrivateKey(await File.ReadAllTextAsync(Encrypted ? sealedUp : plain, CancellationToken),
                                                               Encrypted ? passphrase : null);
 
+                // The fixture is OpenSSH's by name, the peer here is OpenSSL.
+                TestContext.Out.WriteLine("INTEROP-MATRIX: peer=OpenSSL feature=Key formats (openssh-key-v1, PEM)");
+
                 Assert.That(loaded.Key.PublicKeyBlob, Is.EqualTo(expected), "the key openssl generated");
 
             }

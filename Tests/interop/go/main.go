@@ -20,6 +20,12 @@
 //	issue_with_ca_path  issue a user certificate for the key with this CA private key, as Go does, and log in with it
 //	principals          the principals of that certificate
 //	host_ca_b64         instead of pinning host_key_b64, accept a host certificate signed by this CA for the dialled host
+//
+// SFTP (action "sftp", github.com/pkg/sftp with concurrent reads and writes):
+//
+//	upload_path         the local file to upload
+//	download_path       where to download it back to, through a symbolic link
+//	remote_dir          the remote directory to work in (created)
 package main
 
 import (
@@ -31,6 +37,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -48,6 +55,9 @@ type config struct {
 	IssueWithCA    string   `json:"issue_with_ca_path"`
 	Principals     []string `json:"principals"`
 	HostCABase64   string   `json:"host_ca_b64"`
+	UploadPath     string   `json:"upload_path"`
+	DownloadPath   string   `json:"download_path"`
+	RemoteDir      string   `json:"remote_dir"`
 }
 
 type result struct {
@@ -58,8 +68,9 @@ type result struct {
 	StdOut        *string `json:"stdout"`
 	StdErr        *string `json:"stderr"`
 	ExitStatus    *int    `json:"exit_status"`
-	PeerVersion   string  `json:"peer_version"`
-	ServerVersion *string `json:"server_version"`
+	PeerVersion   string   `json:"peer_version"`
+	ServerVersion *string  `json:"server_version"`
+	Listing       []string `json:"listing"`
 }
 
 func text(value string) *string { return &value }
@@ -148,12 +159,131 @@ func run(cfg config, out *result) error {
 		zero := 0
 		out.ExitStatus = &zero
 
+	case "sftp":
+		if err := runSftp(cfg, client, out); err != nil {
+			return err
+		}
+
 	default:
 		return fmt.Errorf("unknown action %q", cfg.Action)
 	}
 
 	out.Stage = "done"
 	return nil
+}
+
+// runSftp drives pkg/sftp the way it is used in practice: many requests in flight on one file, their
+// answers taken in whatever order they come. The upload is renamed, linked to, read back through the
+// link and listed; the link is removed again. What pkg/sftp saw goes to stdout as key=value lines.
+func runSftp(cfg config, client *ssh.Client, out *result) error {
+
+	out.Stage = "sftp-open"
+
+	sc, err := sftp.NewClient(client,
+		sftp.UseConcurrentWrites(true),
+		sftp.UseConcurrentReads(true),
+		sftp.MaxConcurrentRequestsPerFile(64))
+	if err != nil {
+		return err
+	}
+	defer sc.Close()
+
+	dir := cfg.RemoteDir
+
+	out.Stage = "sftp-mkdir"
+	if err := sc.Mkdir(dir); err != nil {
+		return err
+	}
+
+	out.Stage = "sftp-put"
+	if err := upload(sc, cfg.UploadPath, dir+"/upload.bin"); err != nil {
+		return err
+	}
+
+	out.Stage = "sftp-rename"
+	if err := sc.Rename(dir+"/upload.bin", dir+"/data.bin"); err != nil {
+		return err
+	}
+
+	out.Stage = "sftp-symlink"
+	if err := sc.Symlink("data.bin", dir+"/link.bin"); err != nil {
+		return err
+	}
+
+	target, err := sc.ReadLink(dir + "/link.bin")
+	if err != nil {
+		return err
+	}
+
+	linkInfo, err := sc.Lstat(dir + "/link.bin")
+	if err != nil {
+		return err
+	}
+
+	dataInfo, err := sc.Stat(dir + "/link.bin")
+	if err != nil {
+		return err
+	}
+
+	out.Stage = "sftp-get"
+	if err := download(sc, dir+"/link.bin", cfg.DownloadPath); err != nil {
+		return err
+	}
+
+	out.Stage = "sftp-list"
+	entries, err := sc.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		out.Listing = append(out.Listing, entry.Name())
+	}
+
+	out.Stage = "sftp-remove"
+	if err := sc.Remove(dir + "/link.bin"); err != nil {
+		return err
+	}
+
+	out.StdOut = text(fmt.Sprintf("readlink=%s\nlstat_symlink=%t\nstat_size=%d\n",
+		target, linkInfo.Mode()&os.ModeSymlink != 0, dataInfo.Size()))
+
+	return nil
+}
+
+// upload goes through ReadFrom, which writes concurrently when it knows the size.
+func upload(sc *sftp.Client, local, remote string) error {
+	src, err := os.Open(local)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := sc.Create(remote)
+	if err != nil {
+		return err
+	}
+	if _, err := dst.ReadFrom(src); err != nil {
+		dst.Close()
+		return err
+	}
+	return dst.Close()
+}
+
+// download goes through WriteTo, which reads concurrently.
+func download(sc *sftp.Client, remote, local string) error {
+	src, err := sc.Open(remote)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.Create(local)
+	if err != nil {
+		return err
+	}
+	if _, err := src.WriteTo(dst); err != nil {
+		dst.Close()
+		return err
+	}
+	return dst.Close()
 }
 
 // certify pairs the key with a user certificate: one we issued (cert_path), or one Go issues itself

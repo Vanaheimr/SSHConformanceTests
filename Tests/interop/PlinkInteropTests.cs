@@ -17,10 +17,13 @@
 
 #region Usings
 
+using System.Security.Cryptography;
+
 using NUnit.Framework;
 
 using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
+using org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP;
 using org.GraphDefined.Vanaheimr.Hermod.SSH.Server;
 
 #endregion
@@ -420,6 +423,112 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             }
             finally
             {
+                await CleanupAsync(workspace);
+            }
+
+        }
+
+        #endregion
+
+        #region Psftp_TransfersAndManagesFiles_OnOurServer
+
+        /// <summary>
+        /// PuTTY's <c>psftp</c> - a third SFTP client lineage beside OpenSSH's <c>sftp</c> and Paramiko -
+        /// against our SFTP subsystem, in one batch: <c>mkdir</c>, a multi-chunk <c>put</c>, <c>ls</c>,
+        /// <c>mv</c>, <c>get</c>, <c>rm</c>, <c>chmod</c>, and <c>reput</c>, which resumes an interrupted
+        /// upload: it asks the size of what is there and writes on from that offset. What landed on our disk
+        /// is checked, not merely that psftp exited 0.
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        public async Task Psftp_TransfersAndManagesFiles_OnOurServer(CancellationToken CancellationToken)
+        {
+
+            var (workspace, userKey) = await PrepareAsync(CancellationToken);
+
+            var (present, _, _) = await WslInterop.RunAsync(["-e", "bash", "-c", "command -v psftp >/dev/null"], CancellationToken);
+            if (present != 0)
+                Assert.Ignore("psftp is not installed inside WSL — run interop/setup-wsl.sh.");
+
+            var root     = Path.Combine(workspace.WindowsRoot, "root");
+            var content  = RandomNumberGenerator.GetBytes(300_000);   // many SFTP packets
+            Directory.CreateDirectory(root);
+
+            await File.WriteAllBytesAsync(Path.Combine(workspace.WindowsRoot, "upload.bin"), content,               CancellationToken);
+            await File.WriteAllBytesAsync(Path.Combine(workspace.WindowsRoot, "half.bin"),   content[..100_000],    CancellationToken);
+
+            var staging  = WslInterop.ToWslPath(workspace.WindowsRoot);
+
+            // psftp stops at the first command that fails, so a clean exit means every one of them worked.
+            await File.WriteAllTextAsync(Path.Combine(workspace.WindowsRoot, "batch.txt"),
+                                         "mkdir /incoming\n" +
+                                         $"put {staging}/upload.bin /incoming/device.bin\n" +
+                                         "ls /incoming\n" +
+                                         "mv /incoming/device.bin /incoming/renamed.bin\n" +
+                                         $"get /incoming/renamed.bin {staging}/back.bin\n" +
+                                         $"put {staging}/upload.bin /incoming/gone.bin\n" +
+                                         "rm /incoming/gone.bin\n" +
+                                         $"put {staging}/half.bin /incoming/resumed.bin\n" +
+                                         $"reput {staging}/upload.bin /incoming/resumed.bin\n" +
+                                         "chmod 444 /incoming/renamed.bin\n",
+                                         CancellationToken);
+
+            var hostKey = SshHostKey.GenerateEd25519();
+            var audit   = new RecordingAuditSink();
+
+            var server  = new SshServer(new SshServerOptions {
+                              HostKeys        = [ hostKey ],
+                              Authenticator   = SshUserAuthenticator.ForAuthorizedKeys(userKey.PublicKeyBlob),
+                              AuditSink       = audit,
+                              SftpFileSystem  = new LocalSftpFileSystem(root)
+                          });
+
+            try
+            {
+
+                await server.StartAsync(new IPSocket(IPv4Address.Any, IPPort.Auto), CancellationToken);
+                var port = server.LocalEndPoint.Port.ToInt32();
+
+                var host = await WslInterop.ResolveWindowsHostAsync(CancellationToken);
+                if (host is null)
+                    Assert.Ignore($"WSL cannot reach the test listener on port {port} — check the Windows firewall.");
+
+                var (exitCode, stdout, stderr) = await WslInterop.RunAsync([
+                                                     "-e", "env", $"HOME={workspace.WslHome}",
+                                                     "psftp", "-batch",
+                                                     "-i", workspace.WslPpk,
+                                                     "-P", port.ToString(),
+                                                     "-hostkey", SshFingerprint.Sha256(hostKey.PublicKeyBlob),
+                                                     "-b", $"{staging}/batch.txt",
+                                                     $"hermoduser@{host}"
+                                                 ], CancellationToken);
+
+                var renamed = Path.Combine(root, "incoming", "renamed.bin");
+
+                Assert.Multiple(() => {
+
+                    Assert.That(exitCode, Is.EqualTo(0), $"every psftp command must succeed.\npsftp stdout:\n{stdout}\npsftp stderr:\n{stderr}\n--- our server's audit ---\n{audit.Report}");
+                    Assert.That(stdout,   Does.Contain("device.bin"), "ls lists the uploaded file");
+
+                    Assert.That(File.ReadAllBytes(renamed),                                              Is.EqualTo(content), "put and mv landed the bytes");
+                    Assert.That(File.ReadAllBytes(Path.Combine(workspace.WindowsRoot, "back.bin")),      Is.EqualTo(content), "get read them back");
+                    Assert.That(File.Exists(Path.Combine(root, "incoming", "device.bin")),                Is.False,            "mv moved, not copied");
+                    Assert.That(File.Exists(Path.Combine(root, "incoming", "gone.bin")),                  Is.False,            "rm removed");
+                    Assert.That(File.ReadAllBytes(Path.Combine(root, "incoming", "resumed.bin")),        Is.EqualTo(content), "reput wrote on from where the half upload ended");
+
+                    if (OperatingSystem.IsWindows())
+                        Assert.That(new FileInfo(renamed).IsReadOnly, Is.True, "chmod 444 makes the file read-only");
+                    else
+                        Assert.That((Int32) File.GetUnixFileMode(renamed), Is.EqualTo(0x124), "chmod 444 lands as mode 0444");
+
+                });
+
+            }
+            finally
+            {
+                await server.DisposeAsync();
+                foreach (var file in Directory.Exists(root) ? Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories) : [])
+                    try { File.SetAttributes(file, FileAttributes.Normal); } catch { }
                 await CleanupAsync(workspace);
             }
 

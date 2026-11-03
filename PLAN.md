@@ -233,8 +233,15 @@ fail without the fix and a control proving the permitted case still works.
     still holds; and the host-key rotation looks for the session's key as that certified key. Hermetic in
     `FacadeHostCertificateTests`, `Negotiate_PrefersAHostCertificate_OverThePlainKey` and
     `HostKeys_AreAdvertisedAndProven_WhenTheSessionRanOnAHostCertificate`.
-- ⬜ **Holes inside wired peers:** PuTTY's `psftp`; Go's SFTP module. TinySSH authentication stays out of
-  reach by design (§11.1).
+- ✅ **PuTTY's `psftp` and Go's SFTP module against our SFTP subsystem:**
+  - `Psftp_TransfersAndManagesFiles_OnOurServer` runs one batch: `mkdir`, a multi-chunk `put`, `ls`, `mv`,
+    `get`, `rm`, `chmod` and `reput`, which resumes an upload from the size it finds.
+  - `GoCrypto_TransfersFiles_WithPkgSftp_OnOurServer` drives `github.com/pkg/sftp` with 64 requests in
+    flight per file, reading and writing - concurrency no other peer here puts on the server - through
+    upload, rename, symlink (OpenSSH's argument order), readlink, lstat, a download through the link,
+    listing and removal.
+  - Both check what landed on our disk. Neither found a fault. TinySSH authentication stays out of reach by
+    design (§11.1).
 - ✅ **The post-auth-rekey gate against a real OpenSSH** (≥ 10.4 disconnects a peer that sends non-KEX
   traffic during a rekey): our client and server rekey while data streams, against `ssh` and `sshd`, each
   side starting the rekeys in turn. The nightly of 2026-10-30 passed all four against upstream
