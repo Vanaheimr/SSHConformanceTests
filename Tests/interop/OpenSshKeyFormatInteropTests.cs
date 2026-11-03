@@ -52,6 +52,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             return File.Exists(system) ? system : null;
         }
 
+        private static String? FindOnPath(String Tool)
+        {
+            foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
+                foreach (var name in new[] { Tool, Tool + ".exe" })
+                    try { var c = Path.Combine(dir.Trim(), name); if (File.Exists(c)) return c; } catch { }
+            return null;
+        }
+
         private static async Task<Int32> RunAsync(String Exe, CancellationToken CancellationToken, params String[] Args)
         {
             var startInfo = new ProcessStartInfo(Exe) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
@@ -161,6 +169,126 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             {
                 try { File.Delete(path);          } catch { }
                 try { File.Delete(path + ".pub"); } catch { }
+            }
+
+        }
+
+        #endregion
+
+        #region WeLoad_SshKeygenKeys_InEveryCipher
+
+        /// <summary>
+        /// <c>ssh-keygen -Z</c> encrypts a key with each cipher it offers, and we read every one of them
+        /// to the key its <c>.pub</c> names - all but <c>3des-cbc</c>, which is refused with the command
+        /// that re-encrypts the key.
+        /// </summary>
+        [Test]
+        [CancelAfter(30000)]
+        [TestCase("aes128-ctr")]
+        [TestCase("aes192-ctr")]
+        [TestCase("aes256-ctr")]
+        [TestCase("aes128-cbc")]
+        [TestCase("aes192-cbc")]
+        [TestCase("aes256-cbc")]
+        [TestCase("aes128-gcm@openssh.com")]
+        [TestCase("aes256-gcm@openssh.com")]
+        [TestCase("chacha20-poly1305@openssh.com")]
+        [TestCase("3des-cbc")]
+        public async Task WeLoad_SshKeygenKeys_InEveryCipher(String Cipher, CancellationToken CancellationToken)
+        {
+
+            var keygen = FindSshKeygen();
+            if (keygen is null)
+                Assert.Ignore("No 'ssh-keygen' found.");
+
+            const String passphrase = "correct horse battery staple";
+            var path = Path.Combine(Path.GetTempPath(), "hermod_cipherkey_" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+
+                if (await RunAsync(keygen!, CancellationToken, "-t", "ed25519", "-f", path, "-N", passphrase, "-Z", Cipher, "-a", "8", "-q", "-C", "cipher") != 0)
+                    Assert.Ignore($"This ssh-keygen does not write keys with '{Cipher}'.");
+
+                var text = await File.ReadAllTextAsync(path, CancellationToken);
+
+                if (Cipher == "3des-cbc")
+                {
+                    var refused = Assert.Throws<SshWireException>(() => SshKeyGenerator.LoadPrivateKey(text, passphrase));
+                    Assert.That(refused!.Message, Does.Contain("ssh-keygen -p -Z"));
+                    return;
+                }
+
+                var loaded   = SshKeyGenerator.LoadPrivateKey(text, passphrase);
+                var expected = SshPublicKey.Parse(await File.ReadAllTextAsync(path + ".pub", CancellationToken));
+
+                var data      = RandomNumberGenerator.GetBytes(64);
+                var signature = loaded.Key.Sign(loaded.Key.AlgorithmNames[0], data);
+
+                Assert.Multiple(() => {
+                    Assert.That(loaded.Key.PublicKeyBlob, Is.EqualTo(expected.Blob), $"'{Cipher}' must decrypt to the key ssh-keygen wrote");
+                    Assert.That(SshSignature.Verify(expected.Blob, data, signature), Is.True);
+                    Assert.Throws<SshAuthenticationException>(() => SshKeyGenerator.LoadPrivateKey(text, "wrong passphrase"));
+                });
+
+            }
+            finally
+            {
+                try { File.Delete(path);          } catch { }
+                try { File.Delete(path + ".pub"); } catch { }
+            }
+
+        }
+
+        #endregion
+
+        #region WeLoad_OpenSslEd25519Pkcs8Keys
+
+        /// <summary>
+        /// <c>openssl genpkey -algorithm ed25519</c> writes PKCS#8, which the BCL does not read for Ed25519;
+        /// we load it, plain and passphrase-encrypted, to the key <c>openssl pkey -pubout</c> names.
+        /// </summary>
+        [Test]
+        [CancelAfter(30000)]
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task WeLoad_OpenSslEd25519Pkcs8Keys(Boolean Encrypted, CancellationToken CancellationToken)
+        {
+
+            var openssl = FindOnPath("openssl");
+            if (openssl is null)
+                Assert.Ignore("No 'openssl' found.");
+
+            const String passphrase = "correct horse battery staple";
+            var plain    = Path.Combine(Path.GetTempPath(), "hermod_pkcs8_" + Guid.NewGuid().ToString("N") + ".pem");
+            var sealedUp = plain + ".enc";
+
+            try
+            {
+
+                if (await RunAsync(openssl!, CancellationToken, "genpkey", "-algorithm", "ed25519", "-out", plain) != 0)
+                    Assert.Ignore("This openssl does not generate Ed25519 keys.");
+
+                if (Encrypted && await RunAsync(openssl!, CancellationToken, "pkcs8", "-topk8", "-in", plain, "-out", sealedUp, "-v2", "aes-256-cbc", "-passout", "pass:" + passphrase) != 0)
+                    Assert.Fail("openssl could not encrypt the key.");
+
+                var (publicDer, _, exitCode) = await RunCaptureAsync(openssl!, CancellationToken, "pkey", "-in", plain, "-pubout");
+                Assert.That(exitCode, Is.Zero);
+
+                // The SubjectPublicKeyInfo of an Ed25519 key ends in the 32 raw bytes of the key.
+                var spki     = Convert.FromBase64String(String.Concat(publicDer.Split('\n').Where(line => !line.StartsWith("-----")).Select(line => line.Trim())));
+                var expected = SshEd25519.EncodePublicKeyBlob(spki.AsSpan(spki.Length - 32));
+
+                var loaded   = SshKeyGenerator.LoadPrivateKey(await File.ReadAllTextAsync(Encrypted ? sealedUp : plain, CancellationToken),
+                                                              Encrypted ? passphrase : null);
+
+                Assert.That(loaded.Key.PublicKeyBlob, Is.EqualTo(expected), "the key openssl generated");
+
+            }
+            finally
+            {
+                try { File.Delete(plain);    } catch { }
+                try { File.Delete(sealedUp); } catch { }
             }
 
         }
