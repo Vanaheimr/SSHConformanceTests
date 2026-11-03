@@ -7,7 +7,7 @@ Interoperability with OpenSSH and a broad set of third-party implementations is 
 hard acceptance criterion (see §11).
 
 **Status legend:** ✅ done · 🔶 partial · ⬜ open — markers are kept current as implementation proceeds.
-**Current state (2026-10-29):** **M0–M8 ✅ · M9 🔶 · M10 🔶.** Protocol, façade, demo CLI and the
+**Current state (2026-11-03):** **M0–M8 ✅ · M9 🔶 · M10 🔶.** Protocol, façade, demo CLI and the
 conformance harness are complete and gated on every commit. **Everything still open is listed in §0** —
 the rest of this document records how each part was designed and verified, and its ✅ markers do not
 need to be searched for loose ends. The narrative of how M1–M4 landed, as it was written at the time,
@@ -23,10 +23,11 @@ is kept in [Appendix A](#appendix-a--build-journal-m1m4).
 | Hardening (M9) | 🔶 — done except the *backward* version spread (§0.3) |
 | Demo CLI, benchmarks (M10) | 🔶 — done except NuGet packaging (deferred by decision, §13) |
 
-**Measured 2026-10-29** at Hermod `cc9bdd2a`: Hermod's whole suite **4925 of 4926** green; the
-conformance suite **95 of 96** on a developer machine (ssh-agent skips without a running agent) and
-**every check, none skipped,** on the Debian CI leg — nine independent peer implementations
-([matrix](docs/INTEROP-MATRIX.md)); the newest upstream OpenSSH, **10.6p1**, **44 of 44** in the nightly.
+**Measured 2026-11-03** at Hermod `621afa03`: Hermod's whole suite **5424 of 5425** green (the one skip
+is outside SSH); the conformance suite **161 of 162** on a developer machine (ssh-agent skips without a
+running agent) and **162 of 162, none skipped,** on the Debian CI leg at `828fd70` — nine independent peer
+implementations ([matrix](docs/INTEROP-MATRIX.md)); the newest upstream OpenSSH, **10.6p1**, **64 of 64**
+in the nightly of 2026-11-02.
 
 ### 0.1 Security — found by the code audit of 2026-10-29, fixed the same day
 
@@ -191,7 +192,6 @@ fail without the fix and a control proving the permitted case still works.
   lent; each guarantee checked to fail without its code); against sshd as every hop and the server in
   `OurClient_JumpsThroughRealOpenSshServer` (one and two hops). The demo CLI's client verbs take `-J`.
   The single-channel `SshProxyJump.ConnectThroughAsync` stays for transport-level callers.
-- ⬜ **Façade, the rest:** `SshServer` offers no way to register a subsystem other than `sftp`.
 - ✅ **Forwarding carries half-closes everywhere** (Hermod PR #207): our server's `direct-tcpip`
   dial and the `-R` relay on both sides ended both directions on the first EOF, so a half-close cut off
   the answer still on its way (an HTTP/1.0 server, `nc -N`, anything that answers whole requests). All of
@@ -821,11 +821,11 @@ Private-key files are always written **owner-only** via `SshPrivateKeyFile` (POS
 |---|---|---|---|
 | `posix-rename@openssh.com` | ✅ | ✅ `PosixRenameAsync` | |
 | `statvfs@openssh.com` | ✅ | ✅ `StatVfsAsync` | session quota surfaced as free space — the host's real figures are none of a jailed session's business |
-| `fstatvfs@openssh.com` | ✅ | ⬜ | answers identically; neither variant consults its argument |
+| `fstatvfs@openssh.com` | ✅ | ✅ `SftpFileStream.StatVfsAsync` | answers identically; neither variant consults its argument |
 | `limits@openssh.com` | ✅ | ✅ `LimitsAsync` | |
 | `fsync@openssh.com` | ✅ | ✅ `SftpFileStream.SyncToDiskAsync`, `UploadAsync(SyncToDisk: true)` | reaches `ISftpFileSystem.FlushAsync`; refused up front when unadvertised, never silently skipped |
-| `hardlink@openssh.com` | ⬜ | ⬜ | **decision, not a gap:** `ISftpFileSystem` has no links at all, and a hard link defeats the per-session byte quota (same bytes, counted once) |
-| `lsetstat@openssh.com` | ⬜ | ⬜ | meaningless without symlinks |
+| `hardlink@openssh.com` | ❌ | ❌ | **decision, not a gap:** a hard link defeats the per-session byte quota - the same bytes under a second name, counted once. (It used to say the file system had no links at all; since symbolic links arrived that reason is gone, this one stands.) |
+| `lsetstat@openssh.com` | ✅ | ✅ `LSetAttributesAsync` | SETSTAT that does not follow a final symbolic link (`chmod -h`); `LocalSftpFileSystem` sets a file as SETSTAT does and refuses a link itself rather than follow it; the client sends it only where it was offered, never falls back to a SETSTAT that would follow. Against OpenSSH's `sftp` in `RealSftpClient_MakesAndFollowsSymlinks_OnOurServer` |
 | `expand-path@openssh.com` | ❌ | ❌ | **decision 2026-08-12, not a gap:** it is REALPATH plus tilde expansion, and tilde expansion presupposes home directories a root-jailed session does not have — `~` *is* `/`, and `~user` has no honest answer (mapping it to the root claims every user shares a home; refusing it advertises a half-kept promise). The only thing it buys is `cd ~` at an interactive prompt, which our automated clients never type and OpenSSH's `sftp` already handles by falling back to REALPATH. Against that: new code in the path-resolution layer, i.e. exactly where the jail lives. If it is ever wanted, the honest shape is `~` and `~/…` → jail root, `~user` refused |
 | `copy-data` | ✅ | ✅ `CopyAsync` (paths) / `CopyDataAsync` (handles) | server-side copy, bytes never cross the network. **Metered like the upload it replaces** — the quota sees every written byte and the upload limiter throttles the loop, since a client pays no bandwidth for a copy and an unmetered one would walk around every limit the session has; the read side is *not* also charged to the download limiter, which would bill the same bytes twice. Same handle on both ends is refused (OpenSSH allows non-overlapping ranges; telling those apart needs a length that may be "until EOF"). Validated against OpenSSH `sftp`'s `cp` — the five fields are not self-describing on the wire, so an independent encoder is the only real check |
 | `home-directory`, `users-groups-by-id@openssh.com` | ❌ | ❌ | **deliberately not offered:** both leak host paths / UID-to-name mappings out of a jailed session |
