@@ -206,8 +206,24 @@ fail without the fix and a control proving the permitted case still works.
   The forward half (newest upstream, built nightly) is done; this is what keeps M9 at 🔶.
 - ⬜ **Tier 3 peers** (§11.1) — Apache MINA SSHD, libssh, WinSCP, FileZilla, wolfSSH / Russh / JSch,
   native OpenBSD, legacy OpenSSH. Which of them matter is open decision 6 in §13.
-- ⬜ **Holes inside wired peers:** certificates are proven against OpenSSH only (AsyncSSH and Go could
-  issue and verify them too); PuTTY's `psftp`; Go's SFTP module. TinySSH authentication stays out of
+- ✅ **Certificates against AsyncSSH and Go** (Hermod PR #215), both ways - each peer reads and
+  checks ours, and we check theirs:
+  - AsyncSSH and Go log in to our server with a user certificate our mini-CA issued, and with one they
+    issued themselves (`generate_user_certificate`, `Certificate.SignCert`) from a CA key our generator
+    wrote; one naming another user is turned away. Our server knows no plain key in these tests.
+  - Both verify our server's host certificate through the CA alone (`@cert-authority`,
+    `CertChecker.IsHostAuthority`), and refuse one issued for another name.
+  - Our client verifies a host certificate AsyncSSH issued, and logs in to an AsyncSSH server with our
+    user certificate, which AsyncSSH checks through a `cert-authority` line.
+  - **Found on the way:** our client put the plain host-key algorithms before the certificate ones, so a
+    server offering both - sshd, AsyncSSH, nearly every server with a host certificate - was always
+    asked for the plain key, and `HostKeyPolicy.HostCertificate` through the façade could never succeed.
+    The defaults now put certificates first, as OpenSSH's do; a certificate the policy does not take is
+    tried again as the key it certifies, as OpenSSH retries "with plain key", so a pin on the plain key
+    still holds; and the host-key rotation looks for the session's key as that certified key. Hermetic in
+    `FacadeHostCertificateTests`, `Negotiate_PrefersAHostCertificate_OverThePlainKey` and
+    `HostKeys_AreAdvertisedAndProven_WhenTheSessionRanOnAHostCertificate`.
+- ⬜ **Holes inside wired peers:** PuTTY's `psftp`; Go's SFTP module. TinySSH authentication stays out of
   reach by design (§11.1).
 - ✅ **The post-auth-rekey gate against a real OpenSSH** (≥ 10.4 disconnects a peer that sends non-KEX
   traffic during a rekey): our client and server rekey while data streams, against `ssh` and `sshd`, each

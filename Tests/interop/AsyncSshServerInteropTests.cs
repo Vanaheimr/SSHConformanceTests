@@ -221,6 +221,124 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
+
+        #region OurClient_VerifiesAsyncSshHostCertificate
+
+        /// <summary>
+        /// AsyncSSH presents a host certificate it issued from a CA of its own, and our client trusts
+        /// nothing but that CA (<see cref="HostKeyPolicy.HostCertificate"/>): it accepts the certificate
+        /// for the address it dialled, and refuses one issued for another name.
+        /// </summary>
+        [TestCase(true)]
+        [TestCase(false)]
+        [CancelAfter(60000)]
+        public async Task OurClient_VerifiesAsyncSshHostCertificate(Boolean ForTheDialledAddress, CancellationToken CancellationToken)
+        {
+
+            var caPath = Path.Combine(Path.GetTempPath(), "hermod_asyncssh_host_ca_" + Guid.NewGuid().ToString("N") + ".pub");
+
+            try
+            {
+
+                await using var peer = await StartAsync(new () {
+                                                           ["username"]         = "hermoduser",
+                                                           ["password"]         = "s3cr3t",
+                                                           ["host_certificate"] = new Dictionary<String, Object> {
+                                                                                      ["principals"] = new[] { ForTheDialledAddress ? "127.0.0.1" : "elsewhere.example.org" },
+                                                                                      ["ca_path"]    = WslInterop.ToWslPath(caPath)
+                                                                                  }
+                                                       }, CancellationToken);
+
+                var ca     = Convert.FromBase64String((await File.ReadAllTextAsync(caPath, CancellationToken)).Split(' ')[1]);
+                var verify = HostKeyPolicy.HostCertificate(new SshCertificateAuthorityTrust().TrustCA(ca)).ForHost("127.0.0.1", IPPort.Parse(peer.Port));
+
+                if (ForTheDialledAddress)
+                {
+
+                    await using var client = await SshClient.ConnectAsync("127.0.0.1", peer.Port, new SshClientOptions {
+                                                                              Username       = "hermoduser",
+                                                                              VerifyHostKey  = verify,
+                                                                              Password       = "s3cr3t"
+                                                                          }, CancellationToken);
+
+                    var result = await client.ExecuteAsync("whoami", CancellationToken);
+
+                    Assert.That(result.StandardOutput.Trim(), Is.EqualTo($"{Marker} whoami password"), $"we accepted AsyncSSH's host certificate.\n{peer.Server.Output}");
+
+                }
+                else
+                {
+
+                    var refused = await Assert.CatchAsync<Exception>(async () => {
+                                      await using var client = await SshClient.ConnectAsync("127.0.0.1", peer.Port, new SshClientOptions {
+                                                                                                Username       = "hermoduser",
+                                                                                                VerifyHostKey  = verify,
+                                                                                                Password       = "s3cr3t"
+                                                                                            }, CancellationToken);
+                                  });
+
+                    TestContext.Out.WriteLine($"we refused it: {refused!.GetType().Name}: {refused.Message}");
+
+                    Assert.That(Requests(peer), Is.Empty, $"no credential went to a server whose certificate names someone else.\n{peer.Server.Output}");
+
+                }
+
+            }
+            finally
+            {
+                try { File.Delete(caPath); } catch { }
+            }
+
+        }
+
+        #endregion
+
+        #region OurClient_LogsInWithAUserCertificate_OnAsyncSshServer
+
+        /// <summary>
+        /// Our client logs in with a user certificate our mini-CA issued, to an AsyncSSH server that trusts
+        /// the CA and knows no plain key: AsyncSSH lets it in when the certificate names the user, and
+        /// turns it away when it names somebody else.
+        /// </summary>
+        [TestCase("hermoduser",   true)]
+        [TestCase("someone-else", false)]
+        [CancelAfter(60000)]
+        public async Task OurClient_LogsInWithAUserCertificate_OnAsyncSshServer(String Principal, Boolean LetIn, CancellationToken CancellationToken)
+        {
+
+            var ca      = SshHostKey.GenerateEd25519();
+            var userKey = SshHostKey.GenerateEd25519();
+
+            await using var peer = await StartAsync(new () {
+                                                       ["username"] = "hermoduser",
+                                                       ["user_ca"]  = InteropCertificates.PublicKeyLine(ca)
+                                                   }, CancellationToken);
+
+            var options = new SshClientOptions {
+                              Username       = "hermoduser",
+                              VerifyHostKey  = blob => blob.AsSpan().SequenceEqual(peer.HostKeyBlob),
+                              Credentials    = [ InteropCertificates.User(userKey, ca, Principal) ]
+                          };
+
+            if (LetIn)
+            {
+
+                await using var client = await SshClient.ConnectAsync("127.0.0.1", peer.Port, options, CancellationToken);
+
+                var result = await client.ExecuteAsync("whoami", CancellationToken);
+
+                Assert.That(result.StandardOutput.Trim(), Is.EqualTo($"{Marker} whoami publickey"), $"AsyncSSH let us in with the certificate.\n{peer.Server.Output}");
+
+            }
+            else
+                await Assert.ThatAsync(async () => { await using var client = await SshClient.ConnectAsync("127.0.0.1", peer.Port, options, CancellationToken); },
+                                       Throws.InstanceOf<SshAuthenticationException>(),
+                                       $"a certificate for someone else.\n{peer.Server.Output}");
+
+        }
+
+        #endregion
+
     }
 
 }
