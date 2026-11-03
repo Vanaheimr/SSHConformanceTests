@@ -140,8 +140,14 @@ fail without the fix and a control proving the permitted case still works.
     (`ln -s`, `get` through the link, `rm`) and `OurSftpClient_MakesSymlinksAndTruncates_WithRealSftpServer`
     (`readlink` and `stat` on sshd's side) - which alone catch a swapped argument order, since our own
     client and server would agree on it.
-- ⬜ **Private keys:** encrypted openssh-key-v1 is read only with `aes256-ctr` (ssh-keygen's default); an
-  Ed25519 key in PKCS#8 PEM is not imported.
+- ✅ **Private keys in every format the tools write** (Hermod PR #216): encrypted openssh-key-v1 is
+  read in every cipher `ssh-keygen -Z` offers but `3des-cbc` - AES-CTR and AES-CBC with 128/192/256 bits,
+  `aes128-gcm`/`aes256-gcm@openssh.com` and `chacha20-poly1305@openssh.com`, whose tag follows the
+  encrypted area - and `3des-cbc` is refused with the command that re-encrypts the key. An Ed25519 key in
+  PKCS#8 PEM (`openssl genpkey`) is imported, plain or encrypted, through BouncyCastle; an encrypted PEM key
+  without a passphrase is an `SshAuthenticationException` rather than the BCL's `ArgumentException`.
+  Hermetic in `PrivateKeyImportTests` (fixtures as ssh-keygen 10.2 and OpenSSL 3.5 wrote them); against
+  the tools themselves in `WeLoad_SshKeygenKeys_InEveryCipher` and `WeLoad_OpenSslEd25519Pkcs8Keys`.
 - ✅ **Façade logs in with a password and keyboard-interactive** (Hermod PR #183): `SshClientOptions.Password`
   and `.KeyboardInteractive` beside the keys. `ClientAuthenticateAsync` opens with a `none` request, as
   OpenSSH's client does, and from then on tries keys, keyboard-interactive and the password only while the
@@ -197,8 +203,12 @@ fail without the fix and a control proving the permitted case still works.
   Left as it is: the single-channel `SshForwarding.ServeDirectTcpIpAsync`, which predates the
   multiplexer, serves one forward per call and is used only by tests; its `SshChannelDuplex` has no way
   to send an EOF alone.
-- ⬜ **Server details:** `env` is accepted up to size caps but without a name allow-list (sshd's
-  `AcceptEnv`); an incoming `agent-connect` channel is refused without an audit event.
+- ✅ **Server details** (Hermod PR #216): `env` is taken only as `SshServerOptions.AcceptEnv` names
+  it, as sshd's `AcceptEnv` does (`*` and `?`, case-sensitive) - and, decided 2026-11-03, not at all by
+  default, as sshd; each refusal is audited with the variable's name. A channel type the server never
+  serves - `agent-connect`, `auth-agent@openssh.com`, `x11` or anything else - is now audited when it is
+  refused, as `direct-tcpip` with forwarding off already was. Hermetic in
+  `ServerEnvironmentAndChannelTests`.
 
 ### 0.3 Conformance & interoperability
 
