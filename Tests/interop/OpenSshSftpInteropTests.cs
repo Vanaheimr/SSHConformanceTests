@@ -317,6 +317,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// link second, against the draft's order, so a server that read them the draft's way would make a
         /// link named after the target. What lands on disk shows which way round it was read; a download
         /// through the link and its removal show it is followed and removed as a link.
+        /// <para>
+        /// And its <c>chmod -h</c>, which goes as <c>lsetstat@openssh.com</c> - sent only because we offer
+        /// it: on a file it sets as chmod does, on a link it is refused, and the file the link points to keeps
+        /// its mode. The leading <c>-</c> lets the batch go on past that refusal.
+        /// </para>
         /// </summary>
         [Test]
         [CancelAfter(40000)]
@@ -377,6 +382,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                     $"put {localSrc.Replace('\\', '/')} /data.bin\n" +
                     "ln -s data.bin /link.bin\n" +
                     "ln -s data.bin /gone.bin\n" +
+                    $"put {localSrc.Replace('\\', '/')} /plain.bin\n" +
+                    "chmod -h 444 /plain.bin\n" +
+                    "-chmod -h 444 /link.bin\n" +
                     $"get /link.bin {localBack.Replace('\\', '/')}\n" +
                     "rm /gone.bin\n",
                     CancellationToken);
@@ -420,6 +428,21 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                         Assert.That(File.ReadAllBytes(localBack),                      Is.EqualTo(content),   "a get through the link reads the file");
                         Assert.That(File.Exists(Path.Combine(root, "gone.bin")),       Is.False,              "rm takes the link away");
                         Assert.That(File.ReadAllBytes(Path.Combine(root, "data.bin")), Is.EqualTo(content),   "and leaves the file");
+                        Assert.That(stderr,                                            Does.Not.Contain("does not support lsetstat"), "chmod -h went as lsetstat");
+
+                        var plain = Path.Combine(root, "plain.bin");
+                        var data  = Path.Combine(root, "data.bin");
+
+                        if (OperatingSystem.IsWindows())
+                        {
+                            Assert.That(new FileInfo(plain).IsReadOnly, Is.True,  "chmod -h on a file sets it");
+                            Assert.That(new FileInfo(data).IsReadOnly,  Is.False, "chmod -h on a link leaves what it points to");
+                        }
+                        else
+                        {
+                            Assert.That((Int32) File.GetUnixFileMode(plain), Is.EqualTo(0x124), "chmod -h on a file sets it");
+                            Assert.That((Int32) File.GetUnixFileMode(data),  Is.Not.EqualTo(0x124), "chmod -h on a link leaves what it points to");
+                        }
                     });
 
                 }
@@ -434,6 +457,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             }
             finally
             {
+                foreach (var file in Directory.Exists(workDir) ? Directory.EnumerateFiles(workDir, "*", SearchOption.AllDirectories) : [])
+                    try { File.SetAttributes(file, FileAttributes.Normal); } catch { }
                 try { Directory.Delete(workDir, recursive: true); } catch { }
             }
 
