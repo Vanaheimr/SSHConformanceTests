@@ -17,10 +17,13 @@
 
 #region Usings
 
+using System.Security.Cryptography;
+
 using NUnit.Framework;
 
 using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
+using org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP;
 using org.GraphDefined.Vanaheimr.Hermod.SSH.Server;
 
 #endregion
@@ -122,11 +125,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// <param name="UserKey">The client's key, when a test has to certify it first.</param>
         /// <param name="Authenticator">Who may log in, instead of exactly the client's key.</param>
         /// <param name="HostKeys">What the server presents, instead of a plain Ed25519 key.</param>
+        /// <param name="FileSystem">What the SFTP subsystem serves; none, and SFTP is refused.</param>
         private static async Task<(SshServer Server, String Host, Int32 Port, ISshHostKey HostKey, String KeyPathWsl, String WindowsRoot, RecordingAuditSink Audit)>
             StartAsync(CancellationToken            CancellationToken,
                        ISshHostKey?                 UserKey        = null,
                        ISshUserAuthenticator?       Authenticator  = null,
-                       IReadOnlyList<ISshHostKey>?  HostKeys       = null)
+                       IReadOnlyList<ISshHostKey>?  HostKeys       = null,
+                       Func<String, ISftpFileSystem>? FileSystem   = null)
         {
 
             SkipIfUnavailable();
@@ -141,8 +146,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var audit  = new RecordingAuditSink();
 
             var server = new SshServer(new SshServerOptions {
-                             HostKeys      = HostKeys ?? [ hostKey ],
-                             Authenticator = Authenticator ?? SshUserAuthenticator.ForAuthorizedKeys(userKey.PublicKeyBlob),
+                             HostKeys       = HostKeys ?? [ hostKey ],
+                             Authenticator  = Authenticator ?? SshUserAuthenticator.ForAuthorizedKeys(userKey.PublicKeyBlob),
+                             SftpFileSystem = FileSystem?.Invoke(windowsRoot),
                              AuditSink     = audit,
                              ExecHandler   = async (context, ct) => {
                                                  await context.WriteAsync($"hermod ran: {context.Command}\n", ct);
@@ -398,6 +404,65 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 Assert.That(result.Ok, Is.EqualTo(ForTheDialledAddress),
                             $"our host certificate for {(ForTheDialledAddress ? host : "another name")}.\n{result.FailureReport}");
+
+            }
+            finally
+            {
+                await server.DisposeAsync();
+                try { Directory.Delete(windowsRoot, recursive: true); } catch { }
+            }
+
+        }
+
+        #endregion
+
+        #region GoCrypto_TransfersFiles_WithPkgSftp_OnOurServer
+
+        /// <summary>
+        /// Go's SFTP client (<c>github.com/pkg/sftp</c>) against our SFTP subsystem, with what sets it apart
+        /// from every other client here switched on: 64 requests in flight on one file, reading and writing,
+        /// their answers taken in whatever order they come. A megabyte goes up, is renamed, linked to, read
+        /// back through the link and listed, and the link is removed - and what landed on our disk is checked.
+        /// </summary>
+        [Test]
+        [CancelAfter(180000)]
+        public async Task GoCrypto_TransfersFiles_WithPkgSftp_OnOurServer(CancellationToken CancellationToken)
+        {
+
+            var (server, host, port, hostKey, keyPath, windowsRoot, audit) =
+                await StartAsync(CancellationToken, FileSystem: windowsRoot => new LocalSftpFileSystem(Path.Combine(windowsRoot, "root")));
+
+            try
+            {
+
+                var content = RandomNumberGenerator.GetBytes(1_048_576);
+                var upload  = Path.Combine(windowsRoot, "upload.bin");
+                var back    = Path.Combine(windowsRoot, "back.bin");
+                await File.WriteAllBytesAsync(upload, content, CancellationToken);
+
+                var configuration = Configuration("sftp", host, port, keyPath, hostKey);
+                configuration["upload_path"]   = WslInterop.ToWslPath(upload);
+                configuration["download_path"] = WslInterop.ToWslPath(back);
+                configuration["remote_dir"]    = "/go";
+
+                var result  = await RunAsync(configuration, CancellationToken);
+                var root    = Path.Combine(windowsRoot, "root", "go");
+
+                Assert.Multiple(() => {
+
+                    Assert.That(result.Ok, Is.True, $"pkg/sftp failed in stage '{result.Stage}'.\n{result.FailureReport}\n--- our server's audit ---\n{audit.Report}");
+
+                    Assert.That(File.ReadAllBytes(Path.Combine(root, "data.bin")),  Is.EqualTo(content), "the concurrent upload landed every byte in its place, and was renamed");
+                    Assert.That(File.ReadAllBytes(back),                            Is.EqualTo(content), "the concurrent download through the link read every byte back");
+                    Assert.That(File.Exists(Path.Combine(root, "upload.bin")),      Is.False,            "renamed, not copied");
+                    Assert.That(File.Exists(Path.Combine(root, "link.bin")),        Is.False,            "the link was removed");
+
+                    Assert.That(result.Listing, Is.EquivalentTo(new[] { "data.bin", "link.bin" }), "the listing as pkg/sftp saw it");
+                    Assert.That(result.StdOut,  Does.Contain("readlink=data.bin\n")
+                                                    .And.Contain("lstat_symlink=true\n")
+                                                    .And.Contain($"stat_size={content.Length}\n"), "the link as pkg/sftp saw it");
+
+                });
 
             }
             finally
