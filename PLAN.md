@@ -246,8 +246,6 @@ fail without the fix and a control proving the permitted case still works.
   traffic during a rekey): our client and server rekey while data streams, against `ssh` and `sshd`, each
   side starting the rekeys in turn. The nightly of 2026-10-30 passed all four against upstream
   OpenSSH 10.6p1, together with the other 51 OpenSSH checks.
-- ⬜ **The IANA agent-forwarding names** still cannot be provoked from a real OpenSSH (§11.1) and stay
-  pinned by hermetic tests only.
 - ⬜ **Windows figures** in the M9 notes were measured on an LF working tree and want re-measuring on a
   fresh clone (§12).
 
@@ -264,9 +262,27 @@ fail without the fix and a control proving the permitted case still works.
 Not gaps but scope (§1 Non-Goals and Parked): SCP, X11 forwarding, GSSAPI/Kerberos, compression,
 ControlMaster-style multiplexing, agent forwarding in either role and an agent *server*, FIDO2 `sk-*`
 keys, hostbased authentication, Unix-domain-socket forwarding, SOCKS / dynamic forwarding, PKCS#11,
-PuTTY `.ppk` import, SFTP versions above 3, and every SHA-1 or legacy construction (`ssh-rsa`
-signatures, DH group-exchange and SHA-1 groups, CBC, 3DES, encrypt-and-MAC HMACs) — with no opt-in.
-X11 and agent-forwarding *requests* are refused and audited.
+PuTTY `.ppk` import, SFTP versions above 3, and every SHA-1 or legacy construction on the wire (`ssh-rsa`
+signatures, DH group-exchange and SHA-1 groups, CBC, 3DES, encrypt-and-MAC HMACs) — with no opt-in; a key
+*file* encrypted with AES-CBC is read (§0.2), one with 3DES is not. X11 and agent-forwarding *requests*
+are refused and audited.
+
+**Agent forwarding, reconsidered 2026-11-03 and kept out.**
+- *ProxyJump does the job:* the usual reason for it - reaching a host behind a bastion with one's own
+  keys - is served by ProxyJump (§0.2), which never lets the bastion near a key.
+- *The risk:* a forwarded agent can be used by anyone with root on the server for as long as the session
+  lasts. OpenSSH itself advises ProxyJump instead.
+- *Little to gain here:* our servers run application handlers (OCPP, the admin console, SFTP), not shells
+  from which people go on to `ssh`.
+- *Done properly it is large:* the destination constraints of `ssh-add -h` (`session-bind@openssh.com`)
+  belong to forwarding as OpenSSH now does it.
+- *The case that would change this:* a bastion or tool built on Hermod that goes on to the stations on a
+  signed-in user's behalf, with that user's keys - the server side, as an agent in the handler's context.
+  Short-lived certificates are the alternative to weigh then.
+- *What follows for testing:* RFC 9987's IANA names (`agent-req`, `agent-connect`, `agent-forward`) cannot
+  be provoked from a real OpenSSH - it uses them only towards a server that advertises `agent-forward` in
+  EXT_INFO, which ours, refusing forwarding, must not. They stay covered by hermetic tests; both spellings
+  are refused and audited.
 
 ### 0.6 Hot topics
 
