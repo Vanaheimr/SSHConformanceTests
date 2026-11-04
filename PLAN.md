@@ -7,7 +7,7 @@ Interoperability with OpenSSH and a broad set of third-party implementations is 
 hard acceptance criterion (see §11).
 
 **Status legend:** ✅ done · 🔶 partial · ⬜ open — markers are kept current as implementation proceeds.
-**Current state (2026-11-03):** **M0–M8 ✅ · M9 🔶 · M10 🔶.** Protocol, façade, demo CLI and the
+**Current state (2026-11-04):** **M0–M8 ✅ · M9 🔶 · M10 🔶.** Protocol, façade, demo CLI and the
 conformance harness are complete and gated on every commit. **Everything still open is listed in §0** —
 the rest of this document records how each part was designed and verified, and its ✅ markers do not
 need to be searched for loose ends. The narrative of how M1–M4 landed, as it was written at the time,
@@ -141,6 +141,19 @@ fail without the fix and a control proving the permitted case still works.
     (`ln -s`, `get` through the link, `rm`) and `OurSftpClient_MakesSymlinksAndTruncates_WithRealSftpServer`
     (`readlink` and `stat` on sshd's side) - which alone catch a swapped argument order, since our own
     client and server would agree on it.
+- ✅ **SFTP session by session** (Hermod PR #220): `SshServerOptions.SftpSessions`, an `SftpSessionFactory`
+  asked with the signed-in `SshSessionInfo` when a session requests `sftp`, answers that session's own
+  `SftpSessionOptions` - file system, access profile, limits and an `Ends` token - or null, which refuses
+  it and is audited as not served. Where it is set, the server-wide `SftpFileSystem`/`SftpProfile`/
+  `SftpLimits` are not used. `Ends` firing closes the channel, so an account switched off mid-session
+  ends its SFTP at once; the session's file system is disposed however the session ended. For servers whose
+  accounts each see something else (WWCP_Node's role model).
+  - Underneath, `SshSessionChannel.ServeAsync` takes an `SshSubsystemResolver`, asked for a subsystem
+    its table does not name; one that answers null or throws refuses it.
+  - `SftpClient` fix on the way: a request made after the channel had ended waited until its own token
+    gave up, since the receive loop failed only the requests already pending; it now fails at once
+    with `SshChannelClosedException`.
+  - Hermetic in `SftpSessionsTests`; the conformance suite runs unchanged on it.
 - ✅ **Private keys in every format the tools write** (Hermod PR #216): encrypted openssh-key-v1 is
   read in every cipher `ssh-keygen -Z` offers but `3des-cbc` - AES-CTR and AES-CBC with 128/192/256 bits,
   `aes128-gcm`/`aes256-gcm@openssh.com` and `chacha20-poly1305@openssh.com`, whose tag follows the
@@ -300,7 +313,9 @@ Not scheduled yet, but next in line.
   a way to put an application protocol of one's own on a channel by name (RFC 4254 §6.5).
   - **Server:** `SshServerOptions.Subsystems`, a table of name → handler that gets the channel as a
     stream, with audit (`SubsystemRequestedEvent` exists) and access profiles as for `sftp`.
-    `SshSessionChannel.ServeAsync` already takes such a table; the façade fills it with `sftp` only.
+    `SshSessionChannel.ServeAsync` already takes such a table, and since Hermod PR #220 also an
+    `SshSubsystemResolver` asked per session for names the table lacks - the hook `SftpSessions` hangs off
+    (the server-wide `sftp` stays in the table), and the place a registry of one's own would hang off too.
   - **Client:** `SshClient.OpenSubsystemAsync(name)` → `Stream`. Today only by hand:
     `Multiplexer.OpenChannelAsync("session")`, a `subsystem` request, `channel.AsStream()` — what
     `OpenSftpClientAsync` does inside.
