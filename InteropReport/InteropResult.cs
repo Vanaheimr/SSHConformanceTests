@@ -116,6 +116,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
             ("negotiat",         "Algorithm negotiation"),
             ("algorithm",        "Algorithm negotiation"),
             ("sftp",             "SFTP"),
+            ("subsystem",        "Subsystems of one's own"),
             ("forward",          "Port forwarding"),
             ("tunnel",           "Port forwarding"),
             ("keyformat",        "Key formats (openssh-key-v1, PEM)"),
