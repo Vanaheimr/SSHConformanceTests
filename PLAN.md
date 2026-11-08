@@ -222,6 +222,43 @@ fail without the fix and a control proving the permitted case still works.
   serves - `agent-connect`, `auth-agent@openssh.com`, `x11` or anything else - is now audited when it is
   refused, as `direct-tcpip` with forwarding off already was. Hermetic in
   `ServerEnvironmentAndChannelTests`.
+- ✅ **Subsystems besides SFTP, both sides** (Hermod `c39bc053`): `SshServerOptions.Subsystems`, a factory
+  asked with the signed-in session and the name, answers a handler or null; it is never asked for `sftp`,
+  which stays the SFTP options'. The handler gets an `SshSubsystemContext` (session, name, channel,
+  `Closed`, `Stopping`), and the server closes the channel once it returns - with an exit-status first
+  (Hermod PR #234): 0 where the handler returned, 1 where it failed, unless it sent its own with
+  `SshMuxChannel.SendExitStatusAsync`; without one `ssh -s` exited 255 after every subsystem.
+  `SshSessionRestrictions.PermittedSubsystems` confines a credential to some subsystems - no shell, no
+  exec, no forced command. On the client `SshClient.OpenSubsystemAsync(name)`, plus `Closed`/`EndReason`
+  for learning that the connection ended. Hermetic in `SubsystemFactoryTests`; against the real `ssh -s`
+  in `OpenSshSubsystemInteropTests` - plain bytes and echo, the three ways an exit-status comes about, a
+  name not served and a key confined to another subsystem refused (red without the exit-status, as 255).
+- ✅ **Messages over a subsystem** (Hermod `c15cadfe`, protocol in `Hermod/SSH/Messaging/README.md`):
+  `SshMessageServer`/`SshMessageClient` carry whole text or binary messages - OCPP, WWCP - over a
+  subsystem channel, and `IMessageConnection` is the connection type a WebSocket and an SSH message
+  channel share. Frames are a `uint32` length, a kind byte and the payload: HELLO (the subprotocols the
+  client speaks, in order), WELCOME, REFUSED, TEXT, BINARY, PING, PONG, CLOSE with RFC 6455's codes. A
+  frame's length is checked before anything is allocated: TEXT/BINARY against the receiver's limit
+  (16 MiB by default), every other kind against 64 KiB. Hermetic in `SshMessageFramingTests` and
+  `SshMessageProtocolTests`.
+- ✅ **A forced command holds for subsystems too - security fix** (Hermod `d2ab407a`, `c85c8e9b`): shell
+  and exec honoured `force-command`/`command=`, but a subsystem request was served regardless, so a
+  certificate or key confined to one backup command opened SFTP on the whole file system. Now as sshd: a
+  subsystem request runs the forced command; plain `internal-sftp` is served SFTP and only SFTP,
+  `internal-sftp` with options is refused rather than served without its limits, and exec or shell of
+  an `internal-sftp` credential is told "This service allows sftp connections only." with exit status 1.
+  Hermetic in `ForceCommandSubsystemTests`.
+- ✅ **SFTP packets capped at 256 KiB - security fix** (Hermod `6abdb089`): `ReadPacketAsync` allocated by
+  the peer's length before a byte arrived, so four bytes made either side allocate up to 2 GiB.
+  `SftpServer.MaxPacketLength` is 256 KiB, as OpenSSH's; a longer packet or one of length 0 is an
+  `SshWireException`, and the server closes the channel on it. Hermetic in `SftpPacketLengthTests`.
+- ✅ **Session authorization** (Hermod `bfeb64f9`): `SshServerOptions.AuthorizeSession` is asked once a
+  client has signed in, with the whole `SshSessionInfo`, and may refuse it - say an account let in on one
+  network and not another. `SshSessionInfo.Local` is now the address the connection came in on, not the
+  listener's `0.0.0.0`. Hermetic in `SessionAuthorizationTests`.
+- ✅ **SFTP listings say what the attributes say** (Hermod PR #226): every READDIR longname read
+  `-rw-r--r-- … Jan  1 00:00`, so `ls -l` in OpenSSH's `sftp` showed a read-only file as writable; the
+  longname is now the entry's `ls -l` line, laid out as OpenSSH's server writes it.
 
 ### 0.3 Conformance & interoperability
 
@@ -306,7 +343,10 @@ are refused and audited.
 
 Not scheduled yet, but next in line.
 
-- ⬜ **Custom subsystems on both sides — the SSH route to what EVQI Transport is after.** EVQI Transport
+- ✅ **Custom subsystems on both sides — the SSH route to what EVQI Transport is after.** Landed in
+  Hermod `c39bc053` and `c15cadfe` (§0.2): the registry, `OpenSubsystemAsync` and the message protocol.
+  What follows is the plan as it was decided; where the implementation answered an open point, it says
+  so. EVQI Transport
   wants several independent streams, OCPP among them, multiplexed in parallel over one or more TCP
   connections. An SSH connection already is that: channels with their own flow control, opened and closed
   independently, next to SFTP, forwards and `exec` on the same authenticated connection. What is missing is
@@ -332,14 +372,16 @@ Not scheduled yet, but next in line.
       Weighed against real WebSocket frames (Hermod has the codec, `HTTP1/WebSocket/WebSocketFrame.cs`):
       their client-to-server masking is pointless inside SSH, fragmentation, interleaved control frames
       and 64-bit lengths widen the parser for nothing SSH does not already give, and there is no HTTP
-      handshake to negotiate extensions in — so it would have been a WebSocket dialect anyway. Still to
-      fix: the cap on a frame's length, checked before anything is allocated, as everywhere else; and
-      whether an application-level ping is wanted — SSH keepalive proves the peer's SSH layer answers,
-      not that its OCPP handler still reads.
+      handshake to negotiate extensions in — so it would have been a WebSocket dialect anyway. The two
+      points left open here are answered by `c15cadfe`: the cap is the receiver's message limit for
+      TEXT/BINARY (16 MiB by default) and 64 KiB for every other kind, checked before allocating; and
+      there is an application-level PING/PONG, since SSH keepalive proves only the peer's SSH layer.
     - *Names and versions:* versioned names such as `ocpp2.0.1@…`, and a generic `ocpp@…` — names without
       `@` belong to the IANA (RFC 4251 §6). A client asks for versioned names in order and the server
       refuses what it does not speak, in place of `Sec-WebSocket-Protocol`. With the generic name the
-      version is not in the name, so it has to be agreed inside the stream; how is still open.
+      version is not in the name, so it has to be agreed inside the stream - answered by `c15cadfe`: the
+      client's HELLO names the subprotocols it speaks in order, and WELCOME picks its first one the server
+      speaks.
     - *Identity:* the station logs in with an SSH key or an SSH certificate instead of Basic Auth or a TLS
       client certificate (OCPP security profiles 1–3); its ID is the user name, or the certificate's key
       ID or principal. Certificates bring expiry and revocation without a TLS PKI.
@@ -374,8 +416,9 @@ Not scheduled yet, but next in line.
     - *What exists already:* `ExecHandler` and `ShellHandler` take application-defined commands without
       an operating-system shell, so the console could be a `ShellHandler` today. What is missing is the
       name, and with it a grant for this console alone.
-  - **Tests:** `ssh -s <name>` against our server; our client against `sshd` with a `Subsystem` line;
-    NETCONF (RFC 6242) as an existing standard subsystem to check the mechanism against.
+  - **Tests:** ✅ `ssh -s <name>` against our server (`OpenSshSubsystemInteropTests`); ⬜ our client
+    against `sshd` with a `Subsystem` line; ⬜ NETCONF (RFC 6242) as an existing standard subsystem to
+    check the mechanism against.
   - Known subsystems for reference: `sftp`, `netconf` (RFC 6242), `snmp` (RFC 5592), `publickey`
     (RFC 4819), `powershell` (PowerShell remoting).
 
