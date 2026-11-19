@@ -1,13 +1,13 @@
 # HermodSSH — Implementation Plan
 
-A modern SSH2 **client and server** implementation in C# / .NET 10 including **SFTP**,
+A modern SSH2 **client and server** implementation in C# / .NET 11 including **SFTP**,
 fully **async**, with **post-quantum hybrid key exchange**, **public-key authentication**
 and **OpenSSH certificates** as first-class features. Unit tests with **NUnit**.
 Interoperability with OpenSSH and a broad set of third-party implementations is a
 hard acceptance criterion (see §11).
 
 **Status legend:** ✅ done · 🔶 partial · ⬜ open — markers are kept current as implementation proceeds.
-**Current state (2026-11-04):** **M0–M8 ✅ · M9 🔶 · M10 🔶.** Protocol, façade, demo CLI and the
+**Current state (2026-11-19):** **M0–M8 ✅ · M9 🔶 · M10 🔶.** Protocol, façade, demo CLI and the
 conformance harness are complete and gated on every commit. **Everything still open is listed in §0** —
 the rest of this document records how each part was designed and verified, and its ✅ markers do not
 need to be searched for loose ends. The narrative of how M1–M4 landed, as it was written at the time,
@@ -259,6 +259,24 @@ fail without the fix and a control proving the permitted case still works.
 - ✅ **SFTP listings say what the attributes say** (Hermod PR #226): every READDIR longname read
   `-rw-r--r-- … Jan  1 00:00`, so `ls -l` in OpenSSH's `sftp` showed a read-only file as writable; the
   longname is now the entry's `ls -l` line, laid out as OpenSSH's server writes it.
+- ✅ **Landed in Hermod 2026-11-08 to 2026-11-19, pinned with the move to .NET 11** (Hermod `36fc0134` →
+  `4b8be28a`), each with its hermetic tests there; the conformance suite runs unchanged on it:
+  - *Transport:* a client or server can require strict KEX and refuses a peer without it (`e17acbb1`); a
+    connection exports keys bound to its key exchange for a protocol inside one of its channels, with a
+    nonce per run (`f6bf0318`, `82f7ef8c`); host names are resolved with the DNS client given, never the
+    operating system's resolver (`5db815f1`); a CLOSE arriving just before the end is still read
+    (`87ee0218`).
+  - *Server:* a connection can be turned away by its address as soon as it is accepted (`9633b2e2`); a
+    session let in by a password or one-time password is asked what it is confined to as well
+    (`299eab61`); the authentication method `totp@open.charging.cloud`, a one-time password bound to the
+    session identifier (`30cd0347`).
+  - *Client:* a connection can be shared - made by whoever asks first (`c40159f9`); a refused subsystem
+    and a refused host key have exception types of their own (`eb95cfb2`, `aa42d703`); SFTP copies whole
+    files between streams (`aa42d703`); a remote forward whose port another has taken is asked again,
+    and a cancelled one has let go of its port when the server answers (`1e3fb77b`, `4b8be28a`).
+  - *Messages over SSH:* one handler in front of several servers by the client's subprotocol
+    (`b9602558`); a silent peer is taken for dead, a refusal can say when to come back, messages up to
+    64 MiB (`20800d8c`); the message client hands out its connection for a further channel (`dfdbff90`).
 
 ### 0.3 Conformance & interoperability
 
@@ -578,7 +596,7 @@ Principle: **no self-implemented crypto primitives** — in-house code only for 
 
 ## 5. Architecture & Project Structure
 
-Following the conventions of the sibling projects (own git repo, `.slnx`, `net10.0`, `Nullable`, `ImplicitUsings`, `LangVersion latest`, block-scoped namespaces per the GraphDefined template, logging via `Microsoft.Extensions.Logging` + Serilog):
+Following the conventions of the sibling projects (own git repo, `.slnx`, `net11.0` (since 2026-11-19; `net10.0` before), `Nullable`, `ImplicitUsings`, `LangVersion latest`, block-scoped namespaces per the GraphDefined template, logging via `Microsoft.Extensions.Logging` + Serilog):
 
 **Relocated 2026-08-11:** the implementation and its test suite moved **into the `libs/Hermod` submodule**.
 SSH is now a folder of the `Hermod` project — peer to `DNS/`, `HTTP/`, `SMTP/`, `TCP/` — and ships in the

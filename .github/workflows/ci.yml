@@ -126,7 +126,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
 
       # ssh-agent is an interop peer in its own right, not merely a convenience:
       # OpenSshAgentInteropTests drives our SshAgentClient against the real OpenSSH agent —

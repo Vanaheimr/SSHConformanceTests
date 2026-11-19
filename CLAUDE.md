@@ -1,6 +1,6 @@
 # HermodSSH — Repository Conventions
 
-Modern SSH2 client + server + SFTP implementation for .NET 10. The full implementation plan
+Modern SSH2 client + server + SFTP implementation for .NET 11. The full implementation plan
 (architecture, algorithms, milestones, interop program) lives in [PLAN.md](PLAN.md).
 
 ## C# file template (mandatory for every `.cs` file)
@@ -79,7 +79,7 @@ commits** (submodule first, then the pointer bump here) — see the push order i
 
 ## Other conventions
 
-- `net10.0`, `Nullable` + `ImplicitUsings` enabled, `LangVersion latest`
+- `net11.0`, `Nullable` + `ImplicitUsings` enabled, `LangVersion latest`
 - Everything async: `Task`/`ValueTask` + `CancellationToken` throughout, `IAsyncDisposable`, no sync-over-async
 - **`DateTimeOffset` instead of `DateTime` wherever possible** (public API, models, file parsers); current
   time only via `TimeProvider.GetUtcNow()` (returns `DateTimeOffset`); where a third-party API forces
