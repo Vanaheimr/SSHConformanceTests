@@ -3,7 +3,7 @@
 [![CI](https://github.com/Vanaheimr/SSHConformanceTests/actions/workflows/ci.yml/badge.svg)](https://github.com/Vanaheimr/SSHConformanceTests/actions/workflows/ci.yml)
 [![Nightly](https://github.com/Vanaheimr/SSHConformanceTests/actions/workflows/nightly.yml/badge.svg)](https://github.com/Vanaheimr/SSHConformanceTests/actions/workflows/nightly.yml)
 
-A modern, fully asynchronous **SSH2 client and server** implementation for **C# / .NET 10**,
+A modern, fully asynchronous **SSH2 client and server** implementation for **C# / .NET 11**,
 including **SFTP**, **post-quantum hybrid key exchange**, **public-key authentication** and
 **OpenSSH certificates**. Part of the [Vanaheimr Hermod](https://www.github.com/Vanaheimr/Hermod)
 ecosystem.

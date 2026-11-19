@@ -1027,7 +1027,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                 VerifyHostKey = blob => blob.AsSpan().SequenceEqual(somebodyElse.PublicKeyBlob)
                                             },
                                             CancellationToken),
-                            Throws.TypeOf<SshWireException>(),
+                            Throws.TypeOf<SshHostKeyRejectedException>(),
                             "our client must refuse a host key that is not the one it pinned");
 
             }
