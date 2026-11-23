@@ -92,12 +92,14 @@ commits** (submodule first, then the pointer bump here) — see the push order i
   modes/constructions (CTR, chacha20-poly1305@openssh.com, bcrypt_pbkdf, KDF) with official test vectors
 - [PLAN.md](PLAN.md) carries status markers (✅ done · 🔶 partial · ⬜ open) — keep them current
   whenever a feature lands, a milestone completes or a decision is made
-- **Use Hermod's networking types, not `System.Net`.** Public APIs and models use `IIPAddress`,
-  `IPv4Address`/`IPv6Address` (`.Localhost`/`.Any`), `IPPort`, `IPSocket` from
-  `org.GraphDefined.Vanaheimr.Hermod`. Convert to `System.Net` only at the lowest layer (actual socket
-  calls) via `IIPAddress.ToDotNet()`, `IPPort.ToInt32()/ToUInt16()`, `IPSocket.ToIPEndPoint()` /
-  `IPSocket.FromIPEndPoint(...)`, and `IPAddress.Build(...)`/`FromDotNet(...)`. Example: `SshTcp`/`SshTcpListener`.
+- **Use Hermod's networking types, not `System.Net`.** Public APIs and models use `IPAddress` (one
+  value, IPv4 or IPv6; `IPv4Address`/`IPv6Address` with `.Localhost`/`.Any` convert into it implicitly),
+  `IPPort`, `IPSocket` from `org.GraphDefined.Vanaheimr.Hermod`. Convert to `System.Net` only at the
+  lowest layer (actual socket calls) via `IPAddress.ToDotNet()`, `IPPort.ToInt32()/ToUInt16()`,
+  `IPSocket.ToIPEndPoint()` / `IPSocket.FromIPEndPoint(...)`, and `IPAddress.Build(...)`/`FromDotNet(...)`.
+  A port handed to Hermod is an `IPPort` (`IPPort.Parse(...)`, `IPPort.Auto` for 0), a user name a
+  `User_Id` (`User_Id.Parse(...)`, `org.GraphDefined.Vanaheimr.Illias`). Example: `SshTcp`/`SshTcpListener`.
 - **Related namespace gotcha:** our namespace is nested under `org.GraphDefined.Vanaheimr.Hermod`, whose
-  `IPAddress` is a *static factory class* (not `System.Net.IPAddress`). If you ever genuinely need the
+  `IPAddress` is Hermod's own struct (not `System.Net.IPAddress`). If you ever genuinely need the
   `System.Net` type, fully-qualify it or alias it **inside the namespace block** (a file-scoped alias sits
   at the global level and loses to the enclosing Hermod type) — but prefer the Hermod types above.

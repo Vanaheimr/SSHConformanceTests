@@ -21,6 +21,7 @@ using System.Diagnostics;
 
 using NUnit.Framework;
 
+using org.GraphDefined.Vanaheimr.Illias;
 using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
 
@@ -85,7 +86,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                     var pipe = await listener.AcceptAsync(CancellationToken);
                     using var transport = await SshTransport.ServerHandshakeAsync(pipe, hostKey, CancellationToken: CancellationToken);
                     await UserAuthentication.ServerAuthenticateAsync(transport, authenticator, CancellationToken: CancellationToken);
-                    await SshConnection.ServeExecAsync(transport, "hermoduser", async (context, ct) =>
+                    await SshConnection.ServeExecAsync(transport, User_Id.Parse("hermoduser"), async (context, ct) =>
                     {
                         await context.WriteAsync($"hermod ran: {context.Command}\n", ct);
                         return context.Command == "fail" ? 42 : 0;

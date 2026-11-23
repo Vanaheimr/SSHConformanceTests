@@ -19,6 +19,7 @@
 
 using NUnit.Framework;
 
+using org.GraphDefined.Vanaheimr.Illias;
 using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
 using org.GraphDefined.Vanaheimr.Hermod.SSH.Client;
@@ -459,14 +460,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             try
             {
 
-                SshClient client;
+                SSHClient client;
                 try
                 {
-                    client = await SshClient.ConnectAsync(
+                    client = await SSHClient.Connect(
                                  "127.0.0.1",
-                                 (UInt16) dropbear.Port,
-                                 new SshClientOptions {
-                                     Username      = user,
+                                 IPPort.Parse(dropbear.Port),
+                                 new SSHClientOptions {
+                                     Username      = User_Id.Parse(user),
                                      Credentials   = [ userKey ],
                                      VerifyHostKey = blob => blob.AsSpan().SequenceEqual(expectedHostKey)
                                  },
@@ -481,7 +482,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 await using var _ = client;
 
-                var result = await client.ExecuteAsync($"echo {Marker}", CancellationToken);
+                var result = await client.Execute($"echo {Marker}", CancellationToken);
 
                 TestContext.Out.WriteLine($"dropbear replied: {result.StandardOutput.Trim()} (exit {result.ExitCode})");
 
@@ -532,11 +533,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 var somebodyElse = SshHostKey.GenerateEd25519();
 
-                Assert.That(async () => await SshClient.ConnectAsync(
+                Assert.That(async () => await SSHClient.Connect(
                                             "127.0.0.1",
-                                            (UInt16) dropbear.Port,
-                                            new SshClientOptions {
-                                                Username      = user,
+                                            IPPort.Parse(dropbear.Port),
+                                            new SSHClientOptions {
+                                                Username      = User_Id.Parse(user),
                                                 Credentials   = [ userKey ],
                                                 VerifyHostKey = blob => blob.AsSpan().SequenceEqual(somebodyElse.PublicKeyBlob)
                                             },

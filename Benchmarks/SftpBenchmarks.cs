@@ -19,6 +19,8 @@
 
 using BenchmarkDotNet.Attributes;
 
+using org.GraphDefined.Vanaheimr.Illias;
+
 using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
 using org.GraphDefined.Vanaheimr.Hermod.SSH.Client;
@@ -54,8 +56,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks
     {
 
         private SshServer     server      = null!;
-        private SshClient     client      = null!;
-        private SftpClient    sftp        = null!;
+        private SSHClient     client      = null!;
+        private SFTPClient    sftp        = null!;
         private Byte[]        payload     = [];
 
         /// <summary>
@@ -87,15 +89,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks
             });
 
             server.StartAsync(new IPSocket(IPv4Address.Localhost, IPPort.Auto)).AsTask().GetAwaiter().GetResult();
-            var port = (UInt16) server.LocalEndPoint.Port.ToInt32();
-
-            client = SshClient.ConnectAsync("127.0.0.1", port, new SshClientOptions {
-                         Username      = "bench",
+            client = SSHClient.Connect("127.0.0.1", server.LocalEndPoint.Port, new SSHClientOptions {
+                         Username      = User_Id.Parse("bench"),
                          VerifyHostKey = SshHostKeyVerification.AcceptAnyUnsafe,
                          Credentials   = [ userKey ]
                      }).AsTask().GetAwaiter().GetResult();
 
-            sftp = client.OpenSftpClientAsync().AsTask().GetAwaiter().GetResult();
+            sftp = client.OpenSFTPClient().AsTask().GetAwaiter().GetResult();
 
         }
 

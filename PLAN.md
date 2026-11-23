@@ -7,7 +7,7 @@ Interoperability with OpenSSH and a broad set of third-party implementations is 
 hard acceptance criterion (see §11).
 
 **Status legend:** ✅ done · 🔶 partial · ⬜ open — markers are kept current as implementation proceeds.
-**Current state (2026-11-19):** **M0–M8 ✅ · M9 🔶 · M10 🔶.** Protocol, façade, demo CLI and the
+**Current state (2026-11-23):** **M0–M8 ✅ · M9 🔶 · M10 🔶.** Protocol, façade, demo CLI and the
 conformance harness are complete and gated on every commit. **Everything still open is listed in §0** —
 the rest of this document records how each part was designed and verified, and its ✅ markers do not
 need to be searched for loose ends. The narrative of how M1–M4 landed, as it was written at the time,
@@ -277,6 +277,13 @@ fail without the fix and a control proving the permitted case still works.
   - *Messages over SSH:* one handler in front of several servers by the client's subprotocol
     (`b9602558`); a silent peer is taken for dead, a refusal can say when to come back, messages up to
     64 MiB (`20800d8c`); the message client hands out its connection for a further channel (`dfdbff90`).
+- ✅ **Client API renamed in Hermod** (`86b8b083`, 2026-11-22; pinned 2026-11-23): `SshClient`,
+  `SshClientOptions`, `SshJumpHost`, `SshLocalForward` and `SftpClient` are `SSHClient`,
+  `SSHClientOptions`, `SSHJumpHost`, `SSHLocalForward` and `SFTPClient`; the client's methods dropped
+  `Async` - `SSHClient.Connect`, `Execute`, `OpenShell`, `OpenTCPStream`, `RequestRemoteForward`,
+  `OpenSubsystem`, `OpenSFTPClient`. User names are `User_Id`, ports handed over `IPPort`, and the
+  interface `IIPAddress` gave way to the struct `IPAddress`. The entries above keep the names they landed
+  under. Demo, benchmarks and the conformance suite follow, changed in names and types only.
 
 ### 0.3 Conformance & interoperability
 

@@ -226,7 +226,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 var failure = await Assert.ThrowsAsync<SshJumpHostException>(async () =>
                                   await Commands.ExecAsync(["exec", "-i", userKey, "-p", $"{serverPort}", "-J", $"127.0.0.1:{nobody}", "achim@127.0.0.1", "uname"], CancellationToken));
 
-                Assert.That(failure!.JumpHost.Port, Is.EqualTo(nobody), "the jump host that did not answer");
+                Assert.That(failure!.JumpHost.Port, Is.EqualTo(IPPort.Parse(nobody)), "the jump host that did not answer");
 
                 await ctrlC.CancelAsync();
 

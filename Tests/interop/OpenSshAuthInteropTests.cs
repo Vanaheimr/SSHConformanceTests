@@ -21,6 +21,7 @@ using System.Diagnostics;
 
 using NUnit.Framework;
 
+using org.GraphDefined.Vanaheimr.Illias;
 using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
 
@@ -160,7 +161,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                     try { stderr = await stderrTask; } catch { }
 
                     Assert.Multiple(() => {
-                        Assert.That(result.Username, Is.EqualTo("hermoduser"));
+                        Assert.That(result.Username, Is.EqualTo(User_Id.Parse("hermoduser")));
                         Assert.That(result.Method,   Is.EqualTo("publickey"));
                     });
 

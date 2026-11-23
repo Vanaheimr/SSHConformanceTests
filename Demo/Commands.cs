@@ -20,6 +20,7 @@
 using System.Net.Sockets;
 using System.Text;
 
+using org.GraphDefined.Vanaheimr.Illias;
 using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
 using org.GraphDefined.Vanaheimr.Hermod.SSH.SFTP;
@@ -154,7 +155,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
             await using var client = await ConnectClientAsync(Arguments, rest[0], CancellationToken);
 
-            var result = await client.ExecuteAsync(String.Join(' ', rest.Skip(1)), CancellationToken);
+            var result = await client.Execute(String.Join(' ', rest.Skip(1)), CancellationToken);
             Console.Out.Write(result.StandardOutput);
             Console.Error.Write(result.StandardError);
             return result.ExitCode;
@@ -219,7 +220,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
                 return Usage("sftp -i <key> [-p <port>] [-J <jump hosts>] <user@host> <ls <path> | get <remote> <local> | put <local> <remote>>");
 
             await using var client = await ConnectClientAsync(Arguments, rest[0], CancellationToken);
-            var sftp               = await client.OpenSftpClientAsync(CancellationToken);
+            var sftp               = await client.OpenSFTPClient(CancellationToken);
             var op                 = rest[1].ToLowerInvariant();
 
             try
@@ -274,14 +275,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
                 return Usage(usage);
 
             // -L binds here, so its bind address is ours to resolve; -R hands its own to the server as typed.
-            IIPAddress? bindAddress = null;
+            IPAddress? bindAddress = null;
             if (local is not null && bind is not null)
             {
 
                 bindAddress = bind switch {
-                    "" or "*"    => IPv6Address.Any,
-                    "localhost"  => IPv4Address.Localhost,
-                    _            => IPAddress.TryParse(bind, out var parsed) ? parsed : null
+                    "" or "*"    => (IPAddress) IPv6Address.Any,
+                    "localhost"  => (IPAddress) IPv4Address.Localhost,
+                    _            => IPAddress.TryParse(bind)
                 };
 
                 if (bindAddress is null)
@@ -293,13 +294,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
             if (local is not null)
             {
-                await using var forward = client.StartLocalForward(new IPSocket(bindAddress ?? IPv4Address.Localhost, IPPort.Parse(port)), host, hostPort);
+                await using var forward = client.StartLocalForward(new IPSocket(bindAddress ?? IPv4Address.Localhost, IPPort.Parse(port)), host, IPPort.Parse(hostPort));
                 Console.WriteLine($"Forwarding {forward.LocalEndPoint} → {host}:{hostPort} (through {rest[0]}) — Ctrl+C to stop");
                 await WaitForCtrlCAsync(CancellationToken);
             }
             else
             {
-                await using var forward = await client.RequestRemoteForwardAsync(bind ?? "localhost", port, host, hostPort, CancellationToken);
+                await using var forward = await client.RequestRemoteForward(bind ?? "localhost", IPPort.Parse(port), host, IPPort.Parse(hostPort), CancellationToken);
                 Console.WriteLine($"Forwarding {forward.BindHost}:{forward.BoundPort} on {rest[0]} → {host}:{hostPort} (here) — Ctrl+C to stop");
                 await WaitForCtrlCAsync(CancellationToken);
             }
@@ -432,8 +433,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
         #region (shared) ConnectClientAsync
 
-        // Connect + authenticate a façade SshClient from the common -i/-p options and a user@host target.
-        private static async Task<SshClient> ConnectClientAsync(String[] Arguments, String Target, CancellationToken CancellationToken)
+        // Connect + authenticate a façade SSHClient from the common -i/-p options and a user@host target.
+        private static async Task<SSHClient> ConnectClientAsync(String[] Arguments, String Target, CancellationToken CancellationToken)
         {
             var identity     = Opt(Arguments, "-i", "--identity")!;
             var portStr      = Opt(Arguments, "-p", "--port") ?? "22";
@@ -443,12 +444,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.CLI
 
             Console.Error.WriteLine($"Warning: accepting host key of {host}{(jumpHosts is null ? "" : $" and of every jump host ({jumpHosts})")} without verification (demo) — "
                                     + "this connection is not protected against a machine-in-the-middle.");
-            return await SshClient.ConnectAsync(host, UInt16.Parse(portStr), new SshClientOptions {
-                Username      = user,
+            return await SSHClient.Connect(host, IPPort.Parse(portStr), new SSHClientOptions {
+                Username      = User_Id.Parse(user),
                 VerifyHostKey = SshHostKeyVerification.AcceptAnyUnsafe,
                 Credentials   = [ key ],
                 // -J [user@]host[:port],… as ssh takes it; every jump host borrows the key above.
-                ProxyJump     = jumpHosts is null ? [] : SshJumpHost.ParseChain(jumpHosts)
+                ProxyJump     = jumpHosts is null ? [] : SSHJumpHost.ParseChain(jumpHosts)
             }, CancellationToken);
         }
 
