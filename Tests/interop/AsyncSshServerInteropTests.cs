@@ -21,6 +21,7 @@ using System.Text.Json;
 
 using NUnit.Framework;
 
+using org.GraphDefined.Vanaheimr.Illias;
 using org.GraphDefined.Vanaheimr.Hermod;
 using org.GraphDefined.Vanaheimr.Hermod.SSH;
 using org.GraphDefined.Vanaheimr.Hermod.SSH.Client;
@@ -125,14 +126,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                        ["password"] = "s3cr3t"
                                                    }, CancellationToken);
 
-            await using (var client = await SshClient.ConnectAsync("127.0.0.1", peer.Port, new SshClientOptions {
-                                                                       Username       = "hermoduser",
+            await using (var client = await SSHClient.Connect("127.0.0.1", IPPort.Parse(peer.Port), new SSHClientOptions {
+                                                                       Username       = User_Id.Parse("hermoduser"),
                                                                        VerifyHostKey  = blob => blob.AsSpan().SequenceEqual(peer.HostKeyBlob),
                                                                        Password       = "s3cr3t"
                                                                    }, CancellationToken))
             {
 
-                var result = await client.ExecuteAsync("whoami", CancellationToken);
+                var result = await client.Execute("whoami", CancellationToken);
 
                 Assert.Multiple(() => {
                     Assert.That(result.StandardOutput.Trim(), Is.EqualTo($"{Marker} whoami password"), $"AsyncSSH let us in with the password.\n{peer.Server.Output}");
@@ -159,8 +160,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                        ["password"] = "s3cr3t"
                                                    }, CancellationToken);
 
-            Assert.That(async () => await SshClient.ConnectAsync("127.0.0.1", peer.Port, new SshClientOptions {
-                                              Username       = "hermoduser",
+            Assert.That(async () => await SSHClient.Connect("127.0.0.1", IPPort.Parse(peer.Port), new SSHClientOptions {
+                                              Username       = User_Id.Parse("hermoduser"),
                                               VerifyHostKey  = blob => blob.AsSpan().SequenceEqual(peer.HostKeyBlob),
                                               Password       = "wrong"
                                           }, CancellationToken),
@@ -194,8 +195,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             SshKeyboardInteractiveChallenge? asked = null;
 
-            await using (var client = await SshClient.ConnectAsync("127.0.0.1", peer.Port, new SshClientOptions {
-                                                                       Username             = "hermoduser",
+            await using (var client = await SSHClient.Connect("127.0.0.1", IPPort.Parse(peer.Port), new SSHClientOptions {
+                                                                       Username             = User_Id.Parse("hermoduser"),
                                                                        VerifyHostKey        = blob => blob.AsSpan().SequenceEqual(peer.HostKeyBlob),
                                                                        KeyboardInteractive  = (challenge, _) => {
                                                                                                   asked = challenge;
@@ -204,7 +205,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                                    }, CancellationToken))
             {
 
-                var result = await client.ExecuteAsync("whoami", CancellationToken);
+                var result = await client.Execute("whoami", CancellationToken);
                 Assert.That(result.StandardOutput.Trim(), Is.EqualTo($"{Marker} whoami keyboard-interactive"), $"AsyncSSH let us in on the answers.\n{peer.Server.Output}");
 
             }
@@ -255,13 +256,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 if (ForTheDialledAddress)
                 {
 
-                    await using var client = await SshClient.ConnectAsync("127.0.0.1", peer.Port, new SshClientOptions {
-                                                                              Username       = "hermoduser",
+                    await using var client = await SSHClient.Connect("127.0.0.1", IPPort.Parse(peer.Port), new SSHClientOptions {
+                                                                              Username       = User_Id.Parse("hermoduser"),
                                                                               VerifyHostKey  = verify,
                                                                               Password       = "s3cr3t"
                                                                           }, CancellationToken);
 
-                    var result = await client.ExecuteAsync("whoami", CancellationToken);
+                    var result = await client.Execute("whoami", CancellationToken);
 
                     Assert.That(result.StandardOutput.Trim(), Is.EqualTo($"{Marker} whoami password"), $"we accepted AsyncSSH's host certificate.\n{peer.Server.Output}");
 
@@ -270,8 +271,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 {
 
                     var refused = await Assert.CatchAsync<Exception>(async () => {
-                                      await using var client = await SshClient.ConnectAsync("127.0.0.1", peer.Port, new SshClientOptions {
-                                                                                                Username       = "hermoduser",
+                                      await using var client = await SSHClient.Connect("127.0.0.1", IPPort.Parse(peer.Port), new SSHClientOptions {
+                                                                                                Username       = User_Id.Parse("hermoduser"),
                                                                                                 VerifyHostKey  = verify,
                                                                                                 Password       = "s3cr3t"
                                                                                             }, CancellationToken);
@@ -314,8 +315,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                        ["user_ca"]  = InteropCertificates.PublicKeyLine(ca)
                                                    }, CancellationToken);
 
-            var options = new SshClientOptions {
-                              Username       = "hermoduser",
+            var options = new SSHClientOptions {
+                              Username       = User_Id.Parse("hermoduser"),
                               VerifyHostKey  = blob => blob.AsSpan().SequenceEqual(peer.HostKeyBlob),
                               Credentials    = [ InteropCertificates.User(userKey, ca, Principal) ]
                           };
@@ -323,15 +324,15 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             if (LetIn)
             {
 
-                await using var client = await SshClient.ConnectAsync("127.0.0.1", peer.Port, options, CancellationToken);
+                await using var client = await SSHClient.Connect("127.0.0.1", IPPort.Parse(peer.Port), options, CancellationToken);
 
-                var result = await client.ExecuteAsync("whoami", CancellationToken);
+                var result = await client.Execute("whoami", CancellationToken);
 
                 Assert.That(result.StandardOutput.Trim(), Is.EqualTo($"{Marker} whoami publickey"), $"AsyncSSH let us in with the certificate.\n{peer.Server.Output}");
 
             }
             else
-                await Assert.ThatAsync(async () => { await using var client = await SshClient.ConnectAsync("127.0.0.1", peer.Port, options, CancellationToken); },
+                await Assert.ThatAsync(async () => { await using var client = await SSHClient.Connect("127.0.0.1", IPPort.Parse(peer.Port), options, CancellationToken); },
                                        Throws.InstanceOf<SshAuthenticationException>(),
                                        $"a certificate for someone else.\n{peer.Server.Output}");
 
