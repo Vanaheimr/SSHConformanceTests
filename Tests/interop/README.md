@@ -15,7 +15,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | Path             | Purpose                                                                      |
 |------------------|------------------------------------------------------------------------------|
 | `setup-wsl.sh`   | Provision the peers on any Debian-family Linux (idempotent; root/sudo for apt). |
-| `.venv-interop/` | The Python peers (AsyncSSH, Paramiko), created by the script. Git-ignored.    |
+| `.venv-interop/` | The Python peers (AsyncSSH, Paramiko, ncclient), created by the script. Git-ignored. |
 | `python/`        | Peer drivers speaking a JSON contract with `WslInterop.RunPeerDriverAsync`, and `asyncssh_server.py`, a server for our client (`WslInterop.PythonPeerCommand`). |
 | `WslInterop.cs`  | Runs the peers — through WSL on Windows, directly on Linux: process plumbing, addressing, peer logs, skip reasons. |
 | `go/`            | A small `golang.org/x/crypto/ssh` harness (added when that peer is wired in). |
@@ -28,6 +28,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | SSH.NET | client | in-process (NuGet) |
 | AsyncSSH | **both** | WSL + `python/asyncssh_driver.py`, and `python/asyncssh_server.py` as a server for our client (password, keyboard-interactive) |
 | Paramiko | client | WSL + `python/paramiko_driver.py` |
+| ncclient | client (NETCONF, RFC 6242) | WSL + `python/ncclient_driver.py`, against a `netconf` subsystem the test serves |
 | Dropbear | **both** | WSL (`dbclient`, and `dropbear` as a server for our client) |
 | TinySSH | server | WSL (`socat` + `tinysshd`), exercising our client |
 
@@ -53,7 +54,7 @@ directories explicitly. Without that the two paths would disagree about which pe
 
 ### Which address a WSL peer must dial (measured 2026-08-11, NAT mode)
 
-Peers that only exist inside Linux — Dropbear, TinySSH, AsyncSSH, Paramiko, the Go harness — run in
+Peers that only exist inside Linux — Dropbear, TinySSH, AsyncSSH, Paramiko, ncclient, the Go harness — run in
 WSL and connect *back* to a server hosted on Windows. Under WSL's default **NAT** networking that
 server is **not reachable at `127.0.0.1`**: from inside WSL, the Windows host answers on the
 **default gateway** address (`ip route show default | awk '{print $3}'`, e.g. `172.23.32.1`).
