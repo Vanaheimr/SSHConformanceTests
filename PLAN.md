@@ -7,7 +7,7 @@ Interoperability with OpenSSH and a broad set of third-party implementations is 
 hard acceptance criterion (see §11).
 
 **Status legend:** ✅ done · 🔶 partial · ⬜ open — markers are kept current as implementation proceeds.
-**Current state (2026-11-23):** **M0–M8 ✅ · M9 🔶 · M10 🔶.** Protocol, façade, demo CLI and the
+**Current state (2026-11-24):** **M0–M8 ✅ · M9 🔶 · M10 🔶.** Protocol, façade, demo CLI and the
 conformance harness are complete and gated on every commit. **Everything still open is listed in §0** —
 the rest of this document records how each part was designed and verified, and its ✅ markers do not
 need to be searched for loose ends. The narrative of how M1–M4 landed, as it was written at the time,
@@ -441,9 +441,14 @@ Not scheduled yet, but next in line.
     - *What exists already:* `ExecHandler` and `ShellHandler` take application-defined commands without
       an operating-system shell, so the console could be a `ShellHandler` today. What is missing is the
       name, and with it a grant for this console alone.
-  - **Tests:** ✅ `ssh -s <name>` against our server (`OpenSshSubsystemInteropTests`); ⬜ our client
-    against `sshd` with a `Subsystem` line; ⬜ NETCONF (RFC 6242) as an existing standard subsystem to
-    check the mechanism against.
+  - **Tests:** ✅ `ssh -s <name>` against our server (`OpenSshSubsystemInteropTests`); ✅ our client
+    against `sshd` with `Subsystem` lines of its own (`OpenSshServerInteropTests`, 2026-11-24): a
+    megabyte echoed both ways at once with exit status 0 after our EOF, a failing subsystem's stdout and
+    its exit status 3, and a name sshd does not serve refused as `SshSubsystemRefusedException` with the
+    connection still usable afterwards — verified to go red when the client ignores the refusal. Found on
+    the way: sshd forwards a *command's* stderr as extended data but not a *subsystem's* — it is dropped,
+    not even logged, and OpenSSH's own `ssh -s` sees the same, so the test pins an empty stderr;
+    ⬜ NETCONF (RFC 6242) as an existing standard subsystem to check the mechanism against.
   - Known subsystems for reference: `sftp`, `netconf` (RFC 6242), `snmp` (RFC 5592), `publickey`
     (RFC 4819), `powershell` (PowerShell remoting).
 
