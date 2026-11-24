@@ -448,7 +448,15 @@ Not scheduled yet, but next in line.
     connection still usable afterwards — verified to go red when the client ignores the refusal. Found on
     the way: sshd forwards a *command's* stderr as extended data but not a *subsystem's* — it is dropped,
     not even logged, and OpenSSH's own `ssh -s` sees the same, so the test pins an empty stderr;
-    ⬜ NETCONF (RFC 6242) as an existing standard subsystem to check the mechanism against.
+    ✅ NETCONF (RFC 6242) as an existing standard subsystem to check the mechanism against
+    (`NcclientInteropTests`, 2026-11-24): **ncclient**, the Python NETCONF client network automation runs
+    on, holds a whole session on a `netconf` subsystem of our server - `<hello>`s, `<get-config>` with a
+    256 KiB reply, a `<lock>` answered by our `<rpc-error>`, `<close-session>` - in base:1.1's chunked
+    framing and in base:1.0's end-of-message framing, as the `<hello>`s settle it. The NETCONF side is a
+    few dozen lines of the test, not a library feature: what is under test is our subsystem channel
+    carrying a standard to an independent client. Our replies go out in chunks of 1, 17, 4096 and 999
+    bytes, sliced into 1500-byte sends wherever chunk headers or the end marker fall; with two bytes of
+    every such send swapped inside Hermod's `SendDataAsync`, the chunked case goes red.
   - Known subsystems for reference: `sftp`, `netconf` (RFC 6242), `snmp` (RFC 5592), `publickey`
     (RFC 4819), `powershell` (PowerShell remoting).
 
@@ -1196,6 +1204,7 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 | PuTTY `plink`/`psftp` (Windows + `putty-tools` on Linux) | client only | user certs (≥ 0.78) | sntrup761 (≥ 0.78), ML-KEM (≥ 0.83 ✓; 0.84 current) — **wired in 2026-08-11 (11 tests)**: 6-method key-exchange matrix, exec, host-key pinning via `-hostkey`, `puttygen` reading our `openssh-key-v1`, 256 KB through its flow control. Quirks pinned: plink needs a **PPK** (it refuses `openssh-key-v1` outright), and `-sshlog` gives its own protocol trace as evidence. Note plink 0.83 sends **no** `winadj` for a plain `exec`, so that contract is pinned hermetically instead | independent lineage; famous quirks (`winadj@…`); exercises our **server** |
 | AsyncSSH (Python) | both ✅ **wired in 2026-08-11** (client role; 5 tests) | yes (user+host, can also issue) | mlkem (≥ 2.18; since 2.24 via PyCA cryptography, no liboqs needed — **verified: it completes `mlkem768x25519-sha256` with us**), sntrup761 (still needs liboqs) | most scriptable feature-rich peer; great for cert edge cases + SFTP v4–v6 negotiation |
 | Paramiko (Python) | both ✅ **wired in 2026-08-11** (client role; 7 tests) | client-side certs (partial) | no (✓ through 5.0.0) | very widely deployed; conservative algorithm set; 5.0 drops all SHA-1 KEX + GSSAPI, adds AES-GCM. **Our legacy-refusal counterpart**: it offers CBC/3DES and we must not take them, and its GEX-only offer gives us a real "no common algorithm" case |
+| ncclient (Python, NETCONF) | client ✅ **wired in 2026-11-24** (2 tests) | no | no (Paramiko underneath) | the NETCONF client of network automation; drives a standard subsystem (RFC 6242) on our server in both framings, rather than SSH itself |
 | Go `x/crypto/ssh` (small test harness binaries) | client ✅ **wired in and green 2026-08-11 (4 tests)**; `setup-wsl.sh` provisions `golang-go` (Go 1.24.4 here) | yes (first-class) | mlkem768 (≥ v0.38.0, default-first; no sntrup761) | strict, spec-literal implementation — catches sloppiness; harness sources live in `Tests/interop/go/` |
 | SSH.NET (NuGet) | client only, **in-process** | no | sntrup761 + mlkem768 (≥ 2025.0.0 ✓ — our in-process test negotiates ML-KEM) | runs directly inside NUnit — zero orchestration cost, fast server-role smoke tests; pinned at 2026.0.0 |
 | curl with libssh/libssh2 (SFTP) | client only ✅ **wired in 2026-08-11 (2 tests)** | n/a | n/a | exercises our SFTP server through a completely different stack — a third C lineage, arriving as an embedded *library* in a general-purpose transfer tool rather than as an SSH client. Host key pinned via `--hostpubsha256` (base64 SHA-256 **without** our `SHA256:` prefix); reads `openssh-key-v1` directly. Note libssh2 ≤ 1.11.1 carries CVE-2026-55200 (Debian backports the fix); we are the server here in any case |

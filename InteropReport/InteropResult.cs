@@ -93,6 +93,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
             ("AsyncSsh",  "AsyncSSH"),
             ("Paramiko",  "Paramiko"),
             ("GoCrypto",  "Go x/crypto/ssh"),
+            ("Ncclient",  "ncclient"),
             ("LibSsh",    "curl / libssh")
         ];
 
@@ -115,6 +116,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
             ("sigalgs",          "Algorithm negotiation"),
             ("negotiat",         "Algorithm negotiation"),
             ("algorithm",        "Algorithm negotiation"),
+            ("netconf",          "NETCONF (RFC 6242)"),
             ("sftp",             "SFTP"),
             ("subsystem",        "Subsystems of one's own"),
             ("forward",          "Port forwarding"),

@@ -61,6 +61,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     {
 
         /// <summary>
+        /// Whatever else a driver reported, by its JSON name - what only that peer has to say, such as
+        /// the NETCONF session a <c>ncclient</c> run saw.
+        /// </summary>
+        [JsonExtensionData]
+        public Dictionary<String, JsonElement>? Extra { get; init; }
+
+        /// <summary>
         /// A failure report carrying the peer's own protocol trace — an interop failure is a disagreement
         /// about the wire, and the peer's view shows who stopped talking first.
         /// </summary>

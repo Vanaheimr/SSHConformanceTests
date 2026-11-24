@@ -64,7 +64,7 @@ if [[ "${CHECK_ONLY}" -eq 0 ]]; then
     ${SUDO} apt-get update -qq
     ${SUDO} env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${APT_PACKAGES[@]}"
 
-    log "Creating the Python virtual environment for AsyncSSH / Paramiko ..."
+    log "Creating the Python virtual environment for AsyncSSH / Paramiko / ncclient ..."
 
     # --copies, because symlinks do not survive a move across the /mnt boundary.
     if [[ ! -x "${VENV_DIR}/bin/python3" ]]; then
@@ -77,7 +77,7 @@ if [[ "${CHECK_ONLY}" -eq 0 ]]; then
     # silently points nowhere — 'pip' then resolves to the system one and Debian rejects it with
     # "externally-managed-environment" (PEP 668). Going through the venv's own python3 cannot miss.
     "${VENV_DIR}/bin/python3" -m pip install --quiet --upgrade pip
-    "${VENV_DIR}/bin/python3" -m pip install --quiet asyncssh paramiko
+    "${VENV_DIR}/bin/python3" -m pip install --quiet asyncssh paramiko ncclient
 
 fi
 
@@ -119,6 +119,7 @@ if [[ -d "${VENV_DIR}" ]]; then
     # still reports the truth instead of a traceback.
     report "AsyncSSH" "${VENV_DIR}/bin/python3" -c 'import asyncssh; print(asyncssh.__version__)'
     report "Paramiko" "${VENV_DIR}/bin/python3" -c 'import paramiko; print(paramiko.__version__)'
+    report "ncclient" "${VENV_DIR}/bin/python3" -c 'import ncclient; print(ncclient.__version__)'
 else
     printf '  %-12s (python venv not created — run without --check)\n' "AsyncSSH/…"
 fi
