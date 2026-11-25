@@ -109,6 +109,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var (prepared, _, prepareError) = await WslInterop.RunAsync([
                                                   "-e", "bash", "-c",
                                                   $"mkdir -p {wslRoot} && chmod 700 {wslRoot} && " +
+                                                  $"echo 'PrintMotd no' > {wslRoot}/sshd_config && " +
                                                   $"cp {staging}/user.pub {wslRoot}/authorized_keys && " +
                                                   $"chmod 600 {wslRoot}/authorized_keys && " +
                                                   String.Concat(scripts.Select(entry => $"cp {staging}/{entry.Script} {wslRoot}/ && chmod 700 {wslRoot}/{entry.Script} && ")) +
@@ -150,9 +151,20 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             }
 
-            var subsystem = (WithSftp ? "-o Subsystem=\"sftp /usr/lib/openssh/sftp-server\" " : "") +
+            // internal-sftp rather than a path to sftp-server: the in-process server is always the one that
+            // belongs to this sshd, whereas /usr/lib/openssh/sftp-server is the distribution's - which, under a
+            // source-built sshd on PATH, is another release than the one under test - and lives elsewhere on
+            // other distributions.
+            var subsystem = (WithSftp ? "-o Subsystem=\"sftp internal-sftp\" " : "") +
                             String.Concat(scripts.Select(entry => $"-o Subsystem=\"{entry.Key} {wslRoot}/{entry.Script}\" "));
 
+            // A configuration file of its own, not the distribution's: what /etc/ssh/sshd_config says - and
+            // the drop-ins it includes - is the machine's business, and the fixture depends on none of it.
+            // Older releases also make it a conflict: sshd 8.9 reads the command line first and then rejects
+            // the distribution's own 'Subsystem sftp' line as a duplicate of ours, and exits. The file holds
+            // the one line of Debian's that would otherwise change what a session sees - PrintMotd, which
+            // its configuration turns off because PAM prints the motd, while UsePAM is off here.
+            //
             // The mkdir rides inside the command substitution: run as root, sshd refuses to start
             // without the privilege-separation directory /run/sshd, and /run is a tmpfs — a fresh CI
             // container or a rebooted machine has no /run/sshd until something creates it. Run as an
@@ -161,6 +173,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var daemon = await WslInterop.StartServerAsync(
                              port =>
                                  $"$(mkdir -p /run/sshd 2>/dev/null; command -v sshd || echo /usr/sbin/sshd) -D -e -p {port} " +
+                                 $"-f {wslRoot}/sshd_config " +
                                  $"-h {wslRoot}/hostkey " +
                                  (WithHostCertificate ? $"-o HostCertificate={wslRoot}/hostkey-cert.pub " : "") +
                                  $"-o AuthorizedKeysFile={wslRoot}/authorized_keys " +
@@ -172,6 +185,31 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                              CancellationToken);
 
             return new Daemon(daemon, hostKeyBlob, userKey, wslRoot, windowsRoot, hostCertificateBlob);
+
+        }
+
+        /// <summary>
+        /// The KEXINIT a running sshd sends, read on a connection of its own that goes no further: our
+        /// identification string out, theirs in, then the first packet - unencrypted, as every packet is
+        /// before the first NEWKEYS. What a server offers is a property of its build and configuration,
+        /// not of its version number, so the tests that depend on it ask the server.
+        /// </summary>
+        private static async Task<KexInitMessage> ReadServerKexInitAsync(Daemon Daemon, CancellationToken CancellationToken)
+        {
+
+            var pipe = await SshTcp.ConnectAsync(new IPSocket(IPv4Address.Localhost, IPPort.Parse(Daemon.Port)), CancellationToken);
+
+            try
+            {
+                await SshVersionExchange.WriteAsync(pipe.Output, SshIdentificationString.Default, CancellationToken);
+                await SshVersionExchange.ReadAsync (pipe.Input,  CancellationToken);
+                return KexInitMessage.Decode(await SshPacketFraming.ReadPacketAsync(pipe.Input, NullTransportCipher.Instance, CancellationToken: CancellationToken));
+            }
+            finally
+            {
+                await pipe.Output.CompleteAsync();
+                await pipe.Input. CompleteAsync();
+            }
 
         }
 
@@ -1136,6 +1174,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             try
             {
 
+                // What this sshd offers, read off its own KEXINIT rather than inferred from its version:
+                // the nightly runs this against releases that predate ML-KEM (anything before 9.9) and
+                // strict KEX (before 9.6), and a version number is no guide to the second - Ubuntu's 8.9p1
+                // offers strict KEX, backported, while the same release built from source does not.
+                var offered = await ReadServerKexInitAsync(daemon, CancellationToken);
+
+                if (!offered.KexAlgorithms.Contains(KeyExchange))
+                    Assert.Ignore($"This sshd does not offer {KeyExchange}; it offers {String.Join(", ", offered.KexAlgorithms)}.");
+
+                var strictOffered = offered.KexAlgorithms.Contains(SshAlgorithmNames.Kex.StrictKexServer);
+
                 var pipe = await SshTcp.ConnectAsync(new IPSocket(IPv4Address.Localhost, IPPort.Parse(daemon.Port)), CancellationToken);
 
                 using var transport = await SshTransport.ClientHandshakeAsync(
@@ -1146,13 +1195,19 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 var algorithms = transport.Algorithms;
 
-                TestContext.Out.WriteLine($"sshd agreed on {algorithms.KeyExchange} / {algorithms.CipherServerToClient} / {algorithms.HostKey}");
+                TestContext.Out.WriteLine($"sshd agreed on {algorithms.KeyExchange} / {algorithms.CipherServerToClient} / {algorithms.HostKey}, strict KEX {(strictOffered ? "offered" : "not offered")}");
 
                 Assert.Multiple(() => {
                     Assert.That(algorithms.KeyExchange, Is.EqualTo(KeyExchange),
                                 $"our client must complete {KeyExchange} with a real sshd.\n{daemon.Server.Output}");
-                    Assert.That(algorithms.StrictKex, Is.True,
-                                "OpenSSH has offered strict KEX since 9.6, so the Terrapin countermeasure must be in force");
+                    // Both ways round: with a server that offers it, the Terrapin countermeasure must be in
+                    // force; with one that does not, our client must neither demand it nor apply it on its
+                    // own - one side resetting its sequence numbers alone breaks the very next packet,
+                    // which the completed handshake above would not have survived.
+                    Assert.That(algorithms.StrictKex, Is.EqualTo(strictOffered),
+                                strictOffered
+                                    ? "this sshd offers strict KEX, so the Terrapin countermeasure must be in force"
+                                    : "this sshd does not offer strict KEX, so neither side may apply it");
                 });
 
                 await pipe.Output.CompleteAsync();

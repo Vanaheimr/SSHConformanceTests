@@ -38,9 +38,8 @@ name: Nightly
 #   regression — and when it IS a real interop break, the fatal half above stayed
 #   green and the summary names the exact upstream version that broke us.
 #
-#   The backward half — 8.9/9.6/9.9 through era-matched container images — is
-#   still open, and deliberately so: it is a different mechanism (images, not a
-#   build) and setup-wsl.sh has no version knob to hang it on.
+#   The backward half — 8.9, 9.6 and 9.9 — is the openssh-spread job below,
+#   and fatal, because its versions are pinned.
 #
 # REFEREE -- the same suite against both submodules' current master.
 #
@@ -272,23 +271,14 @@ jobs:
             {
               echo '## Newest upstream OpenSSH (${{ matrix.leg }}, informational)'
               echo
-              echo 'The forward half of the version spread PLAN §11.6 asks for. A failure'
+              echo 'The forward half of the version spread PLAN §11.6 asks for (the backward'
+              echo 'half is the openssh-spread job). A failure'
               echo 'here is a prompt to look at the named release, not a regression in this'
               echo 'tree — the fatal half above is what speaks for our code.'
               echo
               cat "${SUMMARY}"
             } >> "${GITHUB_STEP_SUMMARY}"
           }
-
-          echo "::group::build prerequisites"
-          apt-get install -y --no-install-recommends build-essential zlib1g-dev libssl-dev libpam0g-dev
-          prereq=$?
-          echo "::endgroup::"
-          if [ ${prereq} -ne 0 ]; then
-            note '- could not install the build prerequisites — nothing was tested'
-            emit
-            exit 0
-          fi
 
           # Discover rather than pin. Verified against the live listing on
           # 2026-08-13: the newest release was openssh-10.5p1, while this
@@ -317,40 +307,13 @@ jobs:
           #     command-line line 0: Unsupported option UsePAM
           #     /usr/local/etc/sshd_config: No such file or directory
           #
-          # Three separate consequences of building the lazy way — and the fixture
-          # owns the sshd command line, so not one of them can be worked around
-          # from in here:
-          #
-          #  * --without-pam makes sshd REJECT `-o UsePAM=no` as an unknown option
-          #    and exit. The fixture passes it unconditionally and is right to,
-          #    because the distribution sshd is built with PAM. Nothing here
-          #    authenticates through PAM; the option merely has to be recognised.
-          #  * With no --prefix, sshd looks for its configuration under
-          #    /usr/local/etc and gives up when it is not there.
-          #  * Since 9.8 sshd re-executes $libexecdir/sshd-session for every
-          #    connection, so even a started sshd would have failed at the first
-          #    one, nothing having been installed anywhere.
-          #
-          # A private prefix answers all three at once and leaves the distribution's
-          # /etc/ssh untouched: configuration, privilege-separation directory and
-          # helper binaries all land under RUNNER_TEMP and die with the runner.
-          # install-nokeys because the fixture brings its own host key with -h, and
-          # generating a set here would only cost seconds nobody gets back.
-          #
-          # A subshell so the cd's stay in here and the test below still runs from
-          # the workspace. Plain `make`, not a hand-picked target list: the default
-          # target is the trodden path, and naming targets invites a parallel build
-          # to race on libssh.a.
+          # The three reasons behind those two lines (--with-pam, a real prefix,
+          # sshd-session since 9.8) are written down in build-openssh.sh, which
+          # this step and the backward half's source-built lane share — one recipe,
+          # so a lesson learnt by either cannot be forgotten by the other.
           echo "::group::build ${release}"
           prefix="${RUNNER_TEMP}/upstream/prefix"
-          ( mkdir -p "${RUNNER_TEMP}/upstream" \
-            && cd "${RUNNER_TEMP}/upstream" \
-            && curl -sSfL --max-time 300 -O "${base}/${tarball}" \
-            && tar xzf "${tarball}" \
-            && cd "${release}" \
-            && ./configure --prefix="${prefix}" --with-pam \
-            && make -j"$(nproc)" \
-            && make install-nokeys )
+          bash Tests/interop/build-openssh.sh "${release}" "${prefix}"
           built=$?
           echo "::endgroup::"
 
@@ -391,6 +354,230 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: nightly-test-results-${{ matrix.leg }}
+          path: artifacts/*.trx
+
+  # ---------------------------------------------------------------------------
+  # The backward half of the version spread: OpenSSH 8.9, 9.6 and 9.9.
+  # ---------------------------------------------------------------------------
+  openssh-spread:
+    # Three releases, each standing for something a peer in the field still
+    # does differently from the 10.x the gate sees:
+    #
+    #  * 8.9 — before ML-KEM, with sntrup761x25519 (and only under its
+    #    @openssh.com name) as its one post-quantum exchange, and before strict
+    #    KEX, the Terrapin countermeasure of 9.6.
+    #  * 9.6 — the first strict KEX, still without ML-KEM.
+    #  * 9.9 — the first mlkem768x25519-sha256, under its final name.
+    #
+    # 8.9 and 9.6 come as Ubuntu 22.04 and 24.04 ship them, in their own image:
+    # that is the OpenSSH a user actually meets, the distribution's patches and
+    # OpenSSL 3.0 included, and it is what PLAN §11.6 means by era-matched.
+    #
+    # The patches are also why 8.9 runs twice. The first local run of this job
+    # showed Ubuntu's 8.9p1 negotiating strict KEX with us: Ubuntu backported
+    # the Terrapin fix, so its 8.9 says nothing about a peer without strict KEX,
+    # the very thing 8.9 is on this list for. The second 8.9 lane is the release
+    # as OpenSSH published it, built from source in the same image against the
+    # same OpenSSL 3.0 — the one peer anywhere in this suite that cannot do
+    # strict KEX, and so the only place our fallback path meets a real peer.
+    #
+    # 9.9 cannot be had from a distribution any more — it shipped only in
+    # non-LTS releases (Ubuntu 25.04, Fedora 42) whose archives have closed — so
+    # it is built from source as well, in the gate's own debian:13. What 9.9 is
+    # here for is a protocol property, the first ML-KEM, and the source build has
+    # exactly it. All source builds use build-openssh.sh, the recipe the upstream
+    # step above uses.
+    #
+    # Only the OpenSSH fixtures run, as in the upstream step: every other peer
+    # already ran three times above, at versions this job does not change.
+    #
+    # FATAL, unlike the upstream step, and on purpose: these versions are
+    # pinned. Nothing outside this tree moves under them from one night to the
+    # next except a distribution's security update, so a red here names our
+    # code — the very regression this half exists to catch, a change that
+    # still talks to 10.x and no longer to what is deployed.
+    #
+    # expected-skips is what each release cannot do, measured locally in the
+    # same images on 2026-11-25, each skip naming its reason:
+    #
+    #  * 9.6 (3): mlkem768x25519-sha256 in both roles, and sntrup761x25519-
+    #    sha512 under its standard name, which its client does not know yet
+    #    (it has the @openssh.com spelling, which runs).
+    #  * 8.9 (4, both lanes): the same three, plus sftp's "cp" command, which
+    #    arrived in 9.0 together with the copy-data extension it drives.
+    #  * 9.9 (0): everything runs.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: openssh-8.9p1-ubuntu
+            container: ubuntu:22.04
+            dotnet-deps: libicu70 libssl3
+            expect: OpenSSH_8.9p1
+            expected-skips: 4
+          - lane: openssh-8.9p1
+            container: ubuntu:22.04
+            dotnet-deps: libicu70 libssl3
+            expect: OpenSSH_8.9p1
+            build: openssh-8.9p1
+            expected-skips: 4
+          - lane: openssh-9.6p1-ubuntu
+            container: ubuntu:24.04
+            dotnet-deps: libicu74 libssl3t64
+            expect: OpenSSH_9.6p1
+            expected-skips: 3
+          - lane: openssh-9.9p1
+            container: debian:13
+            dotnet-deps: libicu76 libssl3t64
+            expect: OpenSSH_9.9p1
+            build: openssh-9.9p1
+            expected-skips: 0
+    name: ${{ matrix.lane }}
+    runs-on: ubuntu-latest
+    container: ${{ matrix.container }}
+    env:
+      # Ubuntu's tzdata asks for a time zone on installation and waits for an
+      # answer nobody will give; Debian's does not ask. Harmless on both.
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+
+      # The gate's setup, step for step, but for the .NET prerequisites: the
+      # ICU and OpenSSL packages carry each release's own names.
+      - name: Install git and the .NET prerequisites
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git libstdc++6 tzdata ${{ matrix.dotnet-deps }}
+          git config --system http.version HTTP/1.1
+
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # The whole provisioning, although only OpenSSH is under test: the
+      # harness finds its interop directory through the Python virtualenv this
+      # script creates, and without it the sshd fixture skips itself.
+      - name: Provision the interop peers
+        run: bash Tests/interop/setup-wsl.sh
+
+      # GITHUB_PATH puts the prefix in front of the distribution's own OpenSSH
+      # for every later step — and the next step checks that it did.
+      - name: Build ${{ matrix.build }} from source
+        if: matrix.build
+        run: |
+          prefix="${RUNNER_TEMP}/${{ matrix.build }}"
+          bash Tests/interop/build-openssh.sh "${{ matrix.build }}" "${prefix}"
+          echo "${prefix}/bin"  >> "${GITHUB_PATH}"
+          echo "${prefix}/sbin" >> "${GITHUB_PATH}"
+
+      # The lesson NTSConformanceTests paid for in full: a lane that believed it
+      # tested one version while its daemon never ran reported agreement for a
+      # whole night. So before anything is tested, the binaries the fixtures
+      # will resolve must BE the release this lane is named after — both of
+      # them, since the client fixtures find ssh and the server fixture finds
+      # sshd, and a source build that put only one of the two on PATH would
+      # test a mixture. sshd learnt -V only in 9.x; an older one rejects the
+      # flag and still names itself in the usage text that follows, which is
+      # why the version is grepped rather than read from the first line.
+      #
+      # The version alone cannot tell the two 8.9p1 lanes apart, so a source
+      # build must also be the binary PATH resolves: the distribution's 8.9p1
+      # answering in the source-built lane would pass the version check and
+      # test the backported strict KEX instead of its absence.
+      - name: Check that the lane tests ${{ matrix.expect }}
+        run: |
+          client="$(ssh -V 2>&1)"
+          server="$(sshd -V 2>&1 | grep -oE 'OpenSSH_[^ ,]+' | head -1)"
+          echo "ssh:  ${client} ($(command -v ssh))"
+          echo "sshd: ${server} ($(command -v sshd))"
+          case "${client}" in ${{ matrix.expect }}*) ;; *) echo "FAIL: ssh is not ${{ matrix.expect }}"; exit 1 ;; esac
+          case "${server}" in ${{ matrix.expect }}*) ;; *) echo "FAIL: sshd is not ${{ matrix.expect }}"; exit 1 ;; esac
+          if [ -n "${{ matrix.build }}" ]; then
+            prefix="${RUNNER_TEMP}/${{ matrix.build }}"
+            case "$(command -v ssh)"  in "${prefix}"/*) ;; *) echo "FAIL: ssh is not the source build in ${prefix}";  exit 1 ;; esac
+            case "$(command -v sshd)" in "${prefix}"/*) ;; *) echo "FAIL: sshd is not the source build in ${prefix}"; exit 1 ;; esac
+          fi
+          {
+            echo '## ${{ matrix.lane }}'
+            echo
+            echo "- ssh: \`${client}\`"
+            echo "- sshd: \`${server}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '11.0.x'
+
+      - name: Start an ssh-agent holding one throwaway identity
+        run: |
+          eval "$(ssh-agent -s)"
+          ssh-keygen -t ed25519 -f "${RUNNER_TEMP}/spread-agent-key" -N "" -q
+          ssh-add -q "${RUNNER_TEMP}/spread-agent-key"
+          echo "SSH_AUTH_SOCK=${SSH_AUTH_SOCK}" >> "${GITHUB_ENV}"
+
+      - name: Tighten the container HOME for the path checks
+        run: |
+          d="${HOME:?}"
+          while [ "${d}" != "/" ] && [ "${d}" != "." ]; do
+            chown "$(id -u):$(id -g)" "${d}" || echo "  chown refused for ${d} (bind mount?)"
+            chmod go-w "${d}"
+            d="$(dirname "${d}")"
+          done
+
+      - name: Build
+        run: dotnet build Tests/Tests.csproj --configuration Release
+
+      # Skips are part of the result here, unlike in the gate: a release that
+      # predates an algorithm or a command skips the checks that need it, by
+      # name and with the reason. So the gate's "nothing skipped" becomes
+      # "exactly this many", per lane. The number belongs to a pinned release
+      # and does not move when checks are added, unless a new check needs
+      # something these releases lack — and then a red night asking whether
+      # that skip is intended is the right outcome. What the count catches is
+      # the failure the gate's rule exists for: a fixture that gates itself out
+      # wholesale (no virtualenv, no sshd) turns dozens of checks into skips,
+      # and a night of those would otherwise read as green.
+      #
+      # The counters are read from the indented summary lines only. The console
+      # logger can also print a one-line "Passed! - Failed: …, Skipped: …"
+      # digest, and counting both would double every number.
+      - name: Test the OpenSSH fixtures against ${{ matrix.expect }}
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          set +e
+          dotnet test Tests/Tests.csproj --configuration Release --no-build \
+            --filter "FullyQualifiedName~OpenSsh" \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=${{ matrix.lane }}.trx" \
+            --results-directory artifacts > "${RUNNER_TEMP}/test.out" 2>&1
+          rc=$?
+          cat "${RUNNER_TEMP}/test.out"
+          count() {
+            n=0
+            for v in $(grep -oE "^ +$1: +[0-9]+" "${RUNNER_TEMP}/test.out" | grep -oE '[0-9]+$'); do n=$((n + v)); done
+            echo "${n}"
+          }
+          passed="$(count Passed)"
+          failed="$(count Failed)"
+          skipped="$(count Skipped)"
+          {
+            echo
+            echo "${passed} passed, ${failed} failed, ${skipped} skipped — ${{ matrix.expected-skips }} skips expected."
+            echo
+            echo '```'
+            grep -E '^ +(Failed|Skipped) ' "${RUNNER_TEMP}/test.out" | sed 's/^ *//'
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          [ "${rc}" -eq 0 ] || exit "${rc}"
+          if [ "${skipped}" -ne ${{ matrix.expected-skips }} ]; then
+            echo "FAIL: ${skipped} checks skipped where ${{ matrix.expected-skips }} were expected."
+            exit 1
+          fi
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-test-results-${{ matrix.lane }}
           path: artifacts/*.trx
 
   # ---------------------------------------------------------------------------

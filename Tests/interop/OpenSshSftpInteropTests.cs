@@ -292,7 +292,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                     });
 
                 }
-                catch (AssertionException) { throw; }
+                // ResultStateException, not AssertionException: Assert.Ignore throws an IgnoreException,
+                // which is no AssertionException, so the narrower filter let the skip above fall into the
+                // catch-all below and come out as a failure - with the reason for the skip as its message.
+                // Only a peer older than 9.0 takes that path, which is why the nightly's 8.9 lane was the
+                // first to show it.
+                catch (ResultStateException) { throw; }
                 catch (Exception e)
                 {
                     try { if (!client.HasExited) client.Kill(true); } catch { }
