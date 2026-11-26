@@ -382,8 +382,24 @@ fail without the fix and a control proving the permitted case still works.
     `Cargo.lock` pins Russh 0.65.4, russh-sftp 4.0.0 and every other crate, fetched from crates.io like
     the Go module. The build takes about a minute the first time; its target directory outlives the
     run.
-- 🔶 **Tier 3 peers** (§11.1) — libssh ✅, Apache MINA SSHD ✅, Russh ✅ (above). Open: WinSCP, FileZilla,
-  wolfSSH / JSch, native OpenBSD, legacy OpenSSH. Which of them matter is open decision 6 in §13.
+- ✅ **JSch, against our server** (2026-11-26) - the other Java lineage, and the more widely embedded
+  one: Ant's `sshexec`/`scp` tasks, Maven wagons, Eclipse, Jenkins plugins, Spring Integration. JCraft
+  stopped at 0.1.55 in 2018, before the ETM MACs and AEAD ciphers our server insists on; the
+  maintained line is Matthias Wiede's fork, which Debian 13 ships as `libjsch-java` 0.2.19 under the old
+  name. It shares no code with MINA. JSch is a client only, so `Tests/interop/jsch/JschPeer.java` is
+  too, compiled in WSL against the distribution's jars like the MINA peer - `JschInteropTests`,
+  28 checks: exec and exit status, eight key exchanges (sntrup761 included, on BouncyCastle; JSch 0.2.19
+  has no ML-KEM), five cipher/MAC pairs, six host-key algorithms (RSA with SHA-2 only), five user-key
+  types read by JSch's own `openssh-key-v1` parser (RSA signing with SHA-2 from our `server-sig-algs`),
+  SFTP through `ChannelSftp` (upload with the close checked, rename, stat, symlink, readlink, lstat,
+  download through the link, listing, remove), a wrong host key refused.
+  - **No defect found**, all 28 green at the first run. JSch's symlink puts the two strings on the wire
+    in OpenSSH's order, which agrees with ours.
+  - JSch reports what it negotiated only in its log, so the peer reads the algorithms from there; and
+    its `Check*` settings would quietly drop an algorithm it cannot run here, so a restriction to one
+    algorithm turns them off and fails loudly instead.
+- 🔶 **Tier 3 peers** (§11.1) — libssh ✅, Apache MINA SSHD ✅, Russh ✅, JSch ✅ (above). Open: WinSCP,
+  FileZilla, wolfSSH, native OpenBSD, legacy OpenSSH. Which of them matter is open decision 6 in §13.
 - ✅ **Certificates against AsyncSSH and Go** (Hermod PR #215), both ways - each peer reads and
   checks ours, and we check theirs:
   - AsyncSSH and Go log in to our server with a user certificate our mini-CA issued, and with one they
@@ -1309,9 +1325,10 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 | Apache MINA SSHD 2.13 (`interop/mina/MinaPeer.java`) | both ✅ **wired in 2026-11-26 (51 checks)** | the Java lineage, embedded in Jenkins, Gerrit and JGit; no defect found (§0.3). Debian's 2.13.2 has `sntrup761x25519-sha512@openssh.com` but no ML-KEM (that arrived in 2.15.0 via BC); cert support in recent versions; 2.18.0 adopts OpenSSH 10.3's empty-principals semantics. Runs on every commit like libssh, since `setup-wsl.sh` provisions it |
 | libssh 0.11 (`interop/libssh/libssh_peer.c`) | both ✅ **wired in 2026-11-26 (43 checks)** | third C lineage besides OpenSSH/Dropbear, embedded rather than run as a tool; found the SSH_FXP_SYMLINK order defect (§0.3); its own SFTP server cannot rename; Debian's 0.11.5 has no post-quantum KEX. Runs on every commit like the Tier 2 peers, since `setup-wsl.sh` provisions it |
 | Russh 0.65 (`interop/russh/`, Rust) | both ✅ **wired in 2026-11-26 (51 checks)** | the Rust lineage, with russh-sftp on top; no defect found (§0.3). Has `mlkem768x25519-sha256` but no sntrup761. Needs Rust 1.89, newer than Debian 13's 1.85, so its compiler comes from rustup at the version `rust-toolchain.toml` pins, and its crates from crates.io as `Cargo.lock` pins them. Runs on every commit like libssh and MINA |
+| JSch 0.2 (`interop/jsch/JschPeer.java`, mwiede fork) | client ✅ **wired in 2026-11-26 (28 checks)** | the other Java lineage, in Ant, Maven wagons, Eclipse and Jenkins plugins; no defect found (§0.3). Debian's `libjsch-java` 0.2.19 is the maintained fork under JCraft's old name; it has `sntrup761x25519-sha512@openssh.com` (on BouncyCastle) but no ML-KEM, and no server role. Runs on every commit like MINA |
 | WinSCP (scripted via `winscp.com /script`) | client only | most popular Windows SFTP client (PuTTY-derived core) |
 | FileZilla | client only | manual smoke test per release |
-| wolfSSH, JSch (mwiede fork, Java) | varies | additional lineages, capabilities to verify; nice-to-have |
+| wolfSSH | varies | the embedded-C lineage beside Dropbear, capabilities to verify; nice-to-have |
 | **OpenBSD (native)** in a VM (Hyper-V/QEMU) | both | the literal upstream on its home OS — manual smoke per release, closes the "official OpenBSD SSH" loop :-) |
 | Legacy OpenSSH (7.x/8.x containers) | both | validates our legacy opt-in policy + clean "no common algorithm" failures |
 
@@ -1465,7 +1482,7 @@ Two diagnostics landed with it, both earned the hard way: `SshServer` now emits 
 3. ✅ **BouncyCastle — resolved (2026-07-23):** yes, used; `libs/Hermod` + `libs/Styx` both reference `BouncyCastle.Cryptography` 2.7.0 (bumped 2026-08 for the 2.7.0 security release). Since the SSH code now lives inside Hermod itself, that reference is direct rather than transitive — still no extra package on our side.
 4. ✅ **Demo CLI — resolved (2026-07-23):** yes, `Demo` is a wanted first-class deliverable for standing up a server and connecting clients (command design in §5). Scaffolded in M0, grows with the features, polished in M10.
 5. ✅ **CI provider — resolved (2026-08-13): GitHub Actions.** The repo has **three** remotes, renamed on 2026-08-13 so that the name says which one leads: **`origin` = `github.com/Vanaheimr`** (the primary write target), `git1` = `git1.graphdefined.com:5001` and `git2` = `git2.graphdefined.com:5002` (both self-hosted mirrors, now named symmetrically — `git1.graphdefined.com` is the same host as the older `git.graphdefined.com`, verified by an identical ed25519 host key). The same three names in `libs/Hermod` and `libs/Styx`, and `branch.master.remote` points at `origin` in all three, so a bare `git push` goes to GitHub. Push order is unchanged: submodule before parent. Two earlier constraints in this item have since dissolved: the deploy key is no longer needed, because `.gitmodules` was switched to the public `https://github.com/Vanaheimr/...` URLs (2026-08-12) and an anonymous recursive clone builds and tests green; and the "self-hosted GitLab presumably available" guess is moot now that the mirrors are public. The §11.6 shape holds — a **Linux runner** for the apt peers plus a **Windows runner** for Win32-OpenSSH and `plink` — and the first workflow implements the per-commit half of it (M9); the nightly and a Dependabot submodule check followed on 2026-08-13, and the backward version spread on 2026-11-25. SSH.NET remains the peer that needs no infrastructure at all: it runs **in-process inside NUnit** and was already green on both legs before any provisioning.
-6. ⬜ Tier 3 peers: any that matter specifically to you (e.g. WinSCP because your users use it)? Commercial peers (Rebex) only if a license exists. libssh, Apache MINA SSHD and Russh went first without waiting for the answer (2026-11-26, §0.3).
+6. ⬜ Tier 3 peers: any that matter specifically to you (e.g. WinSCP because your users use it)? Commercial peers (Rebex) only if a license exists. libssh, Apache MINA SSHD, Russh and JSch went first without waiting for the answer (2026-11-26, §0.3).
 7. ✅ **Hermod DNS integration — resolved (2026-07-23):** Vanaheimr Hermod + Styx are vendored as git submodules under `libs/` (internal `git.graphdefined.com` URLs, same as SMTPServer). The SSHFP adapter binds to the Hermod DNS client; the SSH core still only depends on `ISshfpResolver`. Since 2026-08-11 both live in the same repository and assembly.
 
 ---

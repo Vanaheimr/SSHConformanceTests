@@ -4,7 +4,7 @@
 #
 # Installs the third-party SSH/SFTP implementations that the interop suite (PLAN.md, section 11)
 # drives our client and server against: OpenSSH, Dropbear, TinySSH, PuTTY tools, curl, libssh,
-# Apache MINA SSHD, the Rust toolchain for Russh and the Python peers (AsyncSSH, Paramiko). Intended to
+# Apache MINA SSHD, JSch, the Rust toolchain for Russh and the Python peers (AsyncSSH, Paramiko). Intended to
 # run inside a WSL2 Debian/Ubuntu (or any Debian-family Linux). Idempotent: safe to re-run.
 #
 # Usage:   ./setup-wsl.sh            # install everything
@@ -47,8 +47,9 @@ APT_PACKAGES=(
     pkg-config          # ... which finds its two libraries through pkg-config:
     libssh-dev          #     libssh itself - client and server in one library
     libjansson-dev      #     and a JSON reader/writer for the peer contract
-    default-jdk-headless # builds and runs the Apache MINA SSHD peer in mina/ ...
+    default-jdk-headless # builds and runs the Java peers in mina/ and jsch/ ...
     libmina-sshd-java   #     Apache MINA SSHD - client, server and SFTP server in Java
+    libjsch-java        #     JSch, the maintained 0.2.x fork - client and SFTP client (pulls in BouncyCastle)
     openssl             # key/cert plumbing helpers
     ca-certificates
     python3
@@ -174,6 +175,12 @@ if [[ -f /usr/share/java/sshd-core.jar ]]; then
     printf '  %-12s %s\n' "MINA SSHD" "$(dpkg-query -W -f='${Version}' libmina-sshd-java 2>/dev/null || echo installed)"
 else
     printf '  %-12s \033[1;33mMISSING\033[0m\n' "MINA SSHD"
+fi
+
+if [[ -f /usr/share/java/jsch.jar ]]; then
+    printf '  %-12s %s\n' "JSch" "$(dpkg-query -W -f='${Version}' libjsch-java 2>/dev/null || echo installed)"
+else
+    printf '  %-12s \033[1;33mMISSING\033[0m\n' "JSch"
 fi
 
 # The compiler the Russh peer is built with is the one its directory pins, not rustup's default. Asked
