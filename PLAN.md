@@ -398,8 +398,36 @@ fail without the fix and a control proving the permitted case still works.
   - JSch reports what it negotiated only in its log, so the peer reads the algorithms from there; and
     its `Check*` settings would quietly drop an algorithm it cannot run here, so a restriction to one
     algorithm turns them off and fails loudly instead.
-- 🔶 **Tier 3 peers** (§11.1) — libssh ✅, Apache MINA SSHD ✅, Russh ✅, JSch ✅ (above). Open: WinSCP,
-  FileZilla, wolfSSH, native OpenBSD, legacy OpenSSH. Which of them matter is open decision 6 in §13.
+- ✅ **wolfSSH, both ways** (2026-11-26) - the embedded C lineage beside Dropbear: wolfSSL's SSH
+  library for devices and RTOSes, mostly met as an embedded server, built on wolfCrypt and sharing no
+  code with OpenSSH, libssh or Dropbear. Debian packages wolfSSL but not wolfSSH, so
+  `Tests/interop/wolfssh/build-wolfssh.sh` fetches the pinned release (1.6.0) from GitHub, checks its
+  SHA-256 and builds the library against `libwolfssl-dev` 5.7.2 into `~/.cache/hermod-interop/wolfssh`
+  (about fifteen seconds, once per version); `wolfssh_peer.c` is, like the libssh peer, both a client
+  speaking the JSON peer contract and a server for our client - `WolfSshInteropTests`, 42 checks:
+  - wolfSSH's client against our server: exec and exit status, seven key exchanges, the two AES-GCM
+    ciphers, six host-key algorithms (RSA with SHA-2 only), five user-key types read by wolfSSH's own
+    `openssh-key-v1` reader, SFTP (upload with the close checked, rename, stat, download, listing,
+    remove), a wrong host key refused.
+  - Our client against wolfSSH's server: exec and exit status, the same seven key exchanges, the two
+    AES-GCM ciphers, five key types both as wolfSSH's host key and as our user key, SFTP against
+    wolfSSH's own SFTP server, a wrong host key refused.
+  - **No defect found.** What the two of us share is the narrowest of any peer, and the gaps are
+    wolfSSH's: on Debian's wolfSSL it has no post-quantum key exchange and no ChaCha20, and its only
+    MACs are the encrypt-and-MAC `hmac-sha2-*` we do not implement (§0.5), so AES-GCM is the one cipher
+    family in common and AES-CTR cannot be negotiated at all. With GCM the two disjoint MAC lists stop
+    neither side, as OpenSSH's `aes*-gcm@openssh.com` defines it (the MAC is implicit in the cipher). Its SFTP has no SSH_FXP_SYMLINK or
+    SSH_FXP_READLINK in either role, so these transfers work without a link.
+  - wolfSSH names what it negotiated only in prose ("ECDH"), so where it is the client the algorithm
+    names come from our own server's audit record (`RecordingAuditSink.LastKeyExchange`). And its
+    server takes an `openssh-key-v1` host key only for ML-DSA composites, so the peer reads our file
+    with wolfSSH's reader, takes the private section apart and has wolfCrypt write it out as DER.
+  - wolfSSH has no generated options header: its feature switches reach the compiler on the command
+    line, and the public structs are laid out by them. `build-wolfssh.sh` records the flags it built
+    with, and the peer is compiled with exactly those.
+- 🔶 **Tier 3 peers** (§11.1) — libssh ✅, Apache MINA SSHD ✅, Russh ✅, JSch ✅, wolfSSH ✅ (above).
+  Open: WinSCP, FileZilla, native OpenBSD, legacy OpenSSH. Which of them matter is open decision 6 in
+  §13.
 - ✅ **Certificates against AsyncSSH and Go** (Hermod PR #215), both ways - each peer reads and
   checks ours, and we check theirs:
   - AsyncSSH and Go log in to our server with a user certificate our mini-CA issued, and with one they
@@ -1328,7 +1356,7 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 | JSch 0.2 (`interop/jsch/JschPeer.java`, mwiede fork) | client ✅ **wired in 2026-11-26 (28 checks)** | the other Java lineage, in Ant, Maven wagons, Eclipse and Jenkins plugins; no defect found (§0.3). Debian's `libjsch-java` 0.2.19 is the maintained fork under JCraft's old name; it has `sntrup761x25519-sha512@openssh.com` (on BouncyCastle) but no ML-KEM, and no server role. Runs on every commit like MINA |
 | WinSCP (scripted via `winscp.com /script`) | client only | most popular Windows SFTP client (PuTTY-derived core) |
 | FileZilla | client only | manual smoke test per release |
-| wolfSSH | varies | the embedded-C lineage beside Dropbear, capabilities to verify; nice-to-have |
+| wolfSSH 1.6 (`interop/wolfssh/wolfssh_peer.c`) | both ✅ **wired in 2026-11-26 (42 checks)** | the embedded C lineage beside Dropbear, on wolfCrypt; no defect found (§0.3). Not packaged by Debian, so `build-wolfssh.sh` builds the pinned release (SHA-256 checked) against Debian's wolfSSL 5.7.2. No post-quantum KEX, no ChaCha20 and only encrypt-and-MAC HMACs there, so AES-GCM is the one cipher family in common; no symlinks in its SFTP. Runs on every commit like libssh |
 | **OpenBSD (native)** in a VM (Hyper-V/QEMU) | both | the literal upstream on its home OS — manual smoke per release, closes the "official OpenBSD SSH" loop :-) |
 | Legacy OpenSSH (7.x/8.x containers) | both | validates our legacy opt-in policy + clean "no common algorithm" failures |
 
@@ -1482,7 +1510,7 @@ Two diagnostics landed with it, both earned the hard way: `SshServer` now emits 
 3. ✅ **BouncyCastle — resolved (2026-07-23):** yes, used; `libs/Hermod` + `libs/Styx` both reference `BouncyCastle.Cryptography` 2.7.0 (bumped 2026-08 for the 2.7.0 security release). Since the SSH code now lives inside Hermod itself, that reference is direct rather than transitive — still no extra package on our side.
 4. ✅ **Demo CLI — resolved (2026-07-23):** yes, `Demo` is a wanted first-class deliverable for standing up a server and connecting clients (command design in §5). Scaffolded in M0, grows with the features, polished in M10.
 5. ✅ **CI provider — resolved (2026-08-13): GitHub Actions.** The repo has **three** remotes, renamed on 2026-08-13 so that the name says which one leads: **`origin` = `github.com/Vanaheimr`** (the primary write target), `git1` = `git1.graphdefined.com:5001` and `git2` = `git2.graphdefined.com:5002` (both self-hosted mirrors, now named symmetrically — `git1.graphdefined.com` is the same host as the older `git.graphdefined.com`, verified by an identical ed25519 host key). The same three names in `libs/Hermod` and `libs/Styx`, and `branch.master.remote` points at `origin` in all three, so a bare `git push` goes to GitHub. Push order is unchanged: submodule before parent. Two earlier constraints in this item have since dissolved: the deploy key is no longer needed, because `.gitmodules` was switched to the public `https://github.com/Vanaheimr/...` URLs (2026-08-12) and an anonymous recursive clone builds and tests green; and the "self-hosted GitLab presumably available" guess is moot now that the mirrors are public. The §11.6 shape holds — a **Linux runner** for the apt peers plus a **Windows runner** for Win32-OpenSSH and `plink` — and the first workflow implements the per-commit half of it (M9); the nightly and a Dependabot submodule check followed on 2026-08-13, and the backward version spread on 2026-11-25. SSH.NET remains the peer that needs no infrastructure at all: it runs **in-process inside NUnit** and was already green on both legs before any provisioning.
-6. ⬜ Tier 3 peers: any that matter specifically to you (e.g. WinSCP because your users use it)? Commercial peers (Rebex) only if a license exists. libssh, Apache MINA SSHD, Russh and JSch went first without waiting for the answer (2026-11-26, §0.3).
+6. ⬜ Tier 3 peers: any that matter specifically to you (e.g. WinSCP because your users use it)? Commercial peers (Rebex) only if a license exists. libssh, Apache MINA SSHD, Russh, JSch and wolfSSH went first without waiting for the answer (2026-11-26, §0.3).
 7. ✅ **Hermod DNS integration — resolved (2026-07-23):** Vanaheimr Hermod + Styx are vendored as git submodules under `libs/` (internal `git.graphdefined.com` URLs, same as SMTPServer). The SSHFP adapter binds to the Hermod DNS client; the SSH core still only depends on `ISshfpResolver`. Since 2026-08-11 both live in the same repository and assembly.
 
 ---
