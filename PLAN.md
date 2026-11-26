@@ -7,7 +7,7 @@ Interoperability with OpenSSH and a broad set of third-party implementations is 
 hard acceptance criterion (see §11).
 
 **Status legend:** ✅ done · 🔶 partial · ⬜ open — markers are kept current as implementation proceeds.
-**Current state (2026-11-25):** **M0–M9 ✅ · M10 🔶.** Protocol, façade, demo CLI and the
+**Current state (2026-11-26):** **M0–M9 ✅ · M10 🔶.** Protocol, façade, demo CLI and the
 conformance harness are complete and gated on every commit. **Everything still open is listed in §0** —
 the rest of this document records how each part was designed and verified, and its ✅ markers do not
 need to be searched for loose ends. The narrative of how M1–M4 landed, as it was written at the time,
@@ -319,8 +319,28 @@ fail without the fix and a control proving the permitted case still works.
        reported as a failure.
   - `Tests/interop/build-openssh.sh` is now the one source-build recipe, shared by this job and the
     upstream step. Tier 2 peers at other than Debian's versions remain open with the Tier 3 entry below.
-- ⬜ **Tier 3 peers** (§11.1) — Apache MINA SSHD, libssh, WinSCP, FileZilla, wolfSSH / Russh / JSch,
-  native OpenBSD, legacy OpenSSH. Which of them matter is open decision 6 in §13.
+- ✅ **libssh, both ways** (2026-11-26) - the first Tier 3 peer, and a third C lineage that arrives
+  embedded in other products (KDE, GNOME's gvfs, Ansible's network modules, devices) rather than as a
+  tool. libssh ships no CLI, so `Tests/interop/libssh/libssh_peer.c` is both: a client speaking the JSON
+  peer contract and a server for our client, compiled in WSL against the distribution's libssh (Debian
+  13: 0.11.5) - `LibSshInteropTests`, 43 checks:
+  - libssh's client against our server: exec and exit status, seven key exchanges, five cipher/MAC
+    pairs, six host-key algorithms (RSA with SHA-2 only), five user-key types read by libssh's own
+    `openssh-key-v1` parser, SFTP (upload with the close checked, rename, stat, symlink, readlink,
+    lstat, download through the link, listing, remove), a wrong host key refused.
+  - Our client against libssh's server: exec and exit status, the same seven key exchanges, five key
+    types both as libssh's host key and as our user key, SFTP against libssh's own SFTP server, a wrong
+    host key refused.
+  - **One defect in Hermod, fixed** (Vanaheimr/Hermod#328): libssh sends
+    SSH_FXP_SYMLINK in the draft's order to every server that does not call itself OpenSSH, and ours
+    read every client in OpenSSH's order - a libssh client got a link at its target's path. The SFTP
+    server now takes the client's identification string and reads `libssh_` clients in the draft's order.
+  - **libssh's limits, not ours:** its built-in SFTP server (0.11) implements neither SSH_FXP_RENAME nor
+    `posix-rename@openssh.com` - our client is checked to get SSH_FX_OP_UNSUPPORTED and carry on - and
+    Debian's 0.11.5 has no post-quantum key exchange at all (neither sntrup761 name, no ML-KEM), so the
+    matrix stays classical; on the Debian leg, where nothing may skip, those cases could only fail.
+- 🔶 **Tier 3 peers** (§11.1) — libssh ✅ (above). Open: Apache MINA SSHD, WinSCP, FileZilla, wolfSSH /
+  Russh / JSch, native OpenBSD, legacy OpenSSH. Which of them matter is open decision 6 in §13.
 - ✅ **Certificates against AsyncSSH and Go** (Hermod PR #215), both ways - each peer reads and
   checks ours, and we check theirs:
   - AsyncSSH and Go log in to our server with a user certificate our mini-CA issued, and with one they
@@ -1244,7 +1264,7 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 | Peer | Roles vs us | Notes |
 |---|---|---|
 | Apache MINA SSHD (Java) | both | enterprise Java ecosystems; cert support in recent versions; ML-KEM since 2.15.0 via BC (no sntrup761); 2.18.0 adopts OpenSSH 10.3's empty-principals semantics |
-| libssh (0.11+) CLI examples | both | third C lineage besides OpenSSH/Dropbear |
+| libssh 0.11 (`interop/libssh/libssh_peer.c`) | both ✅ **wired in 2026-11-26 (43 checks)** | third C lineage besides OpenSSH/Dropbear, embedded rather than run as a tool; found the SSH_FXP_SYMLINK order defect (§0.3); its own SFTP server cannot rename; Debian's 0.11.5 has no post-quantum KEX. Runs on every commit like the Tier 2 peers, since `setup-wsl.sh` provisions it |
 | WinSCP (scripted via `winscp.com /script`) | client only | most popular Windows SFTP client (PuTTY-derived core) |
 | FileZilla | client only | manual smoke test per release |
 | wolfSSH, Russh (Rust), JSch (mwiede fork, Java) | varies | additional lineages, capabilities to verify; nice-to-have |
@@ -1400,7 +1420,7 @@ Two diagnostics landed with it, both earned the hard way: `SshServer` now emits 
 3. ✅ **BouncyCastle — resolved (2026-07-23):** yes, used; `libs/Hermod` + `libs/Styx` both reference `BouncyCastle.Cryptography` 2.7.0 (bumped 2026-08 for the 2.7.0 security release). Since the SSH code now lives inside Hermod itself, that reference is direct rather than transitive — still no extra package on our side.
 4. ✅ **Demo CLI — resolved (2026-07-23):** yes, `Demo` is a wanted first-class deliverable for standing up a server and connecting clients (command design in §5). Scaffolded in M0, grows with the features, polished in M10.
 5. ✅ **CI provider — resolved (2026-08-13): GitHub Actions.** The repo has **three** remotes, renamed on 2026-08-13 so that the name says which one leads: **`origin` = `github.com/Vanaheimr`** (the primary write target), `git1` = `git1.graphdefined.com:5001` and `git2` = `git2.graphdefined.com:5002` (both self-hosted mirrors, now named symmetrically — `git1.graphdefined.com` is the same host as the older `git.graphdefined.com`, verified by an identical ed25519 host key). The same three names in `libs/Hermod` and `libs/Styx`, and `branch.master.remote` points at `origin` in all three, so a bare `git push` goes to GitHub. Push order is unchanged: submodule before parent. Two earlier constraints in this item have since dissolved: the deploy key is no longer needed, because `.gitmodules` was switched to the public `https://github.com/Vanaheimr/...` URLs (2026-08-12) and an anonymous recursive clone builds and tests green; and the "self-hosted GitLab presumably available" guess is moot now that the mirrors are public. The §11.6 shape holds — a **Linux runner** for the apt peers plus a **Windows runner** for Win32-OpenSSH and `plink` — and the first workflow implements the per-commit half of it (M9); the nightly and a Dependabot submodule check followed on 2026-08-13, and the backward version spread on 2026-11-25. SSH.NET remains the peer that needs no infrastructure at all: it runs **in-process inside NUnit** and was already green on both legs before any provisioning.
-6. ⬜ Tier 3 peers: any that matter specifically to you (e.g. WinSCP because your users use it)? Commercial peers (Rebex) only if a license exists
+6. ⬜ Tier 3 peers: any that matter specifically to you (e.g. WinSCP because your users use it)? Commercial peers (Rebex) only if a license exists. libssh went first without waiting for the answer (2026-11-26, §0.3).
 7. ✅ **Hermod DNS integration — resolved (2026-07-23):** Vanaheimr Hermod + Styx are vendored as git submodules under `libs/` (internal `git.graphdefined.com` URLs, same as SMTPServer). The SSHFP adapter binds to the Hermod DNS client; the SSH core still only depends on `ISshfpResolver`. Since 2026-08-11 both live in the same repository and assembly.
 
 ---

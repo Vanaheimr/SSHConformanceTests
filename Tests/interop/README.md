@@ -20,6 +20,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | `python/`        | Peer drivers speaking a JSON contract with `WslInterop.RunPeerDriverAsync`, and `asyncssh_server.py`, a server for our client (`WslInterop.PythonPeerCommand`). |
 | `WslInterop.cs`  | Runs the peers — through WSL on Windows, directly on Linux: process plumbing, addressing, peer logs, skip reasons. |
 | `go/`            | A small `golang.org/x/crypto/ssh` harness (added when that peer is wired in). |
+| `libssh/`        | `libssh_peer.c`, one C program that is a libssh client speaking the JSON contract and a libssh server for our client, compiled on demand against the distribution's libssh. |
 
 ## Which peers are exercised, and how
 
@@ -32,12 +33,13 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | ncclient | client (NETCONF, RFC 6242) | WSL + `python/ncclient_driver.py`, against a `netconf` subsystem the test serves |
 | Dropbear | **both** | WSL (`dbclient`, and `dropbear` as a server for our client) |
 | TinySSH | server | WSL (`socat` + `tinysshd`), exercising our client |
+| libssh | **both** | WSL + `libssh/libssh_peer.c`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves libssh's own SFTP server for our client |
 
 ## Local setup (WSL2)
 
 ```bash
 # From a WSL2 Debian/Ubuntu shell, in this directory:
-./setup-wsl.sh            # install OpenSSH, Dropbear, TinySSH, PuTTY tools, curl + Python peers
+./setup-wsl.sh            # install OpenSSH, Dropbear, TinySSH, PuTTY tools, curl, libssh + Python peers
 ./setup-wsl.sh --check    # report what is present, install nothing
 ```
 
