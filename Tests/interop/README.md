@@ -22,6 +22,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | `go/`            | `main.go`, a client for `golang.org/x/crypto/ssh` and `github.com/pkg/sftp` speaking the JSON contract, built on demand from the module proxy as `go.mod` and `go.sum` pin them. |
 | `libssh/`        | `libssh_peer.c`, one C program that is a libssh client speaking the JSON contract and a libssh server for our client, compiled on demand against the distribution's libssh. |
 | `mina/`          | `MinaPeer.java`, the same for Apache MINA SSHD: a client speaking the JSON contract and a server for our client, compiled on demand against the distribution's jars. |
+| `wolfssh/`       | `wolfssh_peer.c`, the same for wolfSSH: a client speaking the JSON contract and a server for our client, compiled on demand against the wolfSSH release `build-wolfssh.sh` pins and builds once into `~/.cache/hermod-interop/wolfssh`, on the distribution's wolfSSL. |
 | `jsch/`          | `JschPeer.java`, a JSch client speaking the JSON contract, compiled on demand against the distribution's jars. JSch has no server, so this peer has no server role. |
 | `russh/`         | `russh-peer`, the same for Russh in Rust: a client speaking the JSON contract and a server for our client, built on demand from crates.io as `Cargo.lock` pins them, by the compiler `rust-toolchain.toml` pins. |
 
@@ -38,6 +39,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | TinySSH | server | WSL (`socat` + `tinysshd`), exercising our client |
 | libssh | **both** | WSL + `libssh/libssh_peer.c`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves libssh's own SFTP server for our client |
 | Apache MINA SSHD | **both** | WSL + `mina/MinaPeer.java`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves MINA's own SFTP server for our client |
+| wolfSSH | **both** | WSL + `wolfssh/wolfssh_peer.c`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves wolfSSH's own SFTP server for our client |
 | JSch | client | WSL + `jsch/JschPeer.java`: speaks the JSON contract against our server, SFTP through JSch's `ChannelSftp` |
 | Russh | **both** | WSL + `russh/src/main.rs`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves SFTP through russh-sftp for our client |
 
@@ -45,7 +47,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 
 ```bash
 # From a WSL2 Debian/Ubuntu shell, in this directory:
-./setup-wsl.sh            # install OpenSSH, Dropbear, TinySSH, PuTTY tools, curl, libssh, MINA SSHD, JSch, Rust for Russh + Python peers
+./setup-wsl.sh            # install OpenSSH, Dropbear, TinySSH, PuTTY tools, curl, libssh, wolfSSL for wolfSSH, MINA SSHD, JSch, Rust for Russh + Python peers
 ./setup-wsl.sh --check    # report what is present, install nothing
 ```
 

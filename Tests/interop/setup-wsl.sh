@@ -4,7 +4,7 @@
 #
 # Installs the third-party SSH/SFTP implementations that the interop suite (PLAN.md, section 11)
 # drives our client and server against: OpenSSH, Dropbear, TinySSH, PuTTY tools, curl, libssh,
-# Apache MINA SSHD, JSch, the Rust toolchain for Russh and the Python peers (AsyncSSH, Paramiko). Intended to
+# wolfSSL for wolfSSH, Apache MINA SSHD, JSch, the Rust toolchain for Russh and the Python peers (AsyncSSH, Paramiko). Intended to
 # run inside a WSL2 Debian/Ubuntu (or any Debian-family Linux). Idempotent: safe to re-run.
 #
 # Usage:   ./setup-wsl.sh            # install everything
@@ -47,6 +47,11 @@ APT_PACKAGES=(
     pkg-config          # ... which finds its two libraries through pkg-config:
     libssh-dev          #     libssh itself - client and server in one library
     libjansson-dev      #     and a JSON reader/writer for the peer contract
+    libwolfssl-dev      # wolfCrypt for the wolfSSH peer in wolfssh/, whose library build-wolfssh.sh builds ...
+    make                #     ... from the pinned upstream release, as autotools projects are built:
+    autoconf            #     a tag archive carries no configure script, so autogen.sh makes one
+    automake
+    libtool
     default-jdk-headless # builds and runs the Java peers in mina/ and jsch/ ...
     libmina-sshd-java   #     Apache MINA SSHD - client, server and SFTP server in Java
     libjsch-java        #     JSch, the maintained 0.2.x fork - client and SFTP client (pulls in BouncyCastle)
@@ -164,6 +169,15 @@ if pkg-config --exists libssh 2>/dev/null; then
 else
     printf '  %-12s \033[1;33mMISSING\033[0m\n' "libssh"
 fi
+
+# wolfSSH itself is built by WolfSshInteropTests on first use, at the version build-wolfssh.sh pins;
+# what has to be here is the wolfSSL it is built against.
+if [[ -f /usr/include/wolfssl/options.h ]]; then
+    printf '  %-12s %s\n' "wolfSSL" "$(dpkg-query -W -f='${Version}' libwolfssl-dev 2>/dev/null || echo installed)"
+else
+    printf '  %-12s \033[1;33mMISSING\033[0m\n' "wolfSSL"
+fi
+printf '  %-12s %s (build-wolfssh.sh)\n' "wolfSSH" "$(sed -n 's/^WOLFSSH_VERSION="\(.*\)"$/\1/p' "${SCRIPT_DIR}/wolfssh/build-wolfssh.sh")"
 
 if command -v java >/dev/null 2>&1; then
     printf '  %-12s %s\n' "Java" "$(java -version 2>&1 | head -n1)"

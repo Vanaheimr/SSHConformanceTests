@@ -201,6 +201,19 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         }
 
         /// <summary>
+        /// The last key exchange our server completed, as it recorded it - for a peer that will not
+        /// name what it negotiated, our own side of the record is the one to assert on.
+        /// </summary>
+        public KexCompletedEvent? LastKeyExchange
+        {
+            get
+            {
+                lock (events)
+                    return events.OfType<KexCompletedEvent>().LastOrDefault();
+            }
+        }
+
+        /// <summary>
         /// Everything our server logged, for a failure message.
         /// </summary>
         public String Report
