@@ -118,3 +118,48 @@ updates:
     # "chore(deps):" would be the only one of its kind in the log. Dependabot's
     # own "Bump libs/Hermod from X to Y" stays on the PR's commit, where it is
     # accurate and unremarkable; the merge commit is where the real message goes.
+
+  # The Russh peer (Tests/interop/russh/). Unlike every other peer it is not
+  # provisioned by apt, so no distribution update ever moves it: Cargo.toml pins
+  # russh and russh-sftp exactly and Cargo.lock pins every crate beneath them. That
+  # makes each run reproducible, and without this entry it would also make the
+  # peer age in silence — the suite would keep testing against the Russh of the
+  # day it was wired in, while the Russh that Warpgate and other Rust services
+  # ship moved on.
+  - package-ecosystem: cargo
+    directory: /Tests/interop/russh
+
+    # Weekly: this is a peer under test, not code we ship, and a week of crates.io
+    # is still a range one PR can name.
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+
+    # A week of cooldown, the opposite choice from the submodules above and for
+    # the opposite reason. There the commits are our own and the point is to see
+    # them early; here they are strangers' releases fetched at test time, and a
+    # compromised or broken crate is usually yanked within days. Waiting costs
+    # nothing a conformance suite needs.
+    cooldown:
+      default-days: 7
+
+    # One PR for all crates. russh and russh-sftp release in step, and a PR that
+    # moves one of them alone builds a pair nobody ships — the same argument as
+    # the submodule group above.
+    groups:
+      russh-peer:
+        patterns:
+          - "*"
+
+    open-pull-requests-limit: 2
+
+    labels:
+      - dependencies
+
+    # What this entry cannot do: rust-toolchain.toml pins the compiler, and a
+    # Russh release that raises its minimum Rust turns the PR red on the Debian
+    # leg, the one that builds the peer.
+    # The fix is to raise the channel in rust-toolchain.toml on the same PR;
+    # setup-wsl.sh installs whatever that file names.
