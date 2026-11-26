@@ -3,8 +3,8 @@
 # setup-wsl.sh — provision the interoperability peers for the HermodSSH test harness.
 #
 # Installs the third-party SSH/SFTP implementations that the interop suite (PLAN.md, section 11)
-# drives our client and server against: OpenSSH, Dropbear, TinySSH, PuTTY tools, curl, libssh and
-# the Python peers (AsyncSSH, Paramiko). Intended to run inside a WSL2 Debian/Ubuntu (or any
+# drives our client and server against: OpenSSH, Dropbear, TinySSH, PuTTY tools, curl, libssh,
+# Apache MINA SSHD and the Python peers (AsyncSSH, Paramiko). Intended to run inside a WSL2 Debian/Ubuntu (or any
 # Debian-family Linux). Idempotent: safe to re-run.
 #
 # Usage:   ./setup-wsl.sh            # install everything
@@ -40,6 +40,8 @@ APT_PACKAGES=(
     pkg-config          # ... which finds its two libraries through pkg-config:
     libssh-dev          #     libssh itself - client and server in one library
     libjansson-dev      #     and a JSON reader/writer for the peer contract
+    default-jdk-headless # builds and runs the Apache MINA SSHD peer in mina/ ...
+    libmina-sshd-java   #     Apache MINA SSHD - client, server and SFTP server in Java
     openssl             # key/cert plumbing helpers
     ca-certificates
     python3
@@ -134,6 +136,22 @@ if pkg-config --exists libssh 2>/dev/null; then
     printf '  %-12s %s\n' "libssh" "$(pkg-config --modversion libssh)"
 else
     printf '  %-12s \033[1;33mMISSING\033[0m\n' "libssh"
+fi
+
+if command -v java >/dev/null 2>&1; then
+    printf '  %-12s %s
+' "Java" "$(java -version 2>&1 | head -n1)"
+else
+    printf '  %-12s [1;33mMISSING[0m
+' "Java"
+fi
+
+if [[ -f /usr/share/java/sshd-core.jar ]]; then
+    printf '  %-12s %s
+' "MINA SSHD" "$(dpkg-query -W -f='${Version}' libmina-sshd-java 2>/dev/null || echo installed)"
+else
+    printf '  %-12s [1;33mMISSING[0m
+' "MINA SSHD"
 fi
 
 log "Done. NUnit reaches these peers via 'wsl.exe -e' from Windows, or directly on a Linux host."

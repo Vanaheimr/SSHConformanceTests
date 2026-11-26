@@ -21,6 +21,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | `WslInterop.cs`  | Runs the peers — through WSL on Windows, directly on Linux: process plumbing, addressing, peer logs, skip reasons. |
 | `go/`            | A small `golang.org/x/crypto/ssh` harness (added when that peer is wired in). |
 | `libssh/`        | `libssh_peer.c`, one C program that is a libssh client speaking the JSON contract and a libssh server for our client, compiled on demand against the distribution's libssh. |
+| `mina/`          | `MinaPeer.java`, the same for Apache MINA SSHD: a client speaking the JSON contract and a server for our client, compiled on demand against the distribution's jars. |
 
 ## Which peers are exercised, and how
 
@@ -34,12 +35,13 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | Dropbear | **both** | WSL (`dbclient`, and `dropbear` as a server for our client) |
 | TinySSH | server | WSL (`socat` + `tinysshd`), exercising our client |
 | libssh | **both** | WSL + `libssh/libssh_peer.c`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves libssh's own SFTP server for our client |
+| Apache MINA SSHD | **both** | WSL + `mina/MinaPeer.java`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves MINA's own SFTP server for our client |
 
 ## Local setup (WSL2)
 
 ```bash
 # From a WSL2 Debian/Ubuntu shell, in this directory:
-./setup-wsl.sh            # install OpenSSH, Dropbear, TinySSH, PuTTY tools, curl, libssh + Python peers
+./setup-wsl.sh            # install OpenSSH, Dropbear, TinySSH, PuTTY tools, curl, libssh, MINA SSHD + Python peers
 ./setup-wsl.sh --check    # report what is present, install nothing
 ```
 
