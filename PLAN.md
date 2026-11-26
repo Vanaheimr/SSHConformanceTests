@@ -339,7 +339,25 @@ fail without the fix and a control proving the permitted case still works.
     `posix-rename@openssh.com` - our client is checked to get SSH_FX_OP_UNSUPPORTED and carry on - and
     Debian's 0.11.5 has no post-quantum key exchange at all (neither sntrup761 name, no ML-KEM), so the
     matrix stays classical; on the Debian leg, where nothing may skip, those cases could only fail.
-- 🔶 **Tier 3 peers** (§11.1) — libssh ✅ (above). Open: Apache MINA SSHD, WinSCP, FileZilla, wolfSSH /
+- ✅ **Apache MINA SSHD, both ways** (2026-11-26) - the Java lineage, embedded in Jenkins, Gerrit, Eclipse's
+  JGit and many Java servers, and sharing no code with any C implementation. `Tests/interop/mina/MinaPeer.java`
+  is, like the libssh peer, both a client speaking the JSON peer contract and a server for our client,
+  compiled in WSL against the distribution's jars (Debian 13: `libmina-sshd-java` 2.13.2, OpenJDK 21) -
+  `MinaSshdInteropTests`, 51 checks:
+  - MINA's client against our server: exec and exit status, eight key exchanges (sntrup761 included),
+    five cipher/MAC pairs, six host-key algorithms (RSA with SHA-2 only), five user-key types read by
+    MINA's own `openssh-key-v1` parser, SFTP (upload with the close checked, rename, stat, symlink,
+    readlink, lstat, download through the link, listing, remove), a wrong host key refused.
+  - Our client against MINA's server: exec and exit status, the same eight key exchanges, six
+    cipher/MAC pairs (`aes192-ctr` included, which no server of ours offers by default), five key types
+    both as MINA's host key and as our user key, SFTP against MINA's own SFTP server (rename and a
+    symlink whose target is checked on disk), a wrong host key refused.
+  - **No defect found.** Both symlink argument orders agree with ours: MINA follows OpenSSH's.
+  - MINA signs its own login from the list it offers for the host key, so the peer restores MINA's
+    defaults after the key exchange; otherwise restricting the host-key algorithm would also take
+    away the user key's signature. MINA also offers the encrypt-and-MAC `hmac-sha2-*`, which we do not
+    implement (§0.5), so those pairs are not in the matrix.
+- 🔶 **Tier 3 peers** (§11.1) — libssh ✅, Apache MINA SSHD ✅ (above). Open: WinSCP, FileZilla, wolfSSH /
   Russh / JSch, native OpenBSD, legacy OpenSSH. Which of them matter is open decision 6 in §13.
 - ✅ **Certificates against AsyncSSH and Go** (Hermod PR #215), both ways - each peer reads and
   checks ours, and we check theirs:
@@ -1263,7 +1281,7 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 
 | Peer | Roles vs us | Notes |
 |---|---|---|
-| Apache MINA SSHD (Java) | both | enterprise Java ecosystems; cert support in recent versions; ML-KEM since 2.15.0 via BC (no sntrup761); 2.18.0 adopts OpenSSH 10.3's empty-principals semantics |
+| Apache MINA SSHD 2.13 (`interop/mina/MinaPeer.java`) | both ✅ **wired in 2026-11-26 (51 checks)** | the Java lineage, embedded in Jenkins, Gerrit and JGit; no defect found (§0.3). Debian's 2.13.2 has `sntrup761x25519-sha512@openssh.com` but no ML-KEM (that arrived in 2.15.0 via BC); cert support in recent versions; 2.18.0 adopts OpenSSH 10.3's empty-principals semantics. Runs on every commit like libssh, since `setup-wsl.sh` provisions it |
 | libssh 0.11 (`interop/libssh/libssh_peer.c`) | both ✅ **wired in 2026-11-26 (43 checks)** | third C lineage besides OpenSSH/Dropbear, embedded rather than run as a tool; found the SSH_FXP_SYMLINK order defect (§0.3); its own SFTP server cannot rename; Debian's 0.11.5 has no post-quantum KEX. Runs on every commit like the Tier 2 peers, since `setup-wsl.sh` provisions it |
 | WinSCP (scripted via `winscp.com /script`) | client only | most popular Windows SFTP client (PuTTY-derived core) |
 | FileZilla | client only | manual smoke test per release |
@@ -1420,7 +1438,7 @@ Two diagnostics landed with it, both earned the hard way: `SshServer` now emits 
 3. ✅ **BouncyCastle — resolved (2026-07-23):** yes, used; `libs/Hermod` + `libs/Styx` both reference `BouncyCastle.Cryptography` 2.7.0 (bumped 2026-08 for the 2.7.0 security release). Since the SSH code now lives inside Hermod itself, that reference is direct rather than transitive — still no extra package on our side.
 4. ✅ **Demo CLI — resolved (2026-07-23):** yes, `Demo` is a wanted first-class deliverable for standing up a server and connecting clients (command design in §5). Scaffolded in M0, grows with the features, polished in M10.
 5. ✅ **CI provider — resolved (2026-08-13): GitHub Actions.** The repo has **three** remotes, renamed on 2026-08-13 so that the name says which one leads: **`origin` = `github.com/Vanaheimr`** (the primary write target), `git1` = `git1.graphdefined.com:5001` and `git2` = `git2.graphdefined.com:5002` (both self-hosted mirrors, now named symmetrically — `git1.graphdefined.com` is the same host as the older `git.graphdefined.com`, verified by an identical ed25519 host key). The same three names in `libs/Hermod` and `libs/Styx`, and `branch.master.remote` points at `origin` in all three, so a bare `git push` goes to GitHub. Push order is unchanged: submodule before parent. Two earlier constraints in this item have since dissolved: the deploy key is no longer needed, because `.gitmodules` was switched to the public `https://github.com/Vanaheimr/...` URLs (2026-08-12) and an anonymous recursive clone builds and tests green; and the "self-hosted GitLab presumably available" guess is moot now that the mirrors are public. The §11.6 shape holds — a **Linux runner** for the apt peers plus a **Windows runner** for Win32-OpenSSH and `plink` — and the first workflow implements the per-commit half of it (M9); the nightly and a Dependabot submodule check followed on 2026-08-13, and the backward version spread on 2026-11-25. SSH.NET remains the peer that needs no infrastructure at all: it runs **in-process inside NUnit** and was already green on both legs before any provisioning.
-6. ⬜ Tier 3 peers: any that matter specifically to you (e.g. WinSCP because your users use it)? Commercial peers (Rebex) only if a license exists. libssh went first without waiting for the answer (2026-11-26, §0.3).
+6. ⬜ Tier 3 peers: any that matter specifically to you (e.g. WinSCP because your users use it)? Commercial peers (Rebex) only if a license exists. libssh and Apache MINA SSHD went first without waiting for the answer (2026-11-26, §0.3).
 7. ✅ **Hermod DNS integration — resolved (2026-07-23):** Vanaheimr Hermod + Styx are vendored as git submodules under `libs/` (internal `git.graphdefined.com` URLs, same as SMTPServer). The SSHFP adapter binds to the Hermod DNS client; the SSH core still only depends on `ISshfpResolver`. Since 2026-08-11 both live in the same repository and assembly.
 
 ---
