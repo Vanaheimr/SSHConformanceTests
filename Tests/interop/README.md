@@ -19,7 +19,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | `.venv-interop/` | The Python peers (AsyncSSH, Paramiko, ncclient), created by the script. Git-ignored. |
 | `python/`        | Peer drivers speaking a JSON contract with `WslInterop.RunPeerDriverAsync`, and `asyncssh_server.py`, a server for our client (`WslInterop.PythonPeerCommand`). |
 | `WslInterop.cs`  | Runs the peers — through WSL on Windows, directly on Linux: process plumbing, addressing, peer logs, skip reasons. |
-| `go/`            | A small `golang.org/x/crypto/ssh` harness (added when that peer is wired in). |
+| `go/`            | `main.go`, a client for `golang.org/x/crypto/ssh` and `github.com/pkg/sftp` speaking the JSON contract, built on demand from the module proxy as `go.mod` and `go.sum` pin them. |
 | `libssh/`        | `libssh_peer.c`, one C program that is a libssh client speaking the JSON contract and a libssh server for our client, compiled on demand against the distribution's libssh. |
 | `mina/`          | `MinaPeer.java`, the same for Apache MINA SSHD: a client speaking the JSON contract and a server for our client, compiled on demand against the distribution's jars. |
 | `russh/`         | `russh-peer`, the same for Russh in Rust: a client speaking the JSON contract and a server for our client, built on demand from crates.io as `Cargo.lock` pins them, by the compiler `rust-toolchain.toml` pins. |

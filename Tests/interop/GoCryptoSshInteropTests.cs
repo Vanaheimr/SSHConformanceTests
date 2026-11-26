@@ -83,12 +83,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             var source  = WslInterop.ToWslPath(Path.Combine(WslInterop.InteropDirectory!, "go"));
 
-            // Built out of a copy rather than in place: the sources sit on /mnt/d, where builds are slow
-            // and where 'go mod tidy' would drop a go.sum into the repository.
+            // Built out of a copy rather than in place: the sources sit on /mnt/d, where builds are slow.
+            // go.mod and go.sum pin every module, so a plain 'go build' (read-only on go.mod) builds exactly
+            // what Dependabot proposed and CI tested; 'go mod tidy' here would let pkg/sftp float again.
             var (exitCode, stdout, stderr) = await WslInterop.RunAsync([
                                                  "-e", "bash", "-c",
-                                                 $"mkdir -p {harnessRoot} && cp {source}/go.mod {source}/main.go {harnessRoot}/ && " +
-                                                 $"cd {harnessRoot} && go mod tidy && go build -o {harnessRoot}/hermod-interop ."
+                                                 $"mkdir -p {harnessRoot} && cp {source}/go.mod {source}/go.sum {source}/main.go {harnessRoot}/ && " +
+                                                 $"cd {harnessRoot} && go build -o {harnessRoot}/hermod-interop ."
                                              ], CancellationToken.None);
 
             if (exitCode != 0)

@@ -21,7 +21,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/.venv-interop"
 RUSSH_DIR="${SCRIPT_DIR}/russh"
-RUST_TOOLCHAIN="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "${RUSSH_DIR}/rust-toolchain.toml")"
+# tr first: a Windows checkout (core.autocrlf) has CRLF in these files, and the trailing \r would end up
+# in the toolchain name, which rustup then refuses as invalid.
+RUST_TOOLCHAIN="$(tr -d '\r' < "${RUSSH_DIR}/rust-toolchain.toml" | sed -n 's/^channel *= *"\(.*\)"/\1/p')"
 
 # The rustup.rs installer puts rustup into ~/.cargo/bin, which a non-login shell does not have on its PATH.
 export PATH="${HOME}/.cargo/bin:${PATH}"
@@ -182,6 +184,6 @@ if command -v rustup >/dev/null 2>&1 && rustup toolchain list | grep -q "^${RUST
 else
     printf '  %-12s \033[1;33mMISSING\033[0m (rustup with Rust %s)\n' "Rust" "${RUST_TOOLCHAIN}"
 fi
-printf '  %-12s %s (Cargo.lock)\n' "Russh" "$(sed -n '/^name = "russh"$/{n;s/^version = "\(.*\)"/\1/p}' "${RUSSH_DIR}/Cargo.lock")"
+printf '  %-12s %s (Cargo.lock)\n' "Russh" "$(tr -d '\r' < "${RUSSH_DIR}/Cargo.lock" | sed -n '/^name = "russh"$/{n;s/^version = "\(.*\)"/\1/p}')"
 
 log "Done. NUnit reaches these peers via 'wsl.exe -e' from Windows, or directly on a Linux host."
