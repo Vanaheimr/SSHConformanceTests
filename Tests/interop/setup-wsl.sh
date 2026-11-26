@@ -3,8 +3,8 @@
 # setup-wsl.sh — provision the interoperability peers for the HermodSSH test harness.
 #
 # Installs the third-party SSH/SFTP implementations that the interop suite (PLAN.md, section 11)
-# drives our client and server against: OpenSSH, Dropbear, TinySSH, PuTTY tools, curl and the
-# Python peers (AsyncSSH, Paramiko). Intended to run inside a WSL2 Debian/Ubuntu (or any
+# drives our client and server against: OpenSSH, Dropbear, TinySSH, PuTTY tools, curl, libssh and
+# the Python peers (AsyncSSH, Paramiko). Intended to run inside a WSL2 Debian/Ubuntu (or any
 # Debian-family Linux). Idempotent: safe to re-run.
 #
 # Usage:   ./setup-wsl.sh            # install everything
@@ -36,6 +36,10 @@ APT_PACKAGES=(
     socat               # run inetd-style tinysshd on a socket
     procps              # ps/pkill — the peer-lifecycle test's evidence; absent in the debian:13 container image
     golang-go           # builds the golang.org/x/crypto/ssh harness in go/
+    gcc                 # builds the libssh peer in libssh/ ...
+    pkg-config          # ... which finds its two libraries through pkg-config:
+    libssh-dev          #     libssh itself - client and server in one library
+    libjansson-dev      #     and a JSON reader/writer for the peer contract
     openssl             # key/cert plumbing helpers
     ca-certificates
     python3
@@ -125,5 +129,11 @@ else
 fi
 
 report "Go" go version
+
+if pkg-config --exists libssh 2>/dev/null; then
+    printf '  %-12s %s\n' "libssh" "$(pkg-config --modversion libssh)"
+else
+    printf '  %-12s \033[1;33mMISSING\033[0m\n' "libssh"
+fi
 
 log "Done. NUnit reaches these peers via 'wsl.exe -e' from Windows, or directly on a Linux host."
