@@ -119,8 +119,8 @@ updates:
     # own "Bump libs/Hermod from X to Y" stays on the PR's commit, where it is
     # accurate and unremarkable; the merge commit is where the real message goes.
 
-  # The Russh peer (Tests/interop/russh/). Unlike every other peer it is not
-  # provisioned by apt, so no distribution update ever moves it: Cargo.toml pins
+  # The Russh peer (Tests/interop/russh/). Like the Go peer below, and unlike
+  # every apt-provisioned peer, no distribution update ever moves it: Cargo.toml pins
   # russh and russh-sftp exactly and Cargo.lock pins every crate beneath them. That
   # makes each run reproducible, and without this entry it would also make the
   # peer age in silence — the suite would keep testing against the Russh of the
@@ -163,3 +163,40 @@ updates:
     # leg, the one that builds the peer.
     # The fix is to raise the channel in rust-toolchain.toml on the same PR;
     # setup-wsl.sh installs whatever that file names.
+
+  # The Go peer (Tests/interop/go/), for the same reason as Russh: go.mod and
+  # go.sum pin golang.org/x/crypto and github.com/pkg/sftp, and nothing apt
+  # does moves them. Until 2026-11-26 go.mod named only x/crypto and the harness
+  # ran 'go mod tidy', which resolved pkg/sftp to whatever was newest on the day
+  # of the run - a peer that changed under the suite with no commit to show for
+  # it. Now the harness runs a plain 'go build', and this entry is how the pins
+  # move.
+  - package-ecosystem: gomod
+    directory: /Tests/interop/go
+
+    # Weekly, a week's cooldown and one grouped PR, as for the crates above and
+    # for the same reasons: a peer under test, strangers' releases, and x/crypto
+    # and x/sys moving together.
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+
+    cooldown:
+      default-days: 7
+
+    groups:
+      go-peer:
+        patterns:
+          - "*"
+
+    open-pull-requests-limit: 2
+
+    labels:
+      - dependencies
+
+    # The go line in go.mod follows x/crypto, which already needs a newer Go
+    # than Debian 13's 1.24: the go command then fetches the toolchain go.mod
+    # asks for (GOTOOLCHAIN=auto), the way rustup fetches Russh's. A bump that
+    # raises the go line needs nothing else.
