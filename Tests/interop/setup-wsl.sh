@@ -4,8 +4,8 @@
 #
 # Installs the third-party SSH/SFTP implementations that the interop suite (PLAN.md, section 11)
 # drives our client and server against: OpenSSH, Dropbear, TinySSH, PuTTY tools, curl, libssh,
-# Apache MINA SSHD and the Python peers (AsyncSSH, Paramiko). Intended to run inside a WSL2 Debian/Ubuntu (or any
-# Debian-family Linux). Idempotent: safe to re-run.
+# Apache MINA SSHD, the Rust toolchain for Russh and the Python peers (AsyncSSH, Paramiko). Intended to
+# run inside a WSL2 Debian/Ubuntu (or any Debian-family Linux). Idempotent: safe to re-run.
 #
 # Usage:   ./setup-wsl.sh            # install everything
 #          ./setup-wsl.sh --check    # only report what is present, install nothing
@@ -20,6 +20,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/.venv-interop"
+RUSSH_DIR="${SCRIPT_DIR}/russh"
+RUST_TOOLCHAIN="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "${RUSSH_DIR}/rust-toolchain.toml")"
+
+# The rustup.rs installer puts rustup into ~/.cargo/bin, which a non-login shell does not have on its PATH.
+export PATH="${HOME}/.cargo/bin:${PATH}"
 
 CHECK_ONLY=0
 if [[ "${1:-}" == "--check" ]]; then
@@ -85,6 +90,25 @@ if [[ "${CHECK_ONLY}" -eq 0 ]]; then
     "${VENV_DIR}/bin/python3" -m pip install --quiet --upgrade pip
     "${VENV_DIR}/bin/python3" -m pip install --quiet asyncssh paramiko ncclient
 
+    # Russh needs a newer Rust than Debian ships, so the compiler comes from rustup, at the version
+    # russh/rust-toolchain.toml pins. A rustup that is already there - on the PATH or in ~/.cargo/bin -
+    # is used as it is. Otherwise Debian's rustup package provides one, unless Debian's own rustc or
+    # cargo is installed: that package conflicts with both, and this script does not remove a
+    # developer's compiler to make room for it.
+    if ! command -v rustup >/dev/null 2>&1; then
+        if dpkg-query -W -f='${Status}\n' rustc cargo 2>/dev/null | grep -q "install ok installed"; then
+            warn "Debian's rustc/cargo are installed, which Debian's rustup conflicts with - install rustup from https://rustup.rs for the Russh peer."
+        else
+            log "Installing rustup for the Russh peer ..."
+            ${SUDO} env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq rustup
+        fi
+    fi
+
+    if command -v rustup >/dev/null 2>&1; then
+        log "Installing Rust ${RUST_TOOLCHAIN} for the Russh peer ..."
+        rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
+    fi
+
 fi
 
 # ---------------------------------------------------------------------------------------------------
@@ -139,19 +163,25 @@ else
 fi
 
 if command -v java >/dev/null 2>&1; then
-    printf '  %-12s %s
-' "Java" "$(java -version 2>&1 | head -n1)"
+    printf '  %-12s %s\n' "Java" "$(java -version 2>&1 | head -n1)"
 else
-    printf '  %-12s [1;33mMISSING[0m
-' "Java"
+    printf '  %-12s \033[1;33mMISSING\033[0m\n' "Java"
 fi
 
 if [[ -f /usr/share/java/sshd-core.jar ]]; then
-    printf '  %-12s %s
-' "MINA SSHD" "$(dpkg-query -W -f='${Version}' libmina-sshd-java 2>/dev/null || echo installed)"
+    printf '  %-12s %s\n' "MINA SSHD" "$(dpkg-query -W -f='${Version}' libmina-sshd-java 2>/dev/null || echo installed)"
 else
-    printf '  %-12s [1;33mMISSING[0m
-' "MINA SSHD"
+    printf '  %-12s \033[1;33mMISSING\033[0m\n' "MINA SSHD"
 fi
+
+# The compiler the Russh peer is built with is the one its directory pins, not rustup's default. Asked
+# through the toolchain list, because running rustc for a pinned toolchain that is missing makes rustup
+# install it - and '--check' installs nothing.
+if command -v rustup >/dev/null 2>&1 && rustup toolchain list | grep -q "^${RUST_TOOLCHAIN}-"; then
+    printf '  %-12s %s\n' "Rust" "$(rustup run "${RUST_TOOLCHAIN}" rustc --version)"
+else
+    printf '  %-12s \033[1;33mMISSING\033[0m (rustup with Rust %s)\n' "Rust" "${RUST_TOOLCHAIN}"
+fi
+printf '  %-12s %s (Cargo.lock)\n' "Russh" "$(sed -n '/^name = "russh"$/{n;s/^version = "\(.*\)"/\1/p}' "${RUSSH_DIR}/Cargo.lock")"
 
 log "Done. NUnit reaches these peers via 'wsl.exe -e' from Windows, or directly on a Linux host."

@@ -120,6 +120,11 @@ jobs:
       # suite produces would go red or have to be softened into a skip. The venv keeps it
       # green, and PyPI is the same class of per-run dependency as the NuGet restore and
       # the Go module fetch this workflow already performs.
+      #
+      # Russh is the one peer whose compiler trixie cannot provide: it needs Rust 1.89, and
+      # trixie ships 1.85. The script installs trixie's rustup package and, through it, the
+      # toolchain Tests/interop/russh/rust-toolchain.toml pins; the crates come from
+      # crates.io as Cargo.lock pins them, the same class of fetch as the Go module.
       - name: Provision the interop peers (Debian container)
         if: runner.os == 'Linux'
         run: bash Tests/interop/setup-wsl.sh

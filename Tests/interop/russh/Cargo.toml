@@ -1,0 +1,19 @@
+# The Russh peer of the interop suite (Tests/interop/RusshInteropTests.cs): one binary, client and
+# server. Cargo.lock pins every crate and rust-toolchain.toml the compiler, so a run builds exactly
+# what was tested; bumping Russh is an edit here plus 'cargo update -p russh'.
+
+[package]
+name         = "russh-peer"
+version      = "0.1.0"
+edition      = "2024"
+publish      = false
+
+[dependencies]
+russh        = "=0.65.4"
+russh-sftp   = "=4.0.0"
+tokio        = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+serde_json   = "1"
+log          = { version = "0.4", features = ["std"] }
+
+[profile.release]
+debug        = false

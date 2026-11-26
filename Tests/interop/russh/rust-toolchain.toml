@@ -1,0 +1,6 @@
+# Russh 0.64 and later need Rust 1.89, newer than Debian 13 ships (1.85), so the compiler comes from
+# rustup, pinned here: setup-wsl.sh installs exactly this toolchain, and cargo picks it up from here.
+
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
