@@ -162,8 +162,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 var pipe = await listener.AcceptAsync(CancellationToken);
                 using var context = await SshHandshake.ServerHandshakeAsync(pipe, hostKey, CancellationToken: CancellationToken);
 
-                // Post-NEWKEYS packets start at sequence number 0 (strict-KEX). ReceiveMac is null for AEAD.
-                UInt32 sequenceNumber = 0;
+                // With strict KEX the sequence numbers restart at 0 after NEWKEYS. Without it they run on
+                // from the start of the connection, and the handshake has received exactly three packets by
+                // then - KEXINIT, the key-exchange init and NEWKEYS - so the first encrypted one is number 3.
+                // This read 0 unconditionally until the nightly met a client without strict KEX (OpenSSH
+                // 8.9p1 as released): every cipher that feeds the sequence number into its MAC or nonce then
+                // failed, and only AES-GCM, which does not, came through. ReceiveMac is null for AEAD.
+                UInt32 sequenceNumber = context.Algorithms.StrictKex ? 0u : 3u;
                 var payload = await SshPacketFraming.ReadPacketAsync(pipe.Input, context.ReceiveCipher, sequenceNumber++, context.ReceiveMac, CancellationToken: CancellationToken);
 
                 // Modern OpenSSH clients send their own SSH_MSG_EXT_INFO first (post-NEWKEYS); skip it.
@@ -228,10 +233,20 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 var message  = (SshMessageNumber) reader.ReadByte();
                 var service  = message == SshMessageNumber.ServiceRequest ? reader.ReadString() : "";
 
+                // Whether this client offered strict KEX, from its own -vv account of the KEXINIT it sent
+                // ("local client KEXINIT proposal"): only a client's proposal can carry the -c- marker, ours
+                // carries the -s- one. Read rather than assumed from the version, because the nightly runs
+                // this against releases on both sides of 9.6 - and a version number does not settle it:
+                // Ubuntu's 8.9p1 offers strict KEX, backported, the same release built from source does not.
+                var strictOffered = stderr.Contains(SshAlgorithmNames.Kex.StrictKexClient, StringComparison.Ordinal);
+
                 Assert.Multiple(() => {
                     Assert.That(algorithms.KeyExchange,          Is.EqualTo(SshKex));
                     Assert.That(algorithms.CipherClientToServer, Is.EqualTo(ExpectedCipher));
-                    Assert.That(algorithms.StrictKex,            Is.True, "OpenSSH 9.6+ must negotiate strict-KEX with us.");
+                    Assert.That(algorithms.StrictKex,            Is.EqualTo(strictOffered),
+                                strictOffered
+                                    ? "this ssh offered strict KEX, so it must be negotiated with us"
+                                    : "this ssh did not offer strict KEX, so neither side may apply it");
                     Assert.That(message,                         Is.EqualTo(SshMessageNumber.ServiceRequest),
                                 "The real OpenSSH client's first encrypted packet must decrypt to SSH_MSG_SERVICE_REQUEST.");
                     Assert.That(service,                         Is.EqualTo("ssh-userauth"));

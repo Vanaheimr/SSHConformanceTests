@@ -15,6 +15,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | Path             | Purpose                                                                      |
 |------------------|------------------------------------------------------------------------------|
 | `setup-wsl.sh`   | Provision the peers on any Debian-family Linux (idempotent; root/sudo for apt). |
+| `build-openssh.sh` | Build one OpenSSH portable release into a private prefix, for the nightly's version spread; put `<prefix>/bin` and `<prefix>/sbin` in front of `PATH` and every OpenSSH fixture uses it. |
 | `.venv-interop/` | The Python peers (AsyncSSH, Paramiko, ncclient), created by the script. Git-ignored. |
 | `python/`        | Peer drivers speaking a JSON contract with `WslInterop.RunPeerDriverAsync`, and `asyncssh_server.py`, a server for our client (`WslInterop.PythonPeerCommand`). |
 | `WslInterop.cs`  | Runs the peers — through WSL on Windows, directly on Linux: process plumbing, addressing, peer logs, skip reasons. |
@@ -78,5 +79,15 @@ sudo it would use on a developer box — so every fixture in this repository run
 **95 of 95 checks**, in about 16 s of test time. The Python peers deliberately keep coming from PyPI
 rather than apt: trixie's `python3-asyncssh` 2.20 predates AsyncSSH's PyCA-cryptography ML-KEM path
 (2.24), and with the apt package the post-quantum interop check could not pass. What remains for a
-nightly job (the plan's §11.6) is the *version spread* — OpenSSH 8.9/9.6/9.9 containers, the Tier 3
+nightly job (the plan's §11.6) is the *version spread* — older and newer OpenSSH releases, the Tier 3
 peers — not this suite at the distro's own peer versions.
+
+The [nightly](../../.github/workflows/nightly.yml) covers OpenSSH from both ends: the newest upstream
+release, built from source, and three older ones (8.9 in `ubuntu:22.04`, 9.6 in `ubuntu:24.04`, both
+as the distribution ships them, and 9.9 built from source in `debian:13`). To run one of the source
+builds locally:
+
+```bash
+sudo ./build-openssh.sh openssh-9.9p1 /opt/openssh-9.9p1
+PATH=/opt/openssh-9.9p1/bin:/opt/openssh-9.9p1/sbin:$PATH dotnet test ../Tests.csproj --filter "FullyQualifiedName~OpenSsh"
+```
