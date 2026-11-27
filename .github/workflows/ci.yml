@@ -175,6 +175,22 @@ jobs:
         shell: powershell
         run: Tests\interop\setup-windows.ps1 -Python "${{ steps.python.outputs.python-path }}"
 
+      # RusshInteropTests builds its peer into a target directory that outlives the run - in
+      # %LOCALAPPDATA% on Windows, under ~/.cache inside WSL or Linux - so on a developer machine
+      # only the first build compiles every crate. A hosted runner starts empty each time, and
+      # there the build took about 130 s of the Windows test step and 60 s of the Debian one.
+      # This keeps that directory between runs.
+      #
+      # The key is what decides which crates are built: Cargo.lock and the toolchain
+      # rust-toolchain.toml pins. Deliberately no restore-keys: a stale directory would carry
+      # the old crates along with the new ones and grow with every bump, while an exact miss
+      # costs one cold build and saves a clean directory under the new key. The peer's own
+      # source is not in the key - cargo rebuilds that crate by itself when it changes.
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.os == 'Windows' && '~/AppData/Local/hermod-interop/russh-target' || '~/.cache/hermod-interop/russh-target' }}
+          key: russh-target-${{ runner.os }}-${{ hashFiles('Tests/interop/russh/Cargo.lock', 'Tests/interop/russh/rust-toolchain.toml') }}
+
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '11.0.x'

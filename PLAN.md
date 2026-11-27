@@ -555,9 +555,13 @@ fail without the fix and a control proving the permitted case still works.
     runner's rustup, built Russh with aws-lc-sys's prebuilt objects; the two OpenSSH-TOTP checks of
     #88 that need no WSL account for the rest. The price is time: the test step took 270 s instead of
     61 s. About 130 s of that is Russh's first build - a hosted runner keeps no target directory between
-    runs - and 55 s MINA SSHD's 51 checks; JSch's take 16 s, Russh's own 14 s. A cache of Russh's target
-    directory (`%LOCALAPPDATA%\hermod-interop\russh-target`, `actions/cache`) would win most of the
-    build back if the leg's length ever matters.
+    runs - and 55 s MINA SSHD's 51 checks; JSch's take 16 s, Russh's own 14 s. The Debian leg pays the
+    same cold build, about 60 s of its test step.
+  - ✅ **Russh's target directory cached** (2026-11-28): `ci.yml` keeps it between runs on both legs
+    with `actions/cache`, keyed on `Cargo.lock` and `rust-toolchain.toml` and without restore-keys, so
+    a bump costs one cold build and starts a clean directory rather than growing the old one. A warm
+    build out of a fresh copy - as the fixture makes one - took 27 s on the developer machine, the
+    peer's own crate and the link.
 
 ### 0.4 Decisions pending
 
