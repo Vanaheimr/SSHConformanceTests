@@ -81,7 +81,20 @@ fi
 if [[ "${CHECK_ONLY}" -eq 0 ]]; then
     log "Installing interop peers via apt (root required) ..."
     ${SUDO} apt-get update -qq
-    ${SUDO} env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${APT_PACKAGES[@]}"
+
+    # Not every archive carries every peer: Ubuntu has no Apache MINA SSHD package, and the nightly's
+    # OpenSSH lanes provision Ubuntu images. A package the archive lacks is left out with a warning,
+    # and the fixtures of its peer skip themselves by name. Debian 13 has them all, and the gate there
+    # fails on any skip, so a misspelt package name still cannot pass unnoticed.
+    INSTALLABLE=()
+    for package in "${APT_PACKAGES[@]}"; do
+        if apt-cache show "${package}" >/dev/null 2>&1; then
+            INSTALLABLE+=("${package}")
+        else
+            warn "This archive has no package ${package} - its peer's checks will skip."
+        fi
+    done
+    ${SUDO} env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${INSTALLABLE[@]}"
 
     log "Creating the Python virtual environment for AsyncSSH / Paramiko / ncclient ..."
 
@@ -106,6 +119,9 @@ if [[ "${CHECK_ONLY}" -eq 0 ]]; then
     if ! command -v rustup >/dev/null 2>&1; then
         if dpkg-query -W -f='${Status}\n' rustc cargo 2>/dev/null | grep -q "install ok installed"; then
             warn "Debian's rustc/cargo are installed, which Debian's rustup conflicts with - install rustup from https://rustup.rs for the Russh peer."
+        elif ! apt-cache show rustup >/dev/null 2>&1; then
+            # Ubuntu 22.04, for one, has no rustup package.
+            warn "This archive has no package rustup - install it from https://rustup.rs for the Russh peer."
         else
             log "Installing rustup for the Russh peer ..."
             ${SUDO} env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq rustup
@@ -114,7 +130,9 @@ if [[ "${CHECK_ONLY}" -eq 0 ]]; then
 
     if command -v rustup >/dev/null 2>&1; then
         log "Installing Rust ${RUST_TOOLCHAIN} for the Russh peer ..."
-        rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
+        # --no-self-update: a distribution's rustup may not replace itself, and Ubuntu 24.04's 1.26 still
+        # tries after installing the toolchain and fails the script ("rustup is not installed at ~/.cargo").
+        rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal --no-self-update
     fi
 
 fi
