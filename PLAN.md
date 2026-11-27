@@ -23,15 +23,16 @@ is kept in [Appendix A](#appendix-a--build-journal-m1m4).
 | Hardening (M9) | ✅ — the version spread runs from OpenSSH 8.9 to the newest upstream release (§0.3) |
 | Demo CLI, benchmarks (M10) | 🔶 — done except NuGet packaging (deferred by decision, §13) |
 
-**Measured 2026-11-27** at `3ba88fd` (Hermod `daa99904`): Hermod's whole suite **8095 of 8096** green
-(one skip); the conformance suite **391 of 391, none skipped,** on the Debian CI leg — **382 interop
-checks against 16 peers**, all passing ([matrix](docs/INTEROP-MATRIX.md), regenerated from that leg's
-TRX), plus the demo-CLI tests. The `windows-latest` leg runs **80 of 391** and skips 311: the Linux
-peers, which a hosted runner without WSL cannot provision, and the ssh-agent check (§11.6). The nightly
-of 2026-11-26 ran the OpenSSH fixtures against the newest upstream release, **10.6p2**, **93 of 93**;
-in the version spread 9.9p1 passed 93 of 93, Ubuntu's 9.6p1 90 and both 8.9p1 lanes 89, skipping only
-what arrived after them (ML-KEM, the `sntrup761x25519-sha512` name of 9.9, and on 8.9 SFTP server-side
-copy).
+**Measured 2026-11-27** at `3ba88fd` (Hermod `daa99904`): Hermod's whole suite **8095 of 8096** green (the
+one skip is outside SSH: `TOTPVectorTests.RejectsInvalidInput(length-fractional)`, a vector the typed C#
+API cannot express, so it is rejected by construction); the conformance suite **391 of 391, none
+skipped,** on the Debian CI leg — **382 interop checks against 16 peers**, all passing
+([matrix](docs/INTEROP-MATRIX.md), regenerated from that leg's TRX), plus the demo-CLI tests. The
+`windows-latest` leg runs **80 of 391** and skips 311: the Linux peers, which a hosted runner without WSL
+cannot provision, and the ssh-agent check (§11.6). The nightly of 2026-11-26 ran the OpenSSH fixtures
+against the newest upstream release, **10.6p2**, **93 of 93**; in the version spread 9.9p1 passed 93 of
+93, Ubuntu's 9.6p1 90 and both 8.9p1 lanes 89, skipping only what arrived after them (ML-KEM, the
+`sntrup761x25519-sha512` name of 9.9, and on 8.9 SFTP server-side copy).
 
 ### 0.1 Security — found by the code audit of 2026-10-29, fixed the same day
 
