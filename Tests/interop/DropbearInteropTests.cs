@@ -555,6 +555,226 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
+
+        #region (private) harness: a forced command
+
+        /// <summary>
+        /// The subsystem name a protocol of our own asks for, as NTS-KE over SSH does.
+        /// </summary>
+        private const String OwnSubsystem    = "ntske/1@open.charging.cloud";
+
+        /// <summary>
+        /// The exit status of the forced command, distinct from every status a shell or Dropbear itself uses.
+        /// </summary>
+        private const Int32  ForcedExitCode  = 7;
+
+        /// <summary>
+        /// Start Dropbear with our key confined to a forced command (<c>command="…"</c> in
+        /// <c>authorized_keys</c>), the way an operator would carry a protocol of its own through a server
+        /// that knows no subsystems but <c>sftp</c>. The command prints what the client asked for
+        /// (<c>SSH_ORIGINAL_COMMAND</c>); where that is Dropbear's own SFTP server it also echoes its input.
+        /// </summary>
+        private static async Task<(WslServer Dropbear, Byte[] HostKey, String User)> StartForcedCommandDropbearAsync(Workspace          Workspace,
+                                                                                                                    CancellationToken  CancellationToken)
+        {
+
+            File.WriteAllText(Path.Combine(Workspace.WindowsRoot, "forced.sh"),
+                              "#!/bin/sh\n" +
+                              "printf 'forced: [%s]\\n' \"$SSH_ORIGINAL_COMMAND\"\n" +
+                              "case \"$SSH_ORIGINAL_COMMAND\" in\n" +
+                              "  *sftp-server) cat ;;\n" +
+                              "esac\n" +
+                              $"exit {ForcedExitCode}\n");
+
+            var staging = WslInterop.ToWslPath(Workspace.WindowsRoot);
+            var forced  = $"{Workspace.WslRoot}/forced.sh";
+            var keys    = $"{Workspace.WslAuthorizedDir}/authorized_keys";
+
+            var (exitCode, _, stderr) = await WslInterop.RunAsync([
+                                            "-e", "bash", "-c",
+                                            $"cp {staging}/forced.sh {forced} && chmod 755 {forced} && " +
+                                            $"printf 'command=\"%s\" ' {forced} > {keys} && cat {Workspace.WslRoot}/user.pub >> {keys} && " +
+                                            $"chmod 600 {keys} && " +
+                                            $"dropbearkey -t ed25519 -f {Workspace.WslHostKey} > /dev/null"
+                                        ], CancellationToken);
+
+            if (exitCode != 0)
+                Assert.Ignore($"Could not set up the forced command: {stderr}");
+
+            var (_, publicKeyText, _) = await WslInterop.RunAsync([
+                                            "-e", "dropbearkey", "-y", "-f", Workspace.WslHostKey
+                                        ], CancellationToken);
+
+            var publicLine = publicKeyText.Split('\n').FirstOrDefault(line => line.StartsWith("ssh-ed25519", StringComparison.Ordinal))
+                                 ?? throw new InvalidOperationException($"dropbearkey printed no public key:\n{publicKeyText}");
+
+            var dropbear = await WslInterop.StartServerAsync(
+                               port =>
+                                   $"dropbear -r {Workspace.WslHostKey} -D {Workspace.WslAuthorizedDir} " +
+                                   $"-p 127.0.0.1:{port} -F -E",
+                               CancellationToken);
+
+            return (dropbear,
+                    Convert.FromBase64String(publicLine.Split(' ')[1]),
+                    await WslInterop.WhoAmIAsync(CancellationToken));
+
+        }
+
+        private static Task<SSHClient> ConnectAsync(WslServer          Dropbear,
+                                                    Byte[]             HostKey,
+                                                    String             User,
+                                                    ISshHostKey        UserKey,
+                                                    CancellationToken  CancellationToken)
+
+            => SSHClient.Connect(
+                   "127.0.0.1",
+                   IPPort.Parse(Dropbear.Port),
+                   new SSHClientOptions {
+                       Username      = User_Id.Parse(User),
+                       Credentials   = [ UserKey ],
+                       VerifyHostKey = blob => blob.AsSpan().SequenceEqual(HostKey)
+                   },
+                   CancellationToken).AsTask();
+
+        #endregion
+
+        #region OurClient_IsRefusedASubsystemOfItsOwn_EvenUnderAForcedCommand
+
+        /// <summary>
+        /// Dropbear knows one subsystem, <c>sftp</c>, and refuses every other name. A forced command does
+        /// not change that: Dropbear checks the subsystem name before it applies <c>command="…"</c>, so a
+        /// protocol of its own cannot reach the forced command through a subsystem request.
+        ///
+        /// <para>
+        /// This pins the blocker that section 10.5 of the SSH Keying Material Exporter white paper names
+        /// for Dropbear. Should a later Dropbear accept the request, this test fails, and the paper has to
+        /// say so.
+        /// </para>
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        public async Task OurClient_IsRefusedASubsystemOfItsOwn_EvenUnderAForcedCommand(CancellationToken CancellationToken)
+        {
+
+            var (workspace, userKey) = await PrepareAsync(CancellationToken);
+
+            try
+            {
+
+                var (dropbear, hostKey, user) = await StartForcedCommandDropbearAsync(workspace, CancellationToken);
+                await using var _ = dropbear;
+
+                await using var client = await ConnectAsync(dropbear, hostKey, user, userKey, CancellationToken);
+
+                Assert.That(async () => await client.OpenSubsystem(OwnSubsystem, CancellationToken),
+                            Throws.TypeOf<SshSubsystemRefusedException>(),
+                            $"Dropbear refuses any subsystem but sftp, a forced command notwithstanding.\n{dropbear.Output}");
+
+            }
+            finally
+            {
+                await CleanupAsync(workspace);
+            }
+
+        }
+
+        #endregion
+
+        #region OurClient_ReachesAForcedCommand_ThroughExec
+
+        /// <summary>
+        /// The way around: the client asks for <c>exec</c> with the subsystem's name as its command.
+        /// Dropbear runs the forced command instead, hands it the name in <c>SSH_ORIGINAL_COMMAND</c>,
+        /// and returns its exit status. A protocol of its own runs behind Dropbear only like this, and
+        /// only if its clients are allowed to send <c>exec</c> instead of <c>subsystem</c>.
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        public async Task OurClient_ReachesAForcedCommand_ThroughExec(CancellationToken CancellationToken)
+        {
+
+            var (workspace, userKey) = await PrepareAsync(CancellationToken);
+
+            try
+            {
+
+                var (dropbear, hostKey, user) = await StartForcedCommandDropbearAsync(workspace, CancellationToken);
+                await using var _ = dropbear;
+
+                await using var client = await ConnectAsync(dropbear, hostKey, user, userKey, CancellationToken);
+
+                var result = await client.Execute(OwnSubsystem, CancellationToken);
+
+                TestContext.Out.WriteLine($"dropbear ran: {result.StandardOutput.Trim()} (exit {result.ExitCode})");
+
+                Assert.Multiple(() => {
+                    Assert.That(result.StandardOutput, Does.Contain($"forced: [{OwnSubsystem}]"),
+                                $"the forced command runs, with the name the client asked for.\n{dropbear.Output}");
+                    Assert.That(result.ExitCode, Is.EqualTo(ForcedExitCode),
+                                "and its exit status reaches the client");
+                });
+
+            }
+            finally
+            {
+                await CleanupAsync(workspace);
+            }
+
+        }
+
+        #endregion
+
+        #region OurClient_ReachesAForcedCommand_ThroughTheSftpSubsystem
+
+        /// <summary>
+        /// The one subsystem Dropbear accepts is replaced by the forced command as well. Bytes pass both
+        /// ways, but the command learns only the path of Dropbear's SFTP server, never a name: a protocol
+        /// that borrowed the name <c>sftp</c> could not tell its own clients from SFTP clients.
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        public async Task OurClient_ReachesAForcedCommand_ThroughTheSftpSubsystem(CancellationToken CancellationToken)
+        {
+
+            var (workspace, userKey) = await PrepareAsync(CancellationToken);
+
+            try
+            {
+
+                var (dropbear, hostKey, user) = await StartForcedCommandDropbearAsync(workspace, CancellationToken);
+                await using var _ = dropbear;
+
+                await using var client = await ConnectAsync(dropbear, hostKey, user, userKey, CancellationToken);
+
+                var channel = await client.OpenSubsystem("sftp", CancellationToken);
+
+                await channel.SendDataAsync("hello"u8.ToArray(), CancellationToken);
+                await channel.SendEofAsync(CancellationToken);
+
+                using var reader = new StreamReader(channel.Input);
+                var output       = await reader.ReadToEndAsync(CancellationToken);
+
+                TestContext.Out.WriteLine($"dropbear ran: {output.Trim()}");
+
+                Assert.Multiple(() => {
+                    Assert.That(output, Does.Match(@"forced: \[\S*sftp-server\]"),
+                                $"the forced command runs, and is told the path of the SFTP server.\n{dropbear.Output}");
+                    Assert.That(output, Does.Not.Contain("forced: [sftp]"),
+                                "not the name of the subsystem");
+                    Assert.That(output, Does.Contain("hello"),
+                                "and what the client sends reaches it");
+                });
+
+            }
+            finally
+            {
+                await CleanupAsync(workspace);
+            }
+
+        }
+
+        #endregion
+
     }
 
 }
