@@ -46,6 +46,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | wolfSSH | **both** | WSL + `wolfssh/wolfssh_peer.c`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves wolfSSH's own SFTP server for our client |
 | JSch | client | WSL + `jsch/JschPeer.java`: speaks the JSON contract against our server, SFTP through JSch's `ChannelSftp` |
 | Russh | **both** | WSL + `russh/src/main.rs`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves SFTP through russh-sftp for our client |
+| OpenSSH + [SSHTOTPTool](../../libs/SSHTOTPTool/README.md) | **both** | `OpenSshTotpInteropTests`: Hermod's one-time password, with `hermod-ssh-totp` as `ssh`'s `SSH_ASKPASS` (Windows or Linux process, against our server) and in `sshd`'s PAM stack through `pam_exec` (our client, and `ssh` with the tool, against it). The `sshd` cases rewrite `/etc/pam.d/sshd` while they run, so they run as root in a container only - the Debian CI leg, or locally `debian:13` - and skip everywhere else |
 
 ## Local setup (Windows, native)
 

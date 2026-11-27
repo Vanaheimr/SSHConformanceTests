@@ -306,6 +306,13 @@ fail without the fix and a control proving the permitted case still works.
   - Hermetic in `RecordingRotationTests` (12 checks); with rotation and pruning switched off, 9 of them
     fail. The recorders are still wired in by the caller (`ServeCommandAsync` takes one), not by
     `SshServerOptions`.
+- ✅ **Hermod's one-time password for an unmodified OpenSSH** (2026-11-27, Hermod PR #355): Hermod's
+  `HermodTotpKeyboardInteractive` asks for the unbound `TOTPGenerator` token over keyboard-interactive
+  (hermetic in `HermodTotpKeyboardInteractiveTests`), and the new repository **SSHTOTPTool**
+  (`hermod-ssh-totp`, NativeAOT) teaches it to OpenSSH: `sshd` through `pam_exec`, `ssh` through
+  `SSH_ASKPASS`. The tool has 92 tests of its own (the canonical vectors among them), plus an
+  OpenSSH-against-OpenSSH end-to-end script in a container. Here `OpenSshTotpInteropTests` covers the
+  three directions that involve OpenSSH; see "Two-factor authentication (TOTP)" and §11.3 #6.
 
 ### 0.3 Conformance & interoperability
 
@@ -1069,8 +1076,22 @@ policy is `publickey,keyboard-interactive`: a valid key/cert gets *partial* succ
 - **Hardening:** replay cache (a code is single-use within its window) ✅, attempt rate-limiting shared with
   `MaxAuthTries`, all comparisons `FixedTimeEquals`, clock via `TimeProvider` (skew + tests deterministic),
   secrets zeroized; the prompt/response text is excluded from session recording (§7)
+- **Hermod's own token over keyboard-interactive** ✅ (2026-11-27): `HermodTotpKeyboardInteractive` asks for
+  the token of `TOTPGenerator` (the TOTP.ts format, every `TOTPConfig` parameter: secret, validity, length,
+  alphabet, hash) **unbound** - the variant an unmodified OpenSSH can take part in; `Answer(config)` is the
+  client's side. No replay cache by design: a short `validityTime` keeps the window (±1 slot) small. Where
+  both ends are ours, the session-bound `totp@open.charging.cloud` stays the better choice.
+- **SSHTOTPTool** ✅ (2026-11-27, own repository `Vanaheimr/SSHTOTPTool`, submodule `libs/SSHTOTPTool`):
+  `hermod-ssh-totp`, a NativeAOT tool that teaches an unmodified OpenSSH that token - `sshd` checks it
+  through `pam_exec expose_authtok` (`verify`), `ssh` sends it through `SSH_ASKPASS` (`askpass`, finding the
+  configuration by OpenSSH's `(user@host) ` prompt prefix). Findings worth keeping: sshd 10.0p2 asks PAM
+  under the fixed service name `sshd` (`SshdAuthPath` does not change it), a pam_exec-only auth stack
+  needs `auth optional pam_permit.so` or `pam_setcred()` fails the login, and `PerSourcePenalties` must be
+  off for deliberate refusals from one address. Its README is the deployment guide.
 - Interop: real OpenSSH `ssh` renders our keyboard-interactive prompt and submits the code; our client can
-  likewise answer a keyboard-interactive challenge from a PAM/OTP-configured `sshd` (§11.3 #6)
+  likewise answer a keyboard-interactive challenge from a PAM/OTP-configured `sshd` (§11.3 #6) - 🔶: ✅ for
+  Hermod's token in all three directions (`OpenSshTotpInteropTests`), ⬜ for RFC 6238 codes against a
+  `libpam-oath`/`libpam-google-authenticator` sshd
 
 ### Authentication banner (`SSH_MSG_USERAUTH_BANNER`, RFC 4252 §5.4)
 
@@ -1437,7 +1458,7 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 3. **Host keys:** every mutual algorithm; `server-sig-algs` honored (RSA keys must end up rsa-sha2); host certificates where supported
 4. **Ciphers/MACs:** full sub-matrix vs OpenSSH; per-peer supported subset elsewhere; ETM vs E&M
 5. **ext-info:** peers that send it, peers that don't
-6. **Auth:** publickey per key type; certificates (issue with `ssh-keygen`, verify with peer — and vice versa); password; keyboard-interactive; partial-success chains; `MaxAuthTries` behavior; **TOTP 2FA**: real `ssh` renders our keyboard-interactive prompt and a code from a standard authenticator app (RFC 6238) completes `publickey,keyboard-interactive`; our client answers a keyboard-interactive challenge from an OTP-configured `sshd`; **auth banner**: our server's `SSH_MSG_USERAUTH_BANNER` shows up in the real `ssh` client, and our client surfaces a banner from an `sshd` configured with `Banner`
+6. **Auth:** publickey per key type; certificates (issue with `ssh-keygen`, verify with peer — and vice versa); password; keyboard-interactive; partial-success chains; `MaxAuthTries` behavior; **TOTP 2FA**: real `ssh` renders our keyboard-interactive prompt and a code from a standard authenticator app (RFC 6238) completes `publickey,keyboard-interactive`; our client answers a keyboard-interactive challenge from an OTP-configured `sshd` (🔶 2026-11-27: with Hermod's own token ✅ - `OpenSshTotpInteropTests`, real `ssh` + `hermod-ssh-totp` as askpass against our server, our client against `sshd` + `pam_exec` + the tool, and the two OpenSSH ends together; the PAM cases run as root in the Debian container leg only, since they rewrite `/etc/pam.d/sshd`; RFC 6238 against a PAM OTP module ⬜); **auth banner**: our server's `SSH_MSG_USERAUTH_BANNER` shows up in the real `ssh` client, and our client surfaces a banner from an `sshd` configured with `Banner`
 7. **Channels (plumbing):** shell with PTY (`pty-req`, `window-change`; scripted expect-style checks); window stress (tiny windows, huge bursts); parallel channels
 8. **Remote command execution end-to-end** — the everyday "log in to a Linux box, run a bash command, capture the output, log out" workflow (the friendly kind of remote code execution, not the CVE kind). Runs with our client against real Linux sshds (WSL2 + containers), and mirrored against our server using `ssh`/`plink` as clients:
    - stdout capture (`uname -a`, `lsb_release -a`), stderr kept separate (`ls /nonexistent`), exit codes (`exit 42`, `false` → 1, command not found → 127)

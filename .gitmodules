@@ -4,3 +4,6 @@
 [submodule "libs/Styx"]
 	path = libs/Styx
 	url = https://github.com/Vanaheimr/Styx.git
+[submodule "libs/SSHTOTPTool"]
+	path = libs/SSHTOTPTool
+	url = https://github.com/Vanaheimr/SSHTOTPTool.git
