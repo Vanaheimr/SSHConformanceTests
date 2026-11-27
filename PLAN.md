@@ -659,8 +659,8 @@ the work since has added four more.
       of WebSocket ping/pong.
     - *More than one TCP connection:* SSH multiplexes over one; a channel cannot move to another
       connection, and one lost segment stalls every channel on it (TCP head-of-line blocking). Spreading
-      streams over several connections would be a pool above `SshClient` — the point where EVQI
-      Transport's design and SSH's differ.
+      streams over several connections is the job of EVQI's channel sessions, with SSH as one of
+      their bindings (below).
   - **Alongside on the same connection:** SFTP for firmware and logs, `-R` for diagnostic access, `exec`
     for maintenance — the actual gain over one WebSocket per station.
   - **Tests:** ✅ `ssh -s <name>` against our server (`OpenSshSubsystemInteropTests`); ✅ our client
@@ -741,10 +741,29 @@ the work since has added four more.
   way SSH.NET is, on a developer box and on the hosted runner alike, with no WSL. Which tier 3 peers
   matter is still open decision 6 (§13); this one has become cheap.
 
-- ⬜ **Streams over more than one TCP connection** - the one point where EVQI Transport's design and
-  SSH's differ (above): a pool above `SshClient` that spreads channels over several connections, so a
-  lost segment stalls only the streams on its own connection. Worth doing only if EVQI Transport asks
-  for it; until then, several `SshClient`s do the same by hand.
+- ⬜ **SSH as a binding of EVQI's channel sessions** - parallel connections, kept alive and reconnected,
+  are one of EVQI Transport's core concepts, not an option. The whitepaper (`EVQITransport/README.md`
+  in OpenChargingTechnology/Whitepapers) has worked them out for WebSockets: an `IChannelSession` of
+  named `IChannel`s in four classes - Control, Realtime, Bulk, Privileged - over HTTP/1.x (a TCP
+  connection per channel), HTTP/2 or HTTP/3 (streams of one connection per certificate domain), with
+  a reconnect policy per class (§4, §8). SSH appeared there only as an `ssh://` endpoint; it is
+  written in as a fourth binding now. What Hermod already has for it:
+  - `IMessageConnection` is the type a WebSocket and an SSH message channel share (`Transport` says
+    which), so a channel session can sit on either without knowing.
+  - `SshMessageClient` connects both ways the whitepaper's bindings do: over a connection of its own,
+    which makes a TCP connection per channel as HTTP/1.x does, or as one more channel of an
+    `SshSharedConnection`, which makes streams of one connection that a lost segment stalls together
+    as HTTP/2 does. Either way with the `WebSocketClientReconnectPolicy` the WebSocket client uses.
+  - The HELLO carries properties of the client's choosing (`HelloProperties`): the place for the
+    session token that the `EVQI-Session` header carries on a WebSocket.
+  - Privileges bound to the connection hold as for HTTP/2: SSH authenticates once per connection,
+    so a privileged channel needs a connection of its own with its own key or certificate.
+
+  What is missing is the layer above, which belongs to neither client: the channel session itself -
+  lifecycle, reconnect per class, the strategies of the whitepaper's §4.8, budgets - as work packages
+  B1-B3 of its plan, with SSH as a binding beside HTTP/1.x; and on the server, more than one
+  connection of one station identity, which "newest wins" forbids today (W-1, and R7 for
+  `SshMessageServer`).
 
 ---
 
