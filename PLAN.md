@@ -493,6 +493,24 @@ fail without the fix and a control proving the permitted case still works.
     which the first WSL fixture met a cold WSL.
   - The `windows-latest` CI leg: **74 of 162 run, 88 skip, none fail**. 87 of the skips are the WSL
     fixtures (a hosted runner has no WSL), plink included, and one is ssh-agent (§12, §11.6).
+- ✅ **Native Windows peers** (2026-11-27): AsyncSSH, Paramiko, ncclient and the Go harness need no
+  Linux, yet skipped on Windows wherever WSL was missing - the `windows-latest` leg - or could not reach
+  the test listener through the firewall, as on the developer machine.
+  - `PeerPlatform` (`Tests/interop/PeerPlatform.cs`) runs them as ordinary Windows processes on the
+    test's own loopback: no path translation, no address to probe. The JSON contract of the drivers,
+    the readiness wait of a server and the peer log are shared with `WslInterop`, which stays the
+    Linux side.
+  - `setup-windows.ps1` puts the Python peers into `Tests/interop/.venv-interop-win`, under Windows
+    PowerShell 5.1 as well as 7; `GoCryptoSshInteropTests` builds its harness with any `go.exe` on the
+    PATH. Where both a native and a WSL environment exist, the native one is used - the Linux build of
+    the same peers is what the Debian leg runs on every commit.
+  - The `windows-latest` leg provisions both (`setup-python`, `setup-go`, the script under
+    `shell: powershell`), and a step after the tests reads the TRX and fails the leg if any check of
+    the five fixtures did not pass - the Windows counterpart of the Debian leg's no-skip gate, narrowed
+    to what this leg provisions.
+  - Measured on the developer machine: **26 of 26** Python checks pass natively (Python 3.14.5,
+    AsyncSSH 2.24.1, Paramiko 5.1.0, ncclient 0.7.1), where all of them had skipped; the ten Go checks
+    skip there for want of a `go.exe` and are the CI leg's to show.
 
 ### 0.4 Decisions pending
 
@@ -1457,7 +1475,7 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 
 ### 11.6 CI strategy
 
-- **Per commit** ✅ (`.github/workflows/ci.yml`, since 2026-08-13 with the full peer set): the whole conformance suite on a Debian 13 container leg — every peer at trixie's versions, provisioned by `setup-wsl.sh`, every check run and none skipped, in ~16 s of test time — plus a Windows leg (only the checks that need no WSL; hosted runners have none; **74 of 162** on 2026-11-03) adding the genuinely different Windows OpenSSH build
+- **Per commit** ✅ (`.github/workflows/ci.yml`, since 2026-08-13 with the full peer set): the whole conformance suite on a Debian 13 container leg — every peer at trixie's versions, provisioned by `setup-wsl.sh`, every check run and none skipped, in ~16 s of test time — plus a Windows leg (only the checks that need no WSL; hosted runners have none; **74 of 162** on 2026-11-03) adding the genuinely different Windows OpenSSH build and, since 2026-11-27, AsyncSSH, Paramiko, ncclient and the Go harness as native Windows processes (§0.3)
 - **Nightly** ✅ (`.github/workflows/nightly.yml`, since 2026-08-13), split into a fatal and an informational half the way Hermod's own nightly is — a red that can mean "a mirror was slow" must not share a colour with a red that means our code broke:
   - *fatal:* the pinned suite three times against one provisioning (~30 s of test time each, while apt/pip/Go cost minutes — so repeating the part that varies is nearly free). This is what a per-commit gate structurally cannot report: one of three failing is a flake and says so, three of three is a regression, and failures only in runs 2 and 3 mean the suite does not clean up after itself
   - *informational:* the **forward half of the version spread** — the newest upstream OpenSSH, discovered from the release listing rather than pinned, built from source into a private prefix under `RUNNER_TEMP` and put on `PATH` for the OpenSSH fixtures (which resolve their binaries through `PATH` already, so this needs no harness change). It is the only way to reach the *versions* the §11.1 behaviour gates need, because no distribution ships them: trixie stops at 10.0p2 while upstream is at 10.6p1. **Result (2026-08-13): 43 of 43 against 10.5p1; (2026-10-27): 44 of 44 against 10.6p1** — both directions, our client against their `sshd` and their `ssh` against our server, `mlkem768x25519-sha256` and `sntrup761x25519-sha512` included. We therefore interoperate three minor versions ahead of anything Debian ships, and this half's evidence is in hand rather than promised. (Passing every check proves nothing broke, not that the gates' *specific* behaviours are exercised. One of them now is: `OpenSsh_EmptyCertPrincipals_MatchNothingFrom_10_3` asserts against the built release that empty cert principals match nothing — the 44th check. IANA agent names and the post-auth-rekey disconnect cannot be driven from outside; see §11.1.) The first attempt read 32 of 43, and all eleven failures were our build rather than the release — a lesson worth not repeating: run OpenSSH out of its build directory and you get an `sshd` that rejects the `-o UsePAM=no` the fixture sends (`--without-pam`), looks for its configuration under `/usr/local/etc`, and since 9.8 re-executes a `$libexecdir/sshd-session` that was never installed. `--prefix` plus `make install-nokeys` answers all three

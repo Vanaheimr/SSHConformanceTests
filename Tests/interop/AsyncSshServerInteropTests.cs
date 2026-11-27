@@ -75,7 +75,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         private static async Task<Peer> StartAsync(Dictionary<String, Object?> Configuration, CancellationToken CancellationToken)
         {
 
-            WslInterop.SkipIfUnavailable();
+            PythonPeers.SkipIfUnavailable();
 
             var windowsRoot = Path.Combine(Path.GetTempPath(), "hermod_asyncssh_server_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(windowsRoot);
@@ -83,14 +83,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var hostKeyPath = Path.Combine(windowsRoot, "hostkey.pub");
             var configPath  = Path.Combine(windowsRoot, "config.json");
 
-            Configuration["host_key_path"] = WslInterop.ToWslPath(hostKeyPath);
+            Configuration["host_key_path"] = PythonPeers.ToPeerPath(hostKeyPath);
             Configuration["marker"]        = Marker;
 
             await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(Configuration), CancellationToken);
 
-            var server = await WslInterop.StartServerAsync(
-                             port => WslInterop.PythonPeerCommand("asyncssh_server.py", port.ToString(), WslInterop.ToWslPath(configPath)),
-                             CancellationToken);
+            var server = await PythonPeers.StartServerAsync("asyncssh_server.py",
+                                                            port => [ port.ToString(), PythonPeers.ToPeerPath(configPath) ],
+                                                            CancellationToken);
 
             // Written before the server listens, so a port that answers means a key on disk.
             var hostKeyBlob = Convert.FromBase64String((await File.ReadAllTextAsync(hostKeyPath, CancellationToken)).Split(' ')[1]);
@@ -246,7 +246,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                            ["password"]         = "s3cr3t",
                                                            ["host_certificate"] = new Dictionary<String, Object> {
                                                                                       ["principals"] = new[] { ForTheDialledAddress ? "127.0.0.1" : "elsewhere.example.org" },
-                                                                                      ["ca_path"]    = WslInterop.ToWslPath(caPath)
+                                                                                      ["ca_path"]    = PythonPeers.ToPeerPath(caPath)
                                                                                   }
                                                        }, CancellationToken);
 

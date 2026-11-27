@@ -50,7 +50,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     /// </para>
     ///
     /// <para>
-    /// ncclient runs inside WSL while our server runs on Windows - see <see cref="WslInterop"/>.
+    /// ncclient runs wherever <see cref="PythonPeers"/> finds it: natively on Windows or Linux, or inside WSL.
     /// </para>
     /// </summary>
     [TestFixture]
@@ -337,7 +337,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         private static async Task<Fixture> StartAsync(Boolean OfferBase11, Byte[] Blob, CancellationToken CancellationToken)
         {
 
-            WslInterop.SkipIfUnavailable();
+            PythonPeers.SkipIfUnavailable();
 
             var hostKey  = SshHostKey.GenerateEd25519();
             var userKey  = SshHostKey.GenerateEd25519();
@@ -356,14 +356,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await server.StartAsync(new IPSocket(IPv4Address.Any, IPPort.Auto), CancellationToken);
             var port = server.LocalEndPoint.Port.ToInt32();
 
-            var host = await WslInterop.ResolveWindowsHostAsync(CancellationToken);
+            var host = await PythonPeers.ResolveHostAsync(CancellationToken);
             if (host is null)
             {
                 await server.DisposeAsync();
                 Assert.Ignore($"WSL cannot reach the test listener on port {port} — check the Windows firewall for the test host process.");
             }
 
-            return new Fixture(server, netconf, host!, port, WslInterop.ToWslPath(keyPath), hostKey, [ keyPath, keyPath + ".pub" ]);
+            return new Fixture(server, netconf, host!, port, PythonPeers.ToPeerPath(keyPath), hostKey, [ keyPath, keyPath + ".pub" ]);
 
         }
 
@@ -402,7 +402,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             try
             {
 
-                var result = await WslInterop.RunPeerDriverAsync(
+                var result = await PythonPeers.RunDriverAsync(
                                  "ncclient_driver.py",
                                  new Dictionary<String, Object?> {
                                      ["host"]          = fixture.Host,
