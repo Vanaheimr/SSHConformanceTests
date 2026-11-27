@@ -45,11 +45,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     /// </para>
     ///
     /// <para>
-    /// The peer is a small Rust program in <c>interop/russh/</c>, built on demand inside WSL from
-    /// crates.io and pinned by its <c>Cargo.lock</c> to Russh 0.65.4 and russh-sftp 4.0.0. Russh needs
-    /// Rust 1.89, newer than Debian 13 ships, so the compiler comes from rustup, pinned by
-    /// <c>rust-toolchain.toml</c>. The peer plays both roles: a client that speaks the JSON contract of
-    /// <see cref="WslInterop.RunPeerAsync"/>, and a server that answers <c>exec</c> and serves SFTP
+    /// The peer is a small Rust program in <c>interop/russh/</c>, built on demand from crates.io and
+    /// pinned by its <c>Cargo.lock</c> to Russh 0.65.4 and russh-sftp 4.0.0: natively on Windows with a
+    /// cargo on the PATH, otherwise inside WSL. Russh needs Rust 1.89, newer than Debian 13 ships, so the
+    /// compiler comes from rustup, pinned by <c>rust-toolchain.toml</c>. The peer plays both roles: a
+    /// client that speaks the JSON contract of <see cref="PeerPlatform.RunPeerAsync"/>, and a server that
+    /// answers <c>exec</c> and serves SFTP
     /// through russh-sftp. Both read the key files our generator wrote with no conversion step.
     /// </para>
     ///
@@ -76,16 +77,27 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// </summary>
         private const  String   CargoPath  = "export PATH=\"$HOME/.cargo/bin:$PATH\"";
 
-        private static String?  peerRoot;
-        private static String?  skipReason;
+        private static PeerPlatform  platform = PeerPlatform.Linux;
+        private static String?       peerRoot;
+        private static String?       peerBinary;
+        private static String?       skipReason;
 
         [OneTimeSetUp]
         public async Task BuildPeerAsync()
         {
 
+            // A cargo on Windows builds a Windows binary, and that peer then shares our loopback.
+            if (OperatingSystem.IsWindows() && PeerPlatform.FindOnPath("cargo.exe") is { } cargo)
+            {
+                await BuildNativelyAsync(cargo);
+                return;
+            }
+
             if (WslInterop.UnavailableReason is not null)
             {
-                skipReason = WslInterop.UnavailableReason;
+                skipReason = OperatingSystem.IsWindows()
+                                 ? $"No cargo.exe on the PATH to build the Russh peer natively, and no WSL to build it in: {WslInterop.UnavailableReason}"
+                                 : WslInterop.UnavailableReason;
                 return;
             }
 
@@ -121,13 +133,62 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 return;
             }
 
+            peerBinary = $"{peerRoot}/russh-peer";
+
+        }
+
+        /// <summary>
+        /// Build the peer with a cargo on this Windows machine, out of a copy as inside WSL. The target
+        /// directory sits in the local application data and outlives the run, so only the first build
+        /// compiles every crate.
+        /// </summary>
+        private static async Task BuildNativelyAsync(String Cargo)
+        {
+
+            platform = PeerPlatform.Windows;
+            peerRoot = Path.Combine(Path.GetTempPath(), "hermod_russh_peer_" + Guid.NewGuid().ToString("N"));
+
+            var source = Path.Combine(WslInterop.InteropDirectory!, "russh");
+            var target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "hermod-interop", "russh-target");
+
+            Directory.CreateDirectory(Path.Combine(peerRoot, "src"));
+
+            foreach (var file in new[] { "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", Path.Combine("src", "main.rs") })
+                File.Copy(Path.Combine(source, file), Path.Combine(peerRoot, file));
+
+            // In the copy's directory, because that is where rustup looks for rust-toolchain.toml.
+            // aws-lc-sys, under Russh's crypto, assembles parts of AWS-LC with NASM, which a Windows
+            // machine rarely has; its prebuilt objects for x86-64 Windows ship inside the crate instead.
+            var (exitCode, stdout, stderr) = await PeerPlatform.RunOnWindowsAsync(Cargo,
+                                                                                  [ "build", "--release", "--locked", "--quiet", "--target-dir", target ],
+                                                                                  peerRoot,
+                                                                                  new Dictionary<String, String> { ["AWS_LC_SYS_PREBUILT_NASM"] = "1" },
+                                                                                  CancellationToken.None);
+
+            if (exitCode != 0)
+            {
+                skipReason = $"Could not build the Russh peer with {Cargo} (exit {exitCode}).\n{stdout}\n{stderr}";
+                return;
+            }
+
+            peerBinary = Path.Combine(peerRoot, "russh-peer.exe");
+            File.Copy(Path.Combine(target, "release", "russh-peer.exe"), peerBinary);
+
         }
 
         [OneTimeTearDown]
         public async Task RemovePeerAsync()
         {
-            if (peerRoot is not null)
+
+            if (peerRoot is null)
+                return;
+
+            if (platform == PeerPlatform.Windows)
+                try { Directory.Delete(peerRoot, recursive: true); } catch { }
+
+            else
                 try { await WslInterop.RunAsync(["-e", "rm", "-rf", peerRoot], CancellationToken.None); } catch { }
+
         }
 
 
@@ -138,7 +199,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         }
 
         private static Task<PeerRunResult> RunClientAsync(Dictionary<String, Object?> Configuration, CancellationToken CancellationToken)
-            => WslInterop.RunPeerAsync("Russh", ["-e", $"{peerRoot}/russh-peer", "client"], Configuration, CancellationToken);
+            => platform.RunPeerAsync("Russh", peerBinary!, [ "client" ], Configuration, CancellationToken);
 
 
         /// <summary>
@@ -216,7 +277,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                         RecordingAuditSink  Audit) : IAsyncDisposable
         {
 
-            public String WslUserKey => WslInterop.ToWslPath(Path.Combine(WindowsRoot, "user"));
+            public String WslUserKey => platform.ToPeerPath(Path.Combine(WindowsRoot, "user"));
 
             public Dictionary<String, Object?> Configuration(String Action)
                 => new () {
@@ -267,7 +328,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await server.StartAsync(new IPSocket(IPv4Address.Any, IPPort.Auto), CancellationToken);
             var port = server.LocalEndPoint.Port.ToInt32();
 
-            var host = await WslInterop.ResolveWindowsHostAsync(CancellationToken);
+            var host = await platform.ResolveHostAsync(CancellationToken);
             if (host is null)
             {
                 await server.DisposeAsync();
@@ -289,7 +350,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         {
 
             public Int32  Port    => Peer.Port;
-            public String WslRoot => WslInterop.ToWslPath(WindowsRoot);
+            public String WslRoot => platform.ToPeerPath(WindowsRoot);
 
             public SSHClientOptions ClientOptions(Func<Byte[], Boolean>? VerifyHostKey = null)
                 => new () {
@@ -321,13 +382,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await SshKeyGenerator.WriteKeyPairAsync(hostKey, Path.Combine(windowsRoot, "host"), "russh-interop-host", CancellationToken);
             await SshKeyGenerator.WriteKeyPairAsync(userKey, Path.Combine(windowsRoot, "user"), "russh-interop-user", CancellationToken);
 
-            var wslRoot = WslInterop.ToWslPath(windowsRoot);
+            var hostKeyPath    = platform.ToPeerPath(Path.Combine(windowsRoot, "host"));
+            var authorizedKey  = platform.ToPeerPath(Path.Combine(windowsRoot, "user.pub"));
 
-            // A host key is kept private, as it should be, whether or not the server insists.
-            await WslInterop.RunAsync(["-e", "chmod", "600", $"{wslRoot}/host"], CancellationToken);
+            // A host key is kept private, as it should be, whether or not the server insists. On Windows
+            // the file is already only its owner's: it sits in that user's temp directory.
+            if (platform == PeerPlatform.Linux)
+                await WslInterop.RunAsync(["-e", "chmod", "600", hostKeyPath], CancellationToken);
 
-            var peer = await WslInterop.StartServerAsync(port => $"{peerRoot}/russh-peer server {port} {wslRoot}/host {wslRoot}/user.pub",
-                                                         CancellationToken);
+            var peer = await platform.StartServerAsync(peerBinary!,
+                                                       port => [ "server", port.ToString(), hostKeyPath, authorizedKey ],
+                                                       CancellationToken);
 
             return new RusshServer(peer, hostKey, userKey, windowsRoot);
 
@@ -527,8 +592,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await File.WriteAllBytesAsync(upload, content, CancellationToken);
 
             var configuration = server.Configuration("sftp");
-            configuration["upload_path"]   = WslInterop.ToWslPath(upload);
-            configuration["download_path"] = WslInterop.ToWslPath(back);
+            configuration["upload_path"]   = platform.ToPeerPath(upload);
+            configuration["download_path"] = platform.ToPeerPath(back);
             configuration["remote_dir"]    = "/russh";
 
             var result = await RunClientAsync(configuration, CancellationToken);

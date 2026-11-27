@@ -15,13 +15,15 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | Path             | Purpose                                                                      |
 |------------------|------------------------------------------------------------------------------|
 | `setup-wsl.sh`   | Provision the peers on any Debian-family Linux (idempotent; root/sudo for apt). |
-| `setup-windows.ps1` | Provision the Python peers natively on Windows, into `.venv-interop-win/` (idempotent; Windows PowerShell 5.1 or PowerShell 7, no administrator rights). |
+| `setup-windows.ps1` | Provision the peers that need no Linux natively on Windows: the Python ones into `.venv-interop-win/`, the jars of MINA SSHD and JSch into `.java-interop-win/`, and the Rust toolchain Russh pins (idempotent; Windows PowerShell 5.1 or PowerShell 7, no administrator rights). |
 | `build-openssh.sh` | Build one OpenSSH portable release into a private prefix, for the nightly's version spread; put `<prefix>/bin` and `<prefix>/sbin` in front of `PATH` and every OpenSSH fixture uses it. |
 | `.venv-interop/` | The Python peers (AsyncSSH, Paramiko, ncclient), created by `setup-wsl.sh`. Git-ignored. |
 | `.venv-interop-win/` | The same peers for Windows, created by `setup-windows.ps1`. Git-ignored. |
+| `.java-interop-win/` | The jars of MINA SSHD 2.13.2 and JSch 0.2.19 with their dependencies, fetched from Maven Central by `setup-windows.ps1`, checked against pinned SHA-256s and stored under Debian's names. Git-ignored. |
 | `python/`        | Peer drivers speaking a JSON contract with `PythonPeers.RunDriverAsync`, and `asyncssh_server.py`, a server for our client (`PythonPeers.StartServerAsync`). |
 | `WslInterop.cs`  | Runs the peers — through WSL on Windows, directly on Linux: process plumbing, addressing, peer logs, skip reasons. |
-| `PeerPlatform.cs` | Runs the peers that need no Linux — the Python ones and the Go harness — natively on Windows where they are provisioned, and through `WslInterop.cs` otherwise. |
+| `PeerPlatform.cs` | Runs the peers that need no Linux — the Python, Java, Rust and Go ones — natively on Windows where they are provisioned, and through `WslInterop.cs` otherwise. |
+| `JavaPeers.cs`   | The Java toolchain and jars a Java peer is built against: the distribution's in Linux, `.java-interop-win` on Windows. |
 | `go/`            | `main.go`, a client for `golang.org/x/crypto/ssh` and `github.com/pkg/sftp` speaking the JSON contract, built on demand from the module proxy as `go.mod` and `go.sum` pin them — with `go.exe` from the PATH on Windows, otherwise inside WSL. |
 | `libssh/`        | `libssh_peer.c`, one C program that is a libssh client speaking the JSON contract and a libssh server for our client, compiled on demand against the distribution's libssh. |
 | `mina/`          | `MinaPeer.java`, the same for Apache MINA SSHD: a client speaking the JSON contract and a server for our client, compiled on demand against the distribution's jars. |
@@ -42,10 +44,10 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | Dropbear | **both** | WSL (`dbclient`, and `dropbear` as a server for our client) |
 | TinySSH | server | WSL (`socat` + `tinysshd`), exercising our client |
 | libssh | **both** | WSL + `libssh/libssh_peer.c`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves libssh's own SFTP server for our client |
-| Apache MINA SSHD | **both** | WSL + `mina/MinaPeer.java`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves MINA's own SFTP server for our client |
+| Apache MINA SSHD | **both** | Windows process or WSL + `mina/MinaPeer.java`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves MINA's own SFTP server for our client |
 | wolfSSH | **both** | WSL + `wolfssh/wolfssh_peer.c`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves wolfSSH's own SFTP server for our client |
-| JSch | client | WSL + `jsch/JschPeer.java`: speaks the JSON contract against our server, SFTP through JSch's `ChannelSftp` |
-| Russh | **both** | WSL + `russh/src/main.rs`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves SFTP through russh-sftp for our client |
+| JSch | client | Windows process or WSL + `jsch/JschPeer.java`: speaks the JSON contract against our server, SFTP through JSch's `ChannelSftp` |
+| Russh | **both** | Windows process or WSL + `russh/src/main.rs`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves SFTP through russh-sftp for our client |
 | OpenSSH + [SSHTOTPTool](../../libs/SSHTOTPTool/README.md) | **both** | `OpenSshTotpInteropTests`: Hermod's one-time password, with `hermod-ssh-totp` as `ssh`'s `SSH_ASKPASS` (Windows or Linux process, against our server) and in `sshd`'s PAM stack through `pam_exec` (our client, and `ssh` with the tool, against it). The `sshd` cases rewrite `/etc/pam.d/sshd` while they run, so they run as root in a container only - the Debian CI leg, or locally `debian:13` - and skip everywhere else |
 
 ## Local setup (Windows, native)
@@ -56,9 +58,14 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 .\setup-windows.ps1 -Python C:\Python312\python.exe  # or a particular one
 ```
 
-This provisions only the peers that need no Linux: AsyncSSH, Paramiko and ncclient. The Go harness
-needs nothing from it — put `go.exe` on the PATH and `GoCryptoSshInteropTests` builds it natively.
-Where both a native and a WSL environment exist, the native one is used (`PythonPeers`): the peer then
+This provisions the peers that need no Linux: AsyncSSH, Paramiko and ncclient into their virtual
+environment, the jars MINA SSHD and JSch are built against, and - through any `rustup` on the PATH -
+the Rust toolchain Russh pins. The fixtures then build the Java peers with any `javac.exe` on the PATH
+(Java 11 or later), Russh with `cargo`, and the Go harness with `go.exe`. Russh's crypto, aws-lc-sys,
+would assemble parts of itself with NASM; the fixture has it use the prebuilt objects the crate ships
+for Windows instead, so NASM need not be installed.
+
+Where both a native and a WSL environment exist, the native one is used: the peer then
 shares the test's loopback, so no address has to be probed and no firewall rule stands between them,
 and the Linux build of the same peers is what the Debian CI leg runs anyway. Every other peer still
 needs WSL.
@@ -102,8 +109,9 @@ Hosted CI runners have no WSL, which is exactly why the harness gained its nativ
 `debian:13` container leg of [ci.yml](../../.github/workflows/ci.yml) the peers are ordinary local
 processes, so `setup-wsl.sh` is the provisioning script there too. On the `windows-latest` leg the
 peers that need no Linux run natively: `setup-windows.ps1` provisions the Python ones under Windows
-PowerShell 5.1, `setup-go` puts `go.exe` on the PATH, and a step after the tests fails the leg if any
-of those five fixtures skipped. No per-peer container images are
+PowerShell 5.1 along with the jars and the Rust toolchain, `setup-go` and `setup-java` put `go.exe`
+and Java 21 on the PATH, and a step after the tests fails the leg if any of those eight fixtures
+skipped. No per-peer container images are
 involved — an earlier plan for a `docker/` directory was never built and the container leg made it
 unnecessary.
 

@@ -37,7 +37,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
-use std::os::unix::fs::FileExt;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -591,6 +590,70 @@ fn ok(id: u32) -> Status {
     Status { id, status_code: StatusCode::Ok, error_message: "Ok".into(), language_tag: "en-US".into() }
 }
 
+// The file-system calls the SFTP server makes that are spelled differently on Unix and on Windows. The
+// peer runs natively on both: on Linux as the Debian CI leg builds it, on Windows as the windows-latest
+// leg does (PeerPlatform.cs).
+
+/// pread(2): read at an offset, without a shared cursor.
+#[cfg(unix)]
+fn read_at(file: &std::fs::File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    std::os::unix::fs::FileExt::read_at(file, buffer, offset)
+}
+
+/// Windows' positioned read. It moves the file's cursor as a side effect, which nothing here relies on:
+/// every read and write names its own offset.
+#[cfg(windows)]
+fn read_at(file: &std::fs::File, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    std::os::windows::fs::FileExt::seek_read(file, buffer, offset)
+}
+
+/// pwrite(2) until every byte is written.
+#[cfg(unix)]
+fn write_all_at(file: &std::fs::File, data: &[u8], offset: u64) -> io::Result<()> {
+    std::os::unix::fs::FileExt::write_all_at(file, data, offset)
+}
+
+/// Windows' positioned write, which may write less than it was given, until every byte is written.
+#[cfg(windows)]
+fn write_all_at(file: &std::fs::File, mut data: &[u8], mut offset: u64) -> io::Result<()> {
+    while !data.is_empty() {
+        let written = std::os::windows::fs::FileExt::seek_write(file, data, offset)?;
+        if written == 0 {
+            return Err(io::Error::from(io::ErrorKind::WriteZero));
+        }
+        data = &data[written..];
+        offset += written as u64;
+    }
+    Ok(())
+}
+
+/// The permissions an SSH_FXP_SETSTAT asks for.
+#[cfg(unix)]
+fn permissions_for(_current: std::fs::Permissions, mode: u32) -> std::fs::Permissions {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::Permissions::from_mode(mode & 0o7777)
+}
+
+/// Windows keeps one bit of what a mode says - whether the file may be written - so that is what is set.
+#[cfg(windows)]
+fn permissions_for(mut current: std::fs::Permissions, mode: u32) -> std::fs::Permissions {
+    current.set_readonly(mode & 0o222 == 0);
+    current
+}
+
+/// symlink(2). Relative targets stay relative to the link's directory.
+#[cfg(unix)]
+fn make_symlink(target: &str, link: &str) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+/// A file symbolic link, as SFTP has no notion of the directory links Windows tells apart. Creating one
+/// takes the symbolic-link privilege or Developer Mode.
+#[cfg(windows)]
+fn make_symlink(target: &str, link: &str) -> io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
+}
+
 fn status_of(error: io::Error) -> StatusCode {
     eprintln!("sftp: {error}");
     match error.kind() {
@@ -616,7 +679,6 @@ impl SftpFileSystem {
     }
 
     fn apply(path_or_file: Result<&std::fs::File, &str>, attrs: &FileAttributes) -> Result<(), StatusCode> {
-        use std::os::unix::fs::PermissionsExt;
         if let Some(size) = attrs.size {
             match path_or_file {
                 Ok(file) => file.set_len(size).map_err(status_of)?,
@@ -624,10 +686,9 @@ impl SftpFileSystem {
             }
         }
         if let Some(permissions) = attrs.permissions {
-            let permissions = std::fs::Permissions::from_mode(permissions & 0o7777);
             match path_or_file {
-                Ok(file) => file.set_permissions(permissions).map_err(status_of)?,
-                Err(path) => std::fs::set_permissions(path, permissions).map_err(status_of)?,
+                Ok(file) => file.set_permissions(permissions_for(file.metadata().map_err(status_of)?.permissions(), permissions)).map_err(status_of)?,
+                Err(path) => std::fs::set_permissions(path, permissions_for(std::fs::metadata(path).map_err(status_of)?.permissions(), permissions)).map_err(status_of)?,
             }
         }
         Ok(())
@@ -666,7 +727,7 @@ impl russh_sftp::server::Handler for SftpFileSystem {
 
     async fn read(&mut self, id: u32, handle: SftpHandle, offset: u64, len: u32) -> Result<Data, Self::Error> {
         let mut data = vec![0; len.min(256 * 1024) as usize];
-        let read = self.file(&handle)?.read_at(&mut data, offset).map_err(status_of)?;
+        let read = read_at(self.file(&handle)?, &mut data, offset).map_err(status_of)?;
         if read == 0 {
             return Err(StatusCode::Eof);
         }
@@ -675,7 +736,7 @@ impl russh_sftp::server::Handler for SftpFileSystem {
     }
 
     async fn write(&mut self, id: u32, handle: SftpHandle, offset: u64, data: Vec<u8>) -> Result<Status, Self::Error> {
-        self.file(&handle)?.write_all_at(&data, offset).map_err(status_of)?;
+        write_all_at(self.file(&handle)?, &data, offset).map_err(status_of)?;
         Ok(ok(id))
     }
 
@@ -763,7 +824,7 @@ impl russh_sftp::server::Handler for SftpFileSystem {
     async fn symlink(&mut self, id: u32, linkpath: String, targetpath: String) -> Result<Status, Self::Error> {
         let (target, link) = (linkpath, targetpath);
         eprintln!("sftp: symlink '{link}' -> '{target}'");
-        std::os::unix::fs::symlink(&target, &link).map_err(status_of)?;
+        make_symlink(&target, &link).map_err(status_of)?;
         Ok(ok(id))
     }
 }

@@ -43,9 +43,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     /// </para>
     ///
     /// <para>
-    /// The peer is a small Java program in <c>interop/mina/</c>, compiled on demand inside WSL against
-    /// the distribution's jars (Debian 13: 2.13.2), like the libssh peer. It plays both roles: a client
-    /// that speaks the JSON contract of <see cref="WslInterop.RunPeerAsync"/>, and a server that answers
+    /// The peer is a small Java program in <c>interop/mina/</c>, compiled on demand against MINA 2.13.2:
+    /// natively on Windows with the jars <c>setup-windows.ps1</c> fetched (<see cref="JavaPeers.Windows"/>),
+    /// otherwise inside WSL against the distribution's (Debian 13 ships 2.13.2), like the libssh peer. It
+    /// plays both roles: a client that speaks the JSON contract of
+    /// <see cref="PeerPlatform.RunPeerAsync"/>, and a server that answers
     /// <c>exec</c> and serves MINA's own SFTP server. Both read the key files our generator wrote with
     /// no conversion step.
     /// </para>
@@ -68,23 +70,33 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         private const  String   Username   = "hermoduser";
 
         /// <summary>
-        /// The distribution's jars: MINA's three modules, its logging facade and the EdDSA and
-        /// BouncyCastle providers it finds Ed25519 and friends through.
+        /// The jars, by their distribution names: MINA's three modules, its logging facade and the EdDSA
+        /// and BouncyCastle providers it finds Ed25519 and friends through.
         /// </summary>
-        private const  String   ClassPath  = "/usr/share/java/sshd-common.jar:/usr/share/java/sshd-core.jar:/usr/share/java/sshd-sftp.jar:" +
-                                             "/usr/share/java/slf4j-api.jar:/usr/share/java/eddsa.jar:" +
-                                             "/usr/share/java/bcprov.jar:/usr/share/java/bcpkix.jar:/usr/share/java/bcutil.jar";
+        private static readonly String[] Jars = [ "sshd-common", "sshd-core", "sshd-sftp", "slf4j-api", "eddsa", "bcprov", "bcpkix", "bcutil" ];
 
-        private static String?  peerRoot;
-        private static String?  skipReason;
+        private static JavaToolchain  toolchain = JavaPeers.Linux;
+        private static String?        peerRoot;
+        private static String?        skipReason;
+
+        private static PeerPlatform Platform
+            => toolchain.Platform;
 
         [OneTimeSetUp]
         public async Task BuildPeerAsync()
         {
 
+            if (JavaPeers.Windows is { } windows && windows.HasJars([ .. Jars, "slf4j-nop", "slf4j-simple" ]))
+            {
+                await BuildNativelyAsync(windows);
+                return;
+            }
+
             if (WslInterop.UnavailableReason is not null)
             {
-                skipReason = WslInterop.UnavailableReason;
+                skipReason = OperatingSystem.IsWindows()
+                                 ? $"{JavaPeers.WhyNotOnWindows([ .. Jars, "slf4j-nop", "slf4j-simple" ])}, and no WSL to build in: {WslInterop.UnavailableReason}"
+                                 : WslInterop.UnavailableReason;
                 return;
             }
 
@@ -105,7 +117,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             // distribution does not ship, which is noise, not a problem.
             var (exitCode, stdout, stderr) = await WslInterop.RunAsync([
                                                  "-e", "bash", "-c",
-                                                 $"mkdir -p {peerRoot} && javac -Xlint:-path -d {peerRoot} -cp {ClassPath} {source}"
+                                                 $"mkdir -p {peerRoot} && javac -Xlint:-path -d {peerRoot} -cp {toolchain.ClassPath([], Jars)} {source}"
                                              ], CancellationToken.None);
 
             if (exitCode != 0)
@@ -117,11 +129,40 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         }
 
+        /// <summary>
+        /// Compile the peer with a Java on this Windows machine, against the jars setup-windows.ps1 fetched.
+        /// </summary>
+        private static async Task BuildNativelyAsync(JavaToolchain Windows)
+        {
+
+            toolchain = Windows;
+            peerRoot  = Path.Combine(Path.GetTempPath(), "hermod_mina_peer_" + Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(peerRoot);
+
+            var (exitCode, stdout, stderr) = await Platform.RunAsync(toolchain.Javac,
+                                                                     [ "-Xlint:-path", "-d", peerRoot, "-cp", toolchain.ClassPath([], Jars),
+                                                                       Path.Combine(WslInterop.InteropDirectory!, "mina", "MinaPeer.java") ],
+                                                                     CancellationToken.None);
+
+            if (exitCode != 0)
+                skipReason = $"Could not build the MINA SSHD peer with {toolchain.Javac} (exit {exitCode}).\n{stdout}\n{stderr}";
+
+        }
+
         [OneTimeTearDown]
         public async Task RemovePeerAsync()
         {
-            if (peerRoot is not null)
+
+            if (peerRoot is null)
+                return;
+
+            if (Platform == PeerPlatform.Windows)
+                try { Directory.Delete(peerRoot, recursive: true); } catch { }
+
+            else
                 try { await WslInterop.RunAsync(["-e", "rm", "-rf", peerRoot], CancellationToken.None); } catch { }
+
         }
 
 
@@ -133,10 +174,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         /// <summary>The client stays silent beside its JSON; the server logs through slf4j-simple.</summary>
         private static String JavaClassPath(String Logger)
-            => $"{peerRoot}:{ClassPath}:/usr/share/java/{Logger}.jar";
+            => toolchain.ClassPath([ peerRoot! ], [ .. Jars, Logger ]);
 
         private static Task<PeerRunResult> RunClientAsync(Dictionary<String, Object?> Configuration, CancellationToken CancellationToken)
-            => WslInterop.RunPeerAsync("MINA SSHD", ["-e", "java", "-cp", JavaClassPath("slf4j-nop"), "MinaPeer", "client"], Configuration, CancellationToken);
+            => Platform.RunPeerAsync("MINA SSHD", toolchain.Java, [ "-cp", JavaClassPath("slf4j-nop"), "MinaPeer", "client" ], Configuration, CancellationToken);
 
 
         private static ISshHostKey GenerateKey(String Type)
@@ -159,7 +200,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                         RecordingAuditSink  Audit) : IAsyncDisposable
         {
 
-            public String WslUserKey => WslInterop.ToWslPath(Path.Combine(WindowsRoot, "user"));
+            public String WslUserKey => Platform.ToPeerPath(Path.Combine(WindowsRoot, "user"));
 
             public Dictionary<String, Object?> Configuration(String Action)
                 => new () {
@@ -210,7 +251,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await server.StartAsync(new IPSocket(IPv4Address.Any, IPPort.Auto), CancellationToken);
             var port = server.LocalEndPoint.Port.ToInt32();
 
-            var host = await WslInterop.ResolveWindowsHostAsync(CancellationToken);
+            var host = await Platform.ResolveHostAsync(CancellationToken);
             if (host is null)
             {
                 await server.DisposeAsync();
@@ -232,7 +273,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         {
 
             public Int32  Port    => Peer.Port;
-            public String WslRoot => WslInterop.ToWslPath(WindowsRoot);
+            public String WslRoot => Platform.ToPeerPath(WindowsRoot);
 
             public SSHClientOptions ClientOptions(Func<Byte[], Boolean>? VerifyHostKey = null)
                 => new () {
@@ -264,13 +305,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await SshKeyGenerator.WriteKeyPairAsync(hostKey, Path.Combine(windowsRoot, "host"), "mina-interop-host", CancellationToken);
             await SshKeyGenerator.WriteKeyPairAsync(userKey, Path.Combine(windowsRoot, "user"), "mina-interop-user", CancellationToken);
 
-            var wslRoot = WslInterop.ToWslPath(windowsRoot);
+            var hostKeyPath    = Platform.ToPeerPath(Path.Combine(windowsRoot, "host"));
+            var authorizedKey  = Platform.ToPeerPath(Path.Combine(windowsRoot, "user.pub"));
 
-            // A host key is kept private, as it should be, whether or not the server insists.
-            await WslInterop.RunAsync(["-e", "chmod", "600", $"{wslRoot}/host"], CancellationToken);
+            // A host key is kept private, as it should be, whether or not the server insists. On Windows
+            // the file is already only its owner's: it sits in that user's temp directory.
+            if (Platform == PeerPlatform.Linux)
+                await WslInterop.RunAsync(["-e", "chmod", "600", hostKeyPath], CancellationToken);
 
-            var peer = await WslInterop.StartServerAsync(port => $"java -cp {JavaClassPath("slf4j-simple")} MinaPeer server {port} {wslRoot}/host {wslRoot}/user.pub",
-                                                         CancellationToken);
+            var peer = await Platform.StartServerAsync(toolchain.Java,
+                                                       port => [ "-cp", JavaClassPath("slf4j-simple"), "MinaPeer", "server", port.ToString(), hostKeyPath, authorizedKey ],
+                                                       CancellationToken);
 
             return new MinaServer(peer, hostKey, userKey, windowsRoot);
 
@@ -469,8 +514,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await File.WriteAllBytesAsync(upload, content, CancellationToken);
 
             var configuration = server.Configuration("sftp");
-            configuration["upload_path"]   = WslInterop.ToWslPath(upload);
-            configuration["download_path"] = WslInterop.ToWslPath(back);
+            configuration["upload_path"]   = Platform.ToPeerPath(upload);
+            configuration["download_path"] = Platform.ToPeerPath(back);
             configuration["remote_dir"]    = "/mina";
 
             var result = await RunClientAsync(configuration, CancellationToken);

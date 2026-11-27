@@ -524,6 +524,30 @@ fail without the fix and a control proving the permitted case still works.
     Go 1.26.0 built the harness natively, and `pkg/sftp`'s check passed with its symlink created by our
     server on Windows; the Python peers ran under 3.14.10 with AsyncSSH 2.24.1, provisioned by
     `setup-windows.ps1` under Windows PowerShell 5.1.
+- ✅ **Native Windows peers, second round** (2026-11-27): Apache MINA SSHD, JSch and Russh the same way,
+  the ones among the WSL peers that need no Linux either.
+  - The Java peers are built with any JDK on the PATH (`JavaPeers`, `Tests/interop/JavaPeers.cs`)
+    against the releases Debian 13 ships - MINA SSHD 2.13.2, JSch 0.2.19 - which `setup-windows.ps1`
+    fetches from Maven Central, checks against pinned SHA-256s and stores under Debian's file names, so
+    a fixture names its jars once and the class path follows from the platform.
+  - Russh is built with any cargo on the PATH, the toolchain `rust-toolchain.toml` pins installed by
+    the script. Two things it took: aws-lc-sys, under Russh's crypto, assembles parts of AWS-LC with
+    NASM and fails without it, so the fixture sets `AWS_LC_SYS_PREBUILT_NASM=1` to use the objects the
+    crate ships for Windows; and the peer's SFTP server called Unix-only APIs - `pread`/`pwrite`,
+    `chmod`, `symlink` - which now have Windows twins (`seek_read`/`seek_write` in a loop, the
+    read-only bit, `symlink_file`) behind `cfg`.
+  - **Found on the way:** MINA's SFTP server on Windows refuses every upload that carries a mode.
+    It hands the permissions of `SSH_FXP_OPEN` on to `Files.newByteChannel` as a
+    `PosixFilePermissions` attribute, NTFS has no POSIX view, Java throws
+    `UnsupportedOperationException`, and MINA answers `SSH_FX_OP_UNSUPPORTED` - for our client as for
+    OpenSSH's `sftp`, which sends a mode too. `mkdir` with the same mode succeeds. The peer's
+    `SftpFileSystemAccessor` drops the attributes where the file system has no POSIX view; on Linux
+    nothing changes. A MINA limitation, not ours: worth a report upstream if anyone serves SFTP from
+    MINA on Windows.
+  - The `windows-latest` leg adds `setup-java` (Temurin 21; the image's default Java 8 lacks `var`),
+    and the gate covers all eight native fixtures.
+  - Measured on the developer machine: **130 of 130** - MINA SSHD 51, JSch 28, Russh 51 - all of which
+    had skipped there.
 
 ### 0.4 Decisions pending
 
@@ -1502,7 +1526,7 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 
 ### 11.6 CI strategy
 
-- **Per commit** ✅ (`.github/workflows/ci.yml`, since 2026-08-13 with the full peer set): the whole conformance suite on a Debian 13 container leg — every peer at trixie's versions, provisioned by `setup-wsl.sh`, every check run and none skipped, in ~16 s of test time — plus a Windows leg (only the checks that need no WSL; hosted runners have none; **74 of 162** on 2026-11-03, **116 of 391** on 2026-11-27) adding the genuinely different Windows OpenSSH build and, since 2026-11-27, AsyncSSH, Paramiko, ncclient and the Go harness as native Windows processes (§0.3)
+- **Per commit** ✅ (`.github/workflows/ci.yml`, since 2026-08-13 with the full peer set): the whole conformance suite on a Debian 13 container leg — every peer at trixie's versions, provisioned by `setup-wsl.sh`, every check run and none skipped, in ~16 s of test time — plus a Windows leg (only the checks that need no WSL; hosted runners have none; **74 of 162** on 2026-11-03, **116 of 391** on 2026-11-27) adding the genuinely different Windows OpenSSH build and, since 2026-11-27, AsyncSSH, Paramiko, ncclient, the Go harness, MINA SSHD, JSch and Russh as native Windows processes (§0.3)
 - **Nightly** ✅ (`.github/workflows/nightly.yml`, since 2026-08-13), split into a fatal and an informational half the way Hermod's own nightly is — a red that can mean "a mirror was slow" must not share a colour with a red that means our code broke:
   - *fatal:* the pinned suite three times against one provisioning (~30 s of test time each, while apt/pip/Go cost minutes — so repeating the part that varies is nearly free). This is what a per-commit gate structurally cannot report: one of three failing is a flake and says so, three of three is a regression, and failures only in runs 2 and 3 mean the suite does not clean up after itself
   - *informational:* the **forward half of the version spread** — the newest upstream OpenSSH, discovered from the release listing rather than pinned, built from source into a private prefix under `RUNNER_TEMP` and put on `PATH` for the OpenSSH fixtures (which resolve their binaries through `PATH` already, so this needs no harness change). It is the only way to reach the *versions* the §11.1 behaviour gates need, because no distribution ships them: trixie stops at 10.0p2 while upstream is at 10.6p1. **Result (2026-08-13): 43 of 43 against 10.5p1; (2026-10-27): 44 of 44 against 10.6p1** — both directions, our client against their `sshd` and their `ssh` against our server, `mlkem768x25519-sha256` and `sntrup761x25519-sha512` included. We therefore interoperate three minor versions ahead of anything Debian ships, and this half's evidence is in hand rather than promised. (Passing every check proves nothing broke, not that the gates' *specific* behaviours are exercised. One of them now is: `OpenSsh_EmptyCertPrincipals_MatchNothingFrom_10_3` asserts against the built release that empty cert principals match nothing — the 44th check. IANA agent names and the post-auth-rekey disconnect cannot be driven from outside; see §11.1.) The first attempt read 32 of 43, and all eleven failures were our build rather than the release — a lesson worth not repeating: run OpenSSH out of its build directory and you get an `sshd` that rejects the `-o UsePAM=no` the fixture sends (`--without-pam`), looks for its configuration under `/usr/local/etc`, and since 9.8 re-executes a `$libexecdir/sshd-session` that was never installed. `--prefix` plus `make install-nokeys` answers all three

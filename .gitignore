@@ -268,6 +268,8 @@ BenchmarkDotNet.Artifacts/
 .venv-interop/
 # ... and setup-windows.ps1 its native Windows twin.
 .venv-interop-win/
+# ... and the jars it fetches for the Java peers.
+.java-interop-win/
 
 # The Russh peer is built out of a copy in WSL, but a cargo build in place would leave this behind.
 Tests/interop/russh/target/
