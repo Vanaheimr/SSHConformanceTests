@@ -44,8 +44,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     /// </para>
     ///
     /// <para>
-    /// Paramiko runs inside WSL while our server runs on Windows — see <see cref="WslInterop"/> for the
-    /// addressing rules that follow from that.
+    /// Paramiko runs wherever <see cref="PythonPeers"/> finds it - natively on Windows or Linux, or inside
+    /// WSL while our server runs on Windows; see <see cref="WslInterop"/> for the addressing rules that
+    /// follow from the last.
     /// </para>
     /// </summary>
     [TestFixture]
@@ -87,7 +88,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                       ISshHostKey?       TrustedHostKey  = null)
         {
 
-            WslInterop.SkipIfUnavailable();
+            PythonPeers.SkipIfUnavailable();
 
             var hostKey = SshHostKey.GenerateEd25519();
             var userKey = SshHostKey.GenerateEd25519();
@@ -113,7 +114,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await server.StartAsync(new IPSocket(IPv4Address.Any, IPPort.Auto), CancellationToken);
             var port = server.LocalEndPoint.Port.ToInt32();
 
-            var host = await WslInterop.ResolveWindowsHostAsync(CancellationToken);
+            var host = await PythonPeers.ResolveHostAsync(CancellationToken);
             if (host is null)
             {
                 await server.DisposeAsync();
@@ -128,8 +129,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             return new Fixture(server,
                                host!,
                                port,
-                               WslInterop.ToWslPath(keyPath),
-                               WslInterop.ToWslPath(knownHosts),
+                               PythonPeers.ToPeerPath(keyPath),
+                               PythonPeers.ToPeerPath(knownHosts),
                                hostKey,
                                [ keyPath, keyPath + ".pub", knownHosts ],
                                audit);
@@ -144,7 +145,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         }
 
         private static Task<PeerRunResult> RunAsync(Dictionary<String, Object?> Configuration, CancellationToken CancellationToken)
-            => WslInterop.RunPeerDriverAsync("paramiko_driver.py", Configuration, CancellationToken);
+            => PythonPeers.RunDriverAsync("paramiko_driver.py", Configuration, CancellationToken);
 
         #endregion
 
@@ -359,8 +360,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 await File.WriteAllBytesAsync(uploadPath, payload, CancellationToken);
 
                 var configuration = fixture.BaseConfiguration("sftp");
-                configuration["upload_path"]   = WslInterop.ToWslPath(uploadPath);
-                configuration["download_path"] = WslInterop.ToWslPath(downloadPath);
+                configuration["upload_path"]   = PythonPeers.ToPeerPath(uploadPath);
+                configuration["download_path"] = PythonPeers.ToPeerPath(downloadPath);
                 configuration["remote_path"]   = "/telemetry.bin";
 
                 var result = await RunAsync(configuration, CancellationToken);

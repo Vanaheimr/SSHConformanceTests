@@ -98,12 +98,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     /// exactly that — see <see cref="WslInterop.StartServerAsync"/> for what "who it is" has to mean to
     /// survive a daemon that renames itself.
     /// </para>
+    ///
+    /// <para>
+    /// A peer started natively on Windows (<see cref="PeerPlatform.Windows"/>) is an ordinary child of
+    /// this process: killing its process tree is the whole cleanup, and there is no PID file to reap.
+    /// </para>
     /// </summary>
     public sealed class WslServer : IAsyncDisposable
     {
 
         private readonly Process        process;
         private readonly String         runIdentifier;
+        private readonly Boolean        reap;
         private readonly StringBuilder  log = new ();
 
         /// <summary>
@@ -121,10 +127,22 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             => runIdentifier;
 
         internal WslServer(Process Process, String RunIdentifier, Int32 Port)
+            : this(Process, RunIdentifier, Port, Reap: true)
+        { }
+
+        /// <summary>
+        /// A peer started as a native Windows process, which killing its process tree ends.
+        /// </summary>
+        internal WslServer(Process Process, Int32 Port)
+            : this(Process, "", Port, Reap: false)
+        { }
+
+        private WslServer(Process Process, String RunIdentifier, Int32 Port, Boolean Reap)
         {
 
             this.process       = Process;
             this.runIdentifier = RunIdentifier;
+            this.reap          = Reap;
             this.Port          = Port;
 
             // Accumulated line by line rather than with ReadToEndAsync: the peer is still running when a
@@ -164,13 +182,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             try { process.Kill(entireProcessTree: true); } catch { }
 
-            try
-            {
-                // Not belt and braces: on Windows this is the only thing that reaches the daemon at all,
-                // and a forgotten SSH daemon keeps listening on the developer's machine.
-                await WslInterop.ReapAsync(runIdentifier, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch { }
+            if (reap)
+                try
+                {
+                    // Not belt and braces: on Windows this is the only thing that reaches the daemon at all,
+                    // and a forgotten SSH daemon keeps listening on the developer's machine.
+                    await WslInterop.ReapAsync(runIdentifier, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch { }
 
             process.Dispose();
 
@@ -315,7 +334,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         // Reaching a healthy peer takes milliseconds. A peer still unreachable after this is not slow,
         // it is unreachable — so the answer is a different port, not a longer wait.
         private static readonly TimeSpan readinessBudget = TimeSpan.FromSeconds(10);
-        private const Int32 StartAttempts = 3;
+        internal const Int32 StartAttempts = 3;
 
         #endregion
 
@@ -333,31 +352,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         public static String? UnavailableReason
             => harness.Value.Reason;
 
-        #endregion
-
-
-        #region PythonPeerCommand(Script, Arguments)
-
         /// <summary>
-        /// The shell command that runs one of the Python peers in <c>interop/python/</c> with the
-        /// provisioned virtual environment - for <see cref="StartServerAsync"/>, when the peer is a
-        /// server our client is to log in to.
+        /// The Python interpreter of the provisioned virtual environment, as a path on this machine, or
+        /// <c>null</c> when the harness is unavailable.
         /// </summary>
-        /// <param name="Script">The script's file name, e.g. <c>asyncssh_server.py</c>.</param>
-        /// <param name="Arguments">Its arguments, each passed as one word.</param>
-        public static String PythonPeerCommand(String Script, params String[] Arguments)
-        {
-
-            var (interopDirectory, venvPython, reason) = harness.Value;
-
-            if (reason is not null || interopDirectory is null || venvPython is null)
-                throw new InvalidOperationException(reason ?? "The WSL interop harness is unavailable.");
-
-            return String.Join(" ", new[] { ToWslPath(venvPython), ToWslPath(Path.Combine(interopDirectory, "python", Script)) }
-                                        .Concat(Arguments)
-                                        .Select(word => "'" + word.Replace("'", "'\\''") + "'"));
-
-        }
+        internal static String? VenvPython
+            => harness.Value.VenvPython;
 
         #endregion
 
@@ -814,7 +814,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// Wait until a connection to the peer's port succeeds — the only readiness signal that means what
         /// the tests need, since they dial the peer from this process too.
         /// </summary>
-        private static async Task<Boolean> WaitUntilReachableAsync(Process            Process,
+        internal static async Task<Boolean> WaitUntilReachableAsync(Process            Process,
                                                                    Int32              Port,
                                                                    CancellationToken  CancellationToken)
         {
@@ -886,7 +886,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// A free TCP port for a peer server, drawn from below Windows' dynamic range so that no outbound
         /// connection can take it out from under the WSL relay — see <see cref="PeerPortFirst"/>.
         /// </summary>
-        private static Int32 AllocatePort()
+        internal static Int32 AllocatePort()
         {
 
             for (var attempt = 0; attempt < 200; attempt++)
@@ -1111,20 +1111,37 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 var (exitCode, stdout, stderr) = await RunAsync([ .. Command, ToWslPath(configurationPath) ],
                                                                CancellationToken).ConfigureAwait(false);
 
-                // A driver reports a failed *SSH operation* as ok=false with exit code 0; a non-zero exit
-                // means the driver itself broke, which is a harness bug and must be loud.
-                if (exitCode != 0)
-                    throw new InvalidOperationException(
-                              $"The '{Name}' peer driver failed (exit {exitCode}).\nstdout:\n{stdout}\nstderr:\n{stderr}");
-
-                return JsonSerializer.Deserialize<PeerRunResult>(stdout, jsonOptions)
-                           ?? throw new InvalidOperationException($"The '{Name}' peer driver produced no JSON.\nstdout:\n{stdout}");
+                return ParsePeerResult(Name, exitCode, stdout, stderr);
 
             }
             finally
             {
                 try { File.Delete(configurationPath); } catch { }
             }
+
+        }
+
+        #endregion
+
+        #region (internal, static) ParsePeerResult(Name, ExitCode, StdOut, StdErr)
+
+        /// <summary>
+        /// Read a peer driver's JSON verdict, wherever the driver ran.
+        /// </summary>
+        internal static PeerRunResult ParsePeerResult(String  Name,
+                                                      Int32   ExitCode,
+                                                      String  StdOut,
+                                                      String  StdErr)
+        {
+
+            // A driver reports a failed *SSH operation* as ok=false with exit code 0; a non-zero exit
+            // means the driver itself broke, which is a harness bug and must be loud.
+            if (ExitCode != 0)
+                throw new InvalidOperationException(
+                          $"The '{Name}' peer driver failed (exit {ExitCode}).\nstdout:\n{StdOut}\nstderr:\n{StdErr}");
+
+            return JsonSerializer.Deserialize<PeerRunResult>(StdOut, jsonOptions)
+                       ?? throw new InvalidOperationException($"The '{Name}' peer driver produced no JSON.\nstdout:\n{StdOut}");
 
         }
 

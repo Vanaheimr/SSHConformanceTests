@@ -135,6 +135,33 @@ jobs:
         if: runner.os == 'Linux'
         run: bash Tests/interop/setup-wsl.sh
 
+      # Five fixtures drive peers that need no Linux at all: AsyncSsh, AsyncSshServer, Ncclient
+      # and Paramiko are Python, GoCryptoSsh is Go. On this leg they run as native Windows
+      # processes (interop/PeerPlatform.cs): setup-windows.ps1 puts the Python peers into
+      # interop/.venv-interop-win, and GoCryptoSshInteropTests builds its harness with the go.exe
+      # setup-go puts on the PATH. That is the same peer code under a second operating system,
+      # where it had skipped by name for want of WSL.
+      #
+      # The script runs under Windows PowerShell 5.1 on purpose: that is the shell a developer
+      # runs it from, so CI proves it there. -Python names setup-python's interpreter, because
+      # the py launcher would pick whichever Python the runner image happens to carry.
+      - uses: actions/setup-python@v7
+        if: runner.os == 'Windows'
+        id: python
+        with:
+          python-version: '3.14'
+
+      - uses: actions/setup-go@v7
+        if: runner.os == 'Windows'
+        with:
+          go-version-file: Tests/interop/go/go.mod
+          cache-dependency-path: Tests/interop/go/go.sum
+
+      - name: Provision the native peers (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: Tests\interop\setup-windows.ps1 -Python "${{ steps.python.outputs.python-path }}"
+
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '11.0.x'
@@ -208,9 +235,10 @@ jobs:
       # openssh-client), OpenSshAgent (needing the agent above) and SshNet — the last one a
       # pure-managed NuGet peer that needs nothing installed at all.
       #
-      # The other eight — AsyncSsh, CurlLibSsh, Dropbear, GoCryptoSsh, OpenSshServer,
-      # Paramiko, Plink and TinySsh — reach their peers through interop/WslInterop.cs,
-      # which runs the same commands through wsl.exe on Windows and natively on Linux.
+      # The other fixtures reach their peers through interop/WslInterop.cs, which runs the
+      # same commands through wsl.exe on Windows and natively on Linux — or, for the five
+      # whose peers need no Linux (AsyncSsh, AsyncSshServer, GoCryptoSsh, Ncclient,
+      # Paramiko), through interop/PeerPlatform.cs, which runs them natively on either.
       # With the provisioning step above, the Debian leg is the first place the entire
       # suite runs on every commit: every check, nothing skipped — about 30 seconds of
       # test time on a hosted runner, 17 in a local Debian 13 provisioned the same way.
@@ -218,10 +246,10 @@ jobs:
       # OpenSSH 8.9/9.6/9.9 containers, the Tier 3 peers — not this suite at trixie's
       # own peer versions, which costs seconds.
       #
-      # The Windows leg reaches those eight no further — the hosted images install no WSL
-      # distro — and runs only the checks that need none. What it adds is the Windows
-      # OpenSSH: a genuinely different build against a different TLS stack, driving the
-      # same server.
+      # The Windows leg reaches the WSL peers no further — the hosted images install no WSL
+      # distro — and runs the checks that need none: the five native fixtures above, and the
+      # Windows OpenSSH, a genuinely different build against a different TLS stack, driving
+      # the same server.
       #
       # It is not, however, an older one. That was assumed here at first and the artifacts
       # disproved it: the transport fixture passes 12 of 12 on this leg, both hybrid key
@@ -284,6 +312,37 @@ jobs:
       # uploading only on green would throw away the evidence in exactly that case. A build
       # that fails before the test step leaves no .trx at all, which upload-artifact reports
       # as a warning rather than a second failure — the build error is the finding there.
+      # The Windows leg's counterpart of the skip gate above, narrowed to what it provisions:
+      # the five native fixtures must have run, every one of their checks passing. A skip
+      # there would mean setup-windows.ps1 or setup-go failed quietly, and the leg would go
+      # back to reporting nothing about them while staying green.
+      - name: Check that the native peers ran (Windows)
+        if: runner.os == 'Windows'
+        shell: python
+        run: |
+          import glob, sys, xml.etree.ElementTree as ET
+          ns       = '{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}'
+          fixtures = { 'AsyncSshInteropTests', 'AsyncSshServerInteropTests', 'GoCryptoSshInteropTests',
+                       'NcclientInteropTests', 'ParamikoInteropTests' }
+          ran, missed = {}, []
+          for trx in glob.glob('artifacts/*.trx'):
+              root    = ET.parse(trx).getroot()
+              classOf = { t.get('id'): t.find(ns + 'TestMethod').get('className').rsplit('.', 1)[-1]
+                          for t in root.iter(ns + 'UnitTest') }
+              for result in root.iter(ns + 'UnitTestResult'):
+                  fixture = classOf.get(result.get('testId'))
+                  if fixture in fixtures:
+                      ran[fixture] = ran.get(fixture, 0) + 1
+                      if result.get('outcome') != 'Passed':
+                          missed.append(f"{fixture}.{result.get('testName')}: {result.get('outcome')}")
+          for fixture in sorted(fixtures):
+              print(f"{fixture}: {ran.get(fixture, 0)} checks")
+          if missed or set(ran) != fixtures:
+              print('FAIL: the native peers did not all run:')
+              for line in missed + [f'{f}: no results at all' for f in sorted(fixtures - set(ran))]:
+                  print('  ' + line)
+              sys.exit(1)
+
       - name: Upload test results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7

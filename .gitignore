@@ -266,6 +266,8 @@ BenchmarkDotNet.Artifacts/
 # The interop harness provisions its Python peers (AsyncSSH, Paramiko) into a local virtual
 # environment next to setup-wsl.sh — a few thousand machine-specific files.
 .venv-interop/
+# ... and setup-windows.ps1 its native Windows twin.
+.venv-interop-win/
 
 # The Russh peer is built out of a copy in WSL, but a cargo build in place would leave this behind.
 Tests/interop/russh/target/

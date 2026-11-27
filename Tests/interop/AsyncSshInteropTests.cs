@@ -36,9 +36,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     /// peers and a lineage sharing no code with ours: pure Python on top of PyCA <c>cryptography</c>.
     ///
     /// <para>
-    /// AsyncSSH runs inside WSL while our server runs on Windows, so these tests bind to
-    /// <c>IPv4Address.Any</c> and let <see cref="WslInterop.ResolveWindowsHostAsync"/> work out which
-    /// address the peer must dial (see the note there on NAT vs. mirrored networking). A machine without
+    /// AsyncSSH runs wherever <see cref="PythonPeers"/> finds it - natively next to our server, or inside
+    /// WSL while our server runs on Windows - so these tests bind to <c>IPv4Address.Any</c> and let
+    /// <see cref="PythonPeers.ResolveHostAsync"/> work out which address the peer must dial (see
+    /// <see cref="WslInterop.ResolveWindowsHostAsync"/> on NAT vs. mirrored networking). A machine without
     /// the provisioned harness skips rather than fails — no evidence either way.
     /// </para>
     ///
@@ -103,7 +104,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                       String?                      KnownHosts      = null)
         {
 
-            WslInterop.SkipIfUnavailable();
+            PythonPeers.SkipIfUnavailable();
 
             var hostKey = SshHostKey.GenerateEd25519();
             var userKey = UserKey ?? SshHostKey.GenerateEd25519();
@@ -130,7 +131,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await server.StartAsync(new IPSocket(IPv4Address.Any, IPPort.Auto), CancellationToken);
             var port = server.LocalEndPoint.Port.ToInt32();
 
-            var host = await WslInterop.ResolveWindowsHostAsync(CancellationToken);
+            var host = await PythonPeers.ResolveHostAsync(CancellationToken);
             if (host is null)
             {
                 await server.DisposeAsync();
@@ -145,8 +146,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             return new Fixture(server,
                                host!,
                                port,
-                               WslInterop.ToWslPath(keyPath),
-                               WslInterop.ToWslPath(knownHosts),
+                               PythonPeers.ToPeerPath(keyPath),
+                               PythonPeers.ToPeerPath(knownHosts),
                                hostKey,
                                [ keyPath, keyPath + ".pub", knownHosts ],
                                audit);
@@ -161,7 +162,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         }
 
         private static Task<PeerRunResult> RunAsync(Dictionary<String, Object?> Configuration, CancellationToken CancellationToken)
-            => WslInterop.RunPeerDriverAsync("asyncssh_driver.py", Configuration, CancellationToken);
+            => PythonPeers.RunDriverAsync("asyncssh_driver.py", Configuration, CancellationToken);
 
         #endregion
 
@@ -275,8 +276,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 await File.WriteAllBytesAsync(uploadPath, payload, CancellationToken);
 
                 var configuration = fixture.BaseConfiguration("sftp");
-                configuration["upload_path"]   = WslInterop.ToWslPath(uploadPath);
-                configuration["download_path"] = WslInterop.ToWslPath(downloadPath);
+                configuration["upload_path"]   = PythonPeers.ToPeerPath(uploadPath);
+                configuration["download_path"] = PythonPeers.ToPeerPath(downloadPath);
                 configuration["remote_path"]   = "/device.bin";
 
                 var result = await RunAsync(configuration, CancellationToken);
@@ -328,7 +329,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 var withCertificate = fixture.BaseConfiguration("exec");
                 withCertificate["command"]   = "whoami";
-                withCertificate["cert_path"] = WslInterop.ToWslPath(certPath);
+                withCertificate["cert_path"] = PythonPeers.ToPeerPath(certPath);
 
                 var withoutCertificate = fixture.BaseConfiguration("exec");
                 withoutCertificate["command"] = "whoami";
@@ -378,7 +379,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 var configuration = fixture.BaseConfiguration("exec");
                 configuration["command"]            = "whoami";
-                configuration["issue_with_ca_path"] = WslInterop.ToWslPath(caPath);
+                configuration["issue_with_ca_path"] = PythonPeers.ToPeerPath(caPath);
                 configuration["principals"]         = new[] { Principal };
 
                 var result = await RunAsync(configuration, CancellationToken);
@@ -411,9 +412,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         public async Task AsyncSsh_VerifiesOurHostCertificate(Boolean ForTheDialledAddress, CancellationToken CancellationToken)
         {
 
-            WslInterop.SkipIfUnavailable();
+            PythonPeers.SkipIfUnavailable();
 
-            var host = await WslInterop.ResolveWindowsHostAsync(CancellationToken);
+            var host = await PythonPeers.ResolveHostAsync(CancellationToken);
             if (host is null)
                 Assert.Ignore("WSL cannot reach a listener on the Windows host.");
 

@@ -43,9 +43,11 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     /// </para>
     ///
     /// <para>
-    /// The peer is a small Go program in <c>interop/go/</c>, compiled on demand inside WSL. Without a Go
-    /// toolchain these tests skip with instructions rather than fail; the first build also needs network
-    /// access to fetch the module, after which Go's module cache makes it fast.
+    /// The peer is a small Go program in <c>interop/go/</c>, compiled on demand: natively on Windows when
+    /// <c>go.exe</c> is on the PATH (<see cref="PeerPlatform.Windows"/>), otherwise inside WSL, and
+    /// natively on Linux. Without a Go toolchain these tests skip with instructions rather than fail; the
+    /// first build also needs network access to fetch the module, after which Go's module cache makes it
+    /// fast.
     /// </para>
     /// </summary>
     [TestFixture]
@@ -57,17 +59,27 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #region (private) harness — build the Go peer once per fixture
 
-        private static String? harnessBinary;
-        private static String? harnessRoot;
-        private static String? skipReason;
+        private static PeerPlatform  platform = PeerPlatform.Linux;
+        private static String?       harnessBinary;
+        private static String?       harnessRoot;
+        private static String?       skipReason;
 
         [OneTimeSetUp]
         public async Task BuildHarnessAsync()
         {
 
+            // A Go toolchain on Windows builds a Windows binary, and that peer then shares our loopback.
+            if (OperatingSystem.IsWindows() && PeerPlatform.FindOnPath("go.exe") is { } go)
+            {
+                await BuildNativelyAsync(go);
+                return;
+            }
+
             if (WslInterop.UnavailableReason is not null)
             {
-                skipReason = WslInterop.UnavailableReason;
+                skipReason = OperatingSystem.IsWindows()
+                                 ? $"No go.exe on the PATH to build the Go interop harness natively, and no WSL to build it in: {WslInterop.UnavailableReason}"
+                                 : WslInterop.UnavailableReason;
                 return;
             }
 
@@ -102,11 +114,50 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         }
 
+        /// <summary>
+        /// Build the harness with a Windows Go toolchain, out of a copy as inside WSL, so that the source
+        /// tree is never written to.
+        /// </summary>
+        private static async Task BuildNativelyAsync(String Go)
+        {
+
+            platform    = PeerPlatform.Windows;
+            harnessRoot = Path.Combine(Path.GetTempPath(), "hermod_go_harness_" + Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(harnessRoot);
+
+            foreach (var file in new[] { "go.mod", "go.sum", "main.go" })
+                File.Copy(Path.Combine(WslInterop.InteropDirectory!, "go", file), Path.Combine(harnessRoot, file));
+
+            var binary = Path.Combine(harnessRoot, "hermod-interop.exe");
+
+            var (exitCode, stdout, stderr) = await platform.RunAsync(Go,
+                                                                     [ "-C", harnessRoot, "build", "-o", binary, "." ],
+                                                                     CancellationToken.None);
+
+            if (exitCode != 0)
+            {
+                skipReason = $"Could not build the Go interop harness with {Go} (exit {exitCode}).\n{stdout}\n{stderr}";
+                return;
+            }
+
+            harnessBinary = binary;
+
+        }
+
         [OneTimeTearDown]
         public async Task RemoveHarnessAsync()
         {
-            if (harnessRoot is not null)
+
+            if (harnessRoot is null)
+                return;
+
+            if (platform == PeerPlatform.Windows)
+                try { Directory.Delete(harnessRoot, recursive: true); } catch { }
+
+            else
                 try { await WslInterop.RunAsync(["-e", "rm", "-rf", harnessRoot], CancellationToken.None); } catch { }
+
         }
 
 
@@ -117,7 +168,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         }
 
         private static Task<PeerRunResult> RunAsync(Dictionary<String, Object?> Configuration, CancellationToken CancellationToken)
-            => WslInterop.RunPeerAsync("go x/crypto/ssh", ["-e", harnessBinary!], Configuration, CancellationToken);
+            => platform.RunPeerAsync("go x/crypto/ssh", harnessBinary!, [], Configuration, CancellationToken);
 
 
         /// <summary>
@@ -160,14 +211,14 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await server.StartAsync(new IPSocket(IPv4Address.Any, IPPort.Auto), CancellationToken);
             var port = server.LocalEndPoint.Port.ToInt32();
 
-            var host = await WslInterop.ResolveWindowsHostAsync(CancellationToken);
+            var host = await platform.ResolveHostAsync(CancellationToken);
             if (host is null)
             {
                 await server.DisposeAsync();
                 Assert.Ignore($"WSL cannot reach the test listener on port {port} — check the Windows firewall.");
             }
 
-            return (server, host!, port, hostKey, WslInterop.ToWslPath(Path.Combine(windowsRoot, "user")), windowsRoot, audit);
+            return (server, host!, port, hostKey, platform.ToPeerPath(Path.Combine(windowsRoot, "user")), windowsRoot, audit);
 
         }
 
@@ -296,7 +347,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 var withCertificate = Configuration("exec", host, port, keyPath, hostKey);
                 withCertificate["command"]   = "whoami";
-                withCertificate["cert_path"] = WslInterop.ToWslPath(certPath);
+                withCertificate["cert_path"] = platform.ToPeerPath(certPath);
 
                 var withoutCertificate = Configuration("exec", host, port, keyPath, hostKey);
                 withoutCertificate["command"] = "whoami";
@@ -348,7 +399,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 var configuration = Configuration("exec", host, port, keyPath, hostKey);
                 configuration["command"]            = "whoami";
-                configuration["issue_with_ca_path"] = WslInterop.ToWslPath(caPath);
+                configuration["issue_with_ca_path"] = platform.ToPeerPath(caPath);
                 configuration["principals"]         = new[] { Principal };
 
                 var result = await RunAsync(configuration, CancellationToken);
@@ -382,7 +433,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             SkipIfUnavailable();
 
-            var dialled = await WslInterop.ResolveWindowsHostAsync(CancellationToken);
+            var dialled = await platform.ResolveHostAsync(CancellationToken);
             if (dialled is null)
                 Assert.Ignore("WSL cannot reach a listener on the Windows host.");
 
@@ -442,8 +493,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 await File.WriteAllBytesAsync(upload, content, CancellationToken);
 
                 var configuration = Configuration("sftp", host, port, keyPath, hostKey);
-                configuration["upload_path"]   = WslInterop.ToWslPath(upload);
-                configuration["download_path"] = WslInterop.ToWslPath(back);
+                configuration["upload_path"]   = platform.ToPeerPath(upload);
+                configuration["download_path"] = platform.ToPeerPath(back);
                 configuration["remote_dir"]    = "/go";
 
                 var result  = await RunAsync(configuration, CancellationToken);

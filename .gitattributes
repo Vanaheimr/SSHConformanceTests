@@ -7,6 +7,9 @@
 # Solution files are Windows-native tooling; keep CRLF.
 *.slnx  text eol=crlf
 
+# PowerShell scripts are Windows-native tooling as well; keep CRLF.
+*.ps1   text eol=crlf
+
 # Binary assets: never convert.
 *.png   binary
 *.snk   binary

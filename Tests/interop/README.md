@@ -15,11 +15,14 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | Path             | Purpose                                                                      |
 |------------------|------------------------------------------------------------------------------|
 | `setup-wsl.sh`   | Provision the peers on any Debian-family Linux (idempotent; root/sudo for apt). |
+| `setup-windows.ps1` | Provision the Python peers natively on Windows, into `.venv-interop-win/` (idempotent; Windows PowerShell 5.1 or PowerShell 7, no administrator rights). |
 | `build-openssh.sh` | Build one OpenSSH portable release into a private prefix, for the nightly's version spread; put `<prefix>/bin` and `<prefix>/sbin` in front of `PATH` and every OpenSSH fixture uses it. |
-| `.venv-interop/` | The Python peers (AsyncSSH, Paramiko, ncclient), created by the script. Git-ignored. |
-| `python/`        | Peer drivers speaking a JSON contract with `WslInterop.RunPeerDriverAsync`, and `asyncssh_server.py`, a server for our client (`WslInterop.PythonPeerCommand`). |
+| `.venv-interop/` | The Python peers (AsyncSSH, Paramiko, ncclient), created by `setup-wsl.sh`. Git-ignored. |
+| `.venv-interop-win/` | The same peers for Windows, created by `setup-windows.ps1`. Git-ignored. |
+| `python/`        | Peer drivers speaking a JSON contract with `PythonPeers.RunDriverAsync`, and `asyncssh_server.py`, a server for our client (`PythonPeers.StartServerAsync`). |
 | `WslInterop.cs`  | Runs the peers — through WSL on Windows, directly on Linux: process plumbing, addressing, peer logs, skip reasons. |
-| `go/`            | `main.go`, a client for `golang.org/x/crypto/ssh` and `github.com/pkg/sftp` speaking the JSON contract, built on demand from the module proxy as `go.mod` and `go.sum` pin them. |
+| `PeerPlatform.cs` | Runs the peers that need no Linux — the Python ones and the Go harness — natively on Windows where they are provisioned, and through `WslInterop.cs` otherwise. |
+| `go/`            | `main.go`, a client for `golang.org/x/crypto/ssh` and `github.com/pkg/sftp` speaking the JSON contract, built on demand from the module proxy as `go.mod` and `go.sum` pin them — with `go.exe` from the PATH on Windows, otherwise inside WSL. |
 | `libssh/`        | `libssh_peer.c`, one C program that is a libssh client speaking the JSON contract and a libssh server for our client, compiled on demand against the distribution's libssh. |
 | `mina/`          | `MinaPeer.java`, the same for Apache MINA SSHD: a client speaking the JSON contract and a server for our client, compiled on demand against the distribution's jars. |
 | `wolfssh/`       | `wolfssh_peer.c`, the same for wolfSSH: a client speaking the JSON contract and a server for our client, compiled on demand against the wolfSSH release `build-wolfssh.sh` pins and builds once into `~/.cache/hermod-interop/wolfssh`, on the distribution's wolfSSL. |
@@ -32,9 +35,10 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 |---|---|---|
 | OpenSSH (`ssh`, `sftp`, `ssh-keygen`) | client | Windows process |
 | SSH.NET | client | in-process (NuGet) |
-| AsyncSSH | **both** | WSL + `python/asyncssh_driver.py`, and `python/asyncssh_server.py` as a server for our client (password, keyboard-interactive) |
-| Paramiko | client | WSL + `python/paramiko_driver.py` |
-| ncclient | client (NETCONF, RFC 6242) | WSL + `python/ncclient_driver.py`, against a `netconf` subsystem the test serves |
+| AsyncSSH | **both** | Windows process or WSL + `python/asyncssh_driver.py`, and `python/asyncssh_server.py` as a server for our client (password, keyboard-interactive) |
+| Paramiko | client | Windows process or WSL + `python/paramiko_driver.py` |
+| ncclient | client (NETCONF, RFC 6242) | Windows process or WSL + `python/ncclient_driver.py`, against a `netconf` subsystem the test serves |
+| Go `x/crypto/ssh`, `pkg/sftp` | client | Windows process or WSL + `go/main.go` |
 | Dropbear | **both** | WSL (`dbclient`, and `dropbear` as a server for our client) |
 | TinySSH | server | WSL (`socat` + `tinysshd`), exercising our client |
 | libssh | **both** | WSL + `libssh/libssh_peer.c`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves libssh's own SFTP server for our client |
@@ -42,6 +46,21 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | wolfSSH | **both** | WSL + `wolfssh/wolfssh_peer.c`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves wolfSSH's own SFTP server for our client |
 | JSch | client | WSL + `jsch/JschPeer.java`: speaks the JSON contract against our server, SFTP through JSch's `ChannelSftp` |
 | Russh | **both** | WSL + `russh/src/main.rs`: `client` speaks the JSON contract against our server, `server` answers `exec` and serves SFTP through russh-sftp for our client |
+
+## Local setup (Windows, native)
+
+```powershell
+# From this directory, in Windows PowerShell 5.1 or PowerShell 7:
+.\setup-windows.ps1                                  # the newest Python the py launcher knows
+.\setup-windows.ps1 -Python C:\Python312\python.exe  # or a particular one
+```
+
+This provisions only the peers that need no Linux: AsyncSSH, Paramiko and ncclient. The Go harness
+needs nothing from it — put `go.exe` on the PATH and `GoCryptoSshInteropTests` builds it natively.
+Where both a native and a WSL environment exist, the native one is used (`PythonPeers`): the peer then
+shares the test's loopback, so no address has to be probed and no firewall rule stands between them,
+and the Linux build of the same peers is what the Debian CI leg runs anyway. Every other peer still
+needs WSL.
 
 ## Local setup (WSL2)
 
@@ -65,8 +84,8 @@ directories explicitly. Without that the two paths would disagree about which pe
 
 ### Which address a WSL peer must dial (measured 2026-08-11, NAT mode)
 
-Peers that only exist inside Linux — Dropbear, TinySSH, AsyncSSH, Paramiko, ncclient, the Go harness — run in
-WSL and connect *back* to a server hosted on Windows. Under WSL's default **NAT** networking that
+Peers that run inside WSL — Dropbear, TinySSH, and AsyncSSH, Paramiko, ncclient and the Go harness when
+they are not provisioned natively — connect *back* to a server hosted on Windows. Under WSL's default **NAT** networking that
 server is **not reachable at `127.0.0.1`**: from inside WSL, the Windows host answers on the
 **default gateway** address (`ip route show default | awk '{print $3}'`, e.g. `172.23.32.1`).
 
@@ -80,7 +99,10 @@ detect rather than assume: try `127.0.0.1` first, fall back to the gateway.
 
 Hosted CI runners have no WSL, which is exactly why the harness gained its native Linux path: on the
 `debian:13` container leg of [ci.yml](../../.github/workflows/ci.yml) the peers are ordinary local
-processes, so `setup-wsl.sh` is the provisioning script there too. No per-peer container images are
+processes, so `setup-wsl.sh` is the provisioning script there too. On the `windows-latest` leg the
+peers that need no Linux run natively: `setup-windows.ps1` provisions the Python ones under Windows
+PowerShell 5.1, `setup-go` puts `go.exe` on the PATH, and a step after the tests fails the leg if any
+of those five fixtures skipped. No per-peer container images are
 involved — an earlier plan for a `docker/` directory was never built and the container leg made it
 unnecessary.
 
