@@ -425,6 +425,13 @@ fail without the fix and a control proving the permitted case still works.
   - wolfSSH has no generated options header: its feature switches reach the compiler on the command
     line, and the public structs are laid out by them. `build-wolfssh.sh` records the flags it built
     with, and the peer is compiled with exactly those.
+- ✅ **Dropbear under a forced command** (2026-11-27) - three checks of our client in
+  `DropbearInteropTests` pin what section 10.5 of the SSH Keying Material Exporter white paper says
+  of Dropbear: it refuses a subsystem of our own name even with `command=` in `authorized_keys`,
+  because it checks the name before it applies the command. The forced command does run for `exec`
+  with the name in `SSH_ORIGINAL_COMMAND` and the exit status returned, and for the subsystem
+  `sftp`, which then learns only the path of Dropbear's SFTP server. A protocol of its own therefore
+  runs behind Dropbear only if its clients send `exec` instead of `subsystem`.
 - 🔶 **Tier 3 peers** (§11.1) — libssh ✅, Apache MINA SSHD ✅, Russh ✅, JSch ✅, wolfSSH ✅ (above).
   Open: WinSCP, FileZilla, native OpenBSD, legacy OpenSSH. Which of them matter is open decision 6 in
   §13.
@@ -1336,7 +1343,7 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 
 | Peer | Roles vs us | Certs | PQ KEX | Why it matters |
 |---|---|---|---|---|
-| Dropbear (`dropbear`/`dbclient`) | both ✅ **wired in 2026-08-11** (12 tests, **both roles**) | no | sntrup761 + mlkem768 (≥ 2025.87, both default-on) | embedded-world defaults, small algo set; SHA-1 disabled by default since 2025.87. **Found the `first_kex_packet_follows` defect.** Quirks pinned: guesses via `kexguess2@matt.ucc.asn.au`; `dropbearconvert` needed for its own key format; known_hosts keyed by host name **without** `[host]:port`; walks the whole directory path when checking `authorized_keys` permissions, so scratch space must not sit under `/tmp` |
+| Dropbear (`dropbear`/`dbclient`) | both ✅ **wired in 2026-08-11** (15 tests, **both roles**) | no | sntrup761 + mlkem768 (≥ 2025.87, both default-on) | embedded-world defaults, small algo set; SHA-1 disabled by default since 2025.87. **Found the `first_kex_packet_follows` defect.** Quirks pinned: guesses via `kexguess2@matt.ucc.asn.au`; `dropbearconvert` needed for its own key format; known_hosts keyed by host name **without** `[host]:port`; walks the whole directory path when checking `authorized_keys` permissions, so scratch space must not sit under `/tmp`; accepts no subsystem but `sftp`, not even under a forced command (`command=` runs for `exec`, and for `sftp` with only the SFTP server's path in `SSH_ORIGINAL_COMMAND`) |
 | TinySSH (`tinysshd`) | server only ✅ **wired in 2026-08-11** (3 tests, **exercises our client**) | no | sntrup761 only (no ML-KEM as of 20260601) | radically minimal: ed25519 + chacha20 + sntrup761 only — forces our minimal-path negotiation |
 | PuTTY `plink`/`psftp` (Windows + `putty-tools` on Linux) | client only | user certs (≥ 0.78) | sntrup761 (≥ 0.78), ML-KEM (≥ 0.83 ✓; 0.84 current) — **wired in 2026-08-11 (11 tests)**: 6-method key-exchange matrix, exec, host-key pinning via `-hostkey`, `puttygen` reading our `openssh-key-v1`, 256 KB through its flow control. Quirks pinned: plink needs a **PPK** (it refuses `openssh-key-v1` outright), and `-sshlog` gives its own protocol trace as evidence. Note plink 0.83 sends **no** `winadj` for a plain `exec`, so that contract is pinned hermetically instead | independent lineage; famous quirks (`winadj@…`); exercises our **server** |
 | AsyncSSH (Python) | both ✅ **wired in 2026-08-11** (client role; 5 tests) | yes (user+host, can also issue) | mlkem (≥ 2.18; since 2.24 via PyCA cryptography, no liboqs needed — **verified: it completes `mlkem768x25519-sha256` with us**), sntrup761 (still needs liboqs) | most scriptable feature-rich peer; great for cert edge cases + SFTP v4–v6 negotiation |
