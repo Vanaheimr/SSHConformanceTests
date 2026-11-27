@@ -108,8 +108,14 @@ if [[ "${CHECK_ONLY}" -eq 0 ]]; then
     # absolute path the environment was created at, so after the checkout is moved or renamed it
     # silently points nowhere — 'pip' then resolves to the system one and Debian rejects it with
     # "externally-managed-environment" (PEP 668). Going through the venv's own python3 cannot miss.
+    #
+    # --prefer-binary: a release reaches PyPI file by file, the source archive first and the wheels over
+    # the minutes after. A pip that comes by in between builds from source, and lxml (for ncclient) needs
+    # the libxml2 and libxslt headers to do so - the CI run of 2026-11-27 15:04 UTC failed exactly so, two
+    # seconds before lxml 6.2.0's wheel for Python 3.13 arrived. With this flag pip takes the newest
+    # release that has a wheel instead, and the next run picks up the new one.
     "${VENV_DIR}/bin/python3" -m pip install --quiet --upgrade pip
-    "${VENV_DIR}/bin/python3" -m pip install --quiet asyncssh paramiko ncclient
+    "${VENV_DIR}/bin/python3" -m pip install --quiet --prefer-binary asyncssh paramiko ncclient
 
     # Russh needs a newer Rust than Debian ships, so the compiler comes from rustup, at the version
     # russh/rust-toolchain.toml pins. A rustup that is already there - on the PATH or in ~/.cargo/bin -
