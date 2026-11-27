@@ -17,6 +17,7 @@
 
 #region Usings
 
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 
 using NUnit.Framework;
@@ -140,12 +141,67 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             => WslInterop.RunPeerAsync("Russh", ["-e", $"{peerRoot}/russh-peer", "client"], Configuration, CancellationToken);
 
 
+        /// <summary>
+        /// A key of the given type, as our generator makes it - one that Russh can read.
+        /// </summary>
+        /// <remarks>
+        /// Russh reads openssh-key-v1 with the RustCrypto <c>ssh-key</c> crate (0.7.0-rc), which wants the
+        /// private scalar of a P-256 key to be at least 32 bytes long (its <c>MIN_SIZE</c>). A scalar whose
+        /// top byte is 0 is, as an mpint has to be (RFC 4251 §5: no unnecessary leading zero bytes), 31
+        /// bytes or fewer - about one key in 256, and OpenSSH writes such a key exactly as our generator
+        /// does. Russh refuses it with "KeyImportError: SshKey: length invalid", which turned
+        /// <c>Russh_LogsInWithOurKey("ecdsa-sha2-nistp256")</c> red once in a while (CI run 46075874832).
+        /// Such a key is drawn again: the limit is Russh's, and what these tests ask is everything else.
+        /// P-384 and P-521 are not affected - their scalars are longer than 32 bytes even with a zero on top.
+        /// </remarks>
         private static ISshHostKey GenerateKey(String Type)
-            => Type switch {
-                   "ssh-ed25519" => SshHostKey.GenerateEd25519(),
-                   "ssh-rsa"     => SshHostKey.GenerateRsa(),
-                   _             => SshHostKey.GenerateEcdsa(Type)
-               };
+        {
+
+            while (true)
+            {
+
+                var key = Type switch {
+                              "ssh-ed25519" => SshHostKey.GenerateEd25519(),
+                              "ssh-rsa"     => SshHostKey.GenerateRsa(),
+                              _             => SshHostKey.GenerateEcdsa(Type)
+                          };
+
+                if (Type != "ecdsa-sha2-nistp256" || PrivateScalarLength(key) >= 32)
+                    return key;
+
+            }
+
+        }
+
+        /// <summary>
+        /// The length of the private scalar - the mpint after the public point - in the unencrypted
+        /// openssh-key-v1 encoding of the given ECDSA key, as our writer writes it.
+        /// </summary>
+        internal static Int32 PrivateScalarLength(ISshHostKey Key)
+        {
+
+            var text   = OpenSshPrivateKey.Format(Key);
+            var base64 = String.Concat(text.Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0 && !line.StartsWith("-----")));
+            var blob   = Convert.FromBase64String(base64);
+
+            static Int32 Skip(Byte[] Blob, Int32 At)
+                => At + 4 + (Int32) BinaryPrimitives.ReadUInt32BigEndian(Blob.AsSpan(At));
+
+            var at = "openssh-key-v1\0".Length;
+            at = Skip(blob, at);     // cipher name ("none")
+            at = Skip(blob, at);     // KDF name
+            at = Skip(blob, at);     // KDF options
+            at += 4;                 // number of keys
+            at = Skip(blob, at);     // public key
+            at += 4;                 // length of the private section
+            at += 8;                 // the check integer, twice
+            at = Skip(blob, at);     // key type
+            at = Skip(blob, at);     // curve
+            at = Skip(blob, at);     // public point
+
+            return (Int32) BinaryPrimitives.ReadUInt32BigEndian(blob.AsSpan(at));
+
+        }
 
 
         /// <summary>
