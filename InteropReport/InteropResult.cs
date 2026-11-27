@@ -94,7 +94,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
             ("Paramiko",  "Paramiko"),
             ("GoCrypto",  "Go x/crypto/ssh"),
             ("Ncclient",  "ncclient"),
-            ("LibSsh",    "curl / libssh")
+            ("CurlLibSsh","curl / libssh"),     // before "LibSsh": curl drives libssh, the fixture tests curl
+            ("LibSsh",    "libssh"),
+            ("MinaSshd",  "Apache MINA SSHD"),
+            ("Russh",     "Russh"),
+            ("Jsch",      "JSch"),
+            ("WolfSsh",   "wolfSSH")
         ];
 
         // Keyword → capability, matched against the class and test name together. Order is significant:
@@ -118,15 +123,20 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
             ("algorithm",        "Algorithm negotiation"),
             ("netconf",          "NETCONF (RFC 6242)"),
             ("sftp",             "SFTP"),
+            ("transfersfiles",   "SFTP"),
             ("subsystem",        "Subsystems of one's own"),
             ("forward",          "Port forwarding"),
             ("tunnel",           "Port forwarding"),
+            ("jump",             "Port forwarding"),
             ("keyformat",        "Key formats (openssh-key-v1, PEM)"),
             ("keygen",           "Key formats (openssh-key-v1, PEM)"),
             ("privatekey",       "Key formats (openssh-key-v1, PEM)"),
             ("bcrypt",           "Key formats (openssh-key-v1, PEM)"),
+            ("cipher",           "Transport & key exchange"),    // after the key formats: an encrypted key file names its cipher too
             ("hostkey",          "Host-key verification"),
             ("auth",             "Authentication"),
+            ("logsin",           "Authentication"),
+            ("keytype",          "Authentication"),
             ("exec",             "Remote command execution"),
             ("exitstatus",       "Remote command execution"),
             ("command",          "Remote command execution"),

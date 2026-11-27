@@ -23,11 +23,15 @@ is kept in [Appendix A](#appendix-a--build-journal-m1m4).
 | Hardening (M9) | ✅ — the version spread runs from OpenSSH 8.9 to the newest upstream release (§0.3) |
 | Demo CLI, benchmarks (M10) | 🔶 — done except NuGet packaging (deferred by decision, §13) |
 
-**Measured 2026-11-03** at Hermod `621afa03`: Hermod's whole suite **5424 of 5425** green (the one skip
-is outside SSH); the conformance suite **161 of 162** on a developer machine (ssh-agent skips without a
-running agent) and **162 of 162, none skipped,** on the Debian CI leg at `828fd70` — nine independent peer
-implementations ([matrix](docs/INTEROP-MATRIX.md)); the newest upstream OpenSSH, **10.6p1**, **64 of 64**
-in the nightly of 2026-11-02.
+**Measured 2026-11-27** at `3ba88fd` (Hermod `daa99904`): Hermod's whole suite **8095 of 8096** green
+(one skip); the conformance suite **391 of 391, none skipped,** on the Debian CI leg — **382 interop
+checks against 16 peers**, all passing ([matrix](docs/INTEROP-MATRIX.md), regenerated from that leg's
+TRX), plus the demo-CLI tests. The `windows-latest` leg runs **80 of 391** and skips 311: the Linux
+peers, which a hosted runner without WSL cannot provision, and the ssh-agent check (§11.6). The nightly
+of 2026-11-26 ran the OpenSSH fixtures against the newest upstream release, **10.6p2**, **93 of 93**;
+in the version spread 9.9p1 passed 93 of 93, Ubuntu's 9.6p1 90 and both 8.9p1 lanes 89, skipping only
+what arrived after them (ML-KEM, the `sntrup761x25519-sha512` name of 9.9, and on 8.9 SFTP server-side
+copy).
 
 ### 0.1 Security — found by the code audit of 2026-10-29, fixed the same day
 
@@ -1521,7 +1525,7 @@ Two diagnostics landed with it, both earned the hard way: `SshServer` now emits 
 | `System.Security.Cryptography.MLKem` platform-dependent / possibly experimental (SYSLIB5006) | spike in M3; BouncyCastle fallback designed in from the start |
 | No X25519/Ed25519 in the BCL | BouncyCastle (established in this ecosystem); provider abstraction keeps a BCL migration path open |
 | PQ hybrid interop traps (K encoded as string, hash choice) | dedicated test vectors + early OpenSSH ≥ 9.9 interop test |
-| Managed chacha20-poly1305 is slow | AES-GCM as default; ChaCha as compatibility cipher |
+| Managed chacha20-poly1305 is slow | planned as: AES-GCM as default, ChaCha as compatibility cipher. **Done differently** (M10 row): a SIMD ChaCha20 core (`Vector128<UInt32>`) brought it from 14.5× to 6.6× off AES-GCM, and ChaCha20 stays first in the default order for the ARM fleet; whether AES-GCM should lead on AES-NI hardware is open (§0.4) |
 | PTY/shell hosting in the server (ConPTY, Unix openpty) | protocol complete; hosting delegated to demo/extension |
 | Self-built constructions (CTR, bcrypt_pbkdf, OpenSSH ChaCha construction) | only with official test vectors + interop proof |
 | Interop matrix maintenance cost (peers evolve, CI time) | tiering (§11.1), per-commit smoke vs nightly matrix, capability tables per peer version |
