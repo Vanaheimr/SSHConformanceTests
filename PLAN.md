@@ -30,7 +30,7 @@ skipped,** on the Debian CI leg — **382 interop checks against 16 peers**, all
 ([matrix](docs/INTEROP-MATRIX.md), regenerated from that leg's TRX), plus the demo-CLI tests. The
 `windows-latest` leg runs **80 of 391** and skips 311: the Linux peers, which a hosted runner without WSL
 cannot provision, and the ssh-agent check (§11.6) — **116 of 391** since the same day's native Windows
-peers (§0.3). The nightly of 2026-11-26 ran the OpenSSH fixtures
+peers, **248 of 395** since their second round (§0.3). The nightly of 2026-11-26 ran the OpenSSH fixtures
 against the newest upstream release, **10.6p2**, **93 of 93**; in the version spread 9.9p1 passed 93 of
 93, Ubuntu's 9.6p1 90 and both 8.9p1 lanes 89, skipping only what arrived after them (ML-KEM, the
 `sntrup761x25519-sha512` name of 9.9, and on 8.9 SFTP server-side copy).
@@ -548,6 +548,16 @@ fail without the fix and a control proving the permitted case still works.
     and the gate covers all eight native fixtures.
   - Measured on the developer machine: **130 of 130** - MINA SSHD 51, JSch 28, Russh 51 - all of which
     had skipped there.
+  - On the `windows-latest` leg (PR #91, merged as `52ca8b9`): **248 of 395** pass, up from 116, and the
+    gate counts all eight fixtures complete - the three new ones with the same 130 checks as on the
+    developer machine, the five of the first round unchanged. Temurin's javac 21.0.13 built both Java
+    peers against the pinned jars, and Rust 1.98.1, installed by `setup-windows.ps1` through the
+    runner's rustup, built Russh with aws-lc-sys's prebuilt objects; the two OpenSSH-TOTP checks of
+    #88 that need no WSL account for the rest. The price is time: the test step took 270 s instead of
+    61 s. About 130 s of that is Russh's first build - a hosted runner keeps no target directory between
+    runs - and 55 s MINA SSHD's 51 checks; JSch's take 16 s, Russh's own 14 s. A cache of Russh's target
+    directory (`%LOCALAPPDATA%\hermod-interop\russh-target`, `actions/cache`) would win most of the
+    build back if the leg's length ever matters.
 
 ### 0.4 Decisions pending
 
@@ -1526,7 +1536,7 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 
 ### 11.6 CI strategy
 
-- **Per commit** ✅ (`.github/workflows/ci.yml`, since 2026-08-13 with the full peer set): the whole conformance suite on a Debian 13 container leg — every peer at trixie's versions, provisioned by `setup-wsl.sh`, every check run and none skipped, in ~16 s of test time — plus a Windows leg (only the checks that need no WSL; hosted runners have none; **74 of 162** on 2026-11-03, **116 of 391** on 2026-11-27) adding the genuinely different Windows OpenSSH build and, since 2026-11-27, AsyncSSH, Paramiko, ncclient, the Go harness, MINA SSHD, JSch and Russh as native Windows processes (§0.3)
+- **Per commit** ✅ (`.github/workflows/ci.yml`, since 2026-08-13 with the full peer set): the whole conformance suite on a Debian 13 container leg — every peer at trixie's versions, provisioned by `setup-wsl.sh`, every check run and none skipped, in ~16 s of test time — plus a Windows leg (only the checks that need no WSL; hosted runners have none; **74 of 162** on 2026-11-03, **116 of 391** and then **248 of 395** on 2026-11-27) adding the genuinely different Windows OpenSSH build and, since 2026-11-27, AsyncSSH, Paramiko, ncclient, the Go harness, MINA SSHD, JSch and Russh as native Windows processes (§0.3)
 - **Nightly** ✅ (`.github/workflows/nightly.yml`, since 2026-08-13), split into a fatal and an informational half the way Hermod's own nightly is — a red that can mean "a mirror was slow" must not share a colour with a red that means our code broke:
   - *fatal:* the pinned suite three times against one provisioning (~30 s of test time each, while apt/pip/Go cost minutes — so repeating the part that varies is nearly free). This is what a per-commit gate structurally cannot report: one of three failing is a flake and says so, three of three is a regression, and failures only in runs 2 and 3 mean the suite does not clean up after itself
   - *informational:* the **forward half of the version spread** — the newest upstream OpenSSH, discovered from the release listing rather than pinned, built from source into a private prefix under `RUNNER_TEMP` and put on `PATH` for the OpenSSH fixtures (which resolve their binaries through `PATH` already, so this needs no harness change). It is the only way to reach the *versions* the §11.1 behaviour gates need, because no distribution ships them: trixie stops at 10.0p2 while upstream is at 10.6p1. **Result (2026-08-13): 43 of 43 against 10.5p1; (2026-10-27): 44 of 44 against 10.6p1** — both directions, our client against their `sshd` and their `ssh` against our server, `mlkem768x25519-sha256` and `sntrup761x25519-sha512` included. We therefore interoperate three minor versions ahead of anything Debian ships, and this half's evidence is in hand rather than promised. (Passing every check proves nothing broke, not that the gates' *specific* behaviours are exercised. One of them now is: `OpenSsh_EmptyCertPrincipals_MatchNothingFrom_10_3` asserts against the built release that empty cert principals match nothing — the 44th check. IANA agent names and the post-auth-rekey disconnect cannot be driven from outside; see §11.1.) The first attempt read 32 of 43, and all eleven failures were our build rather than the release — a lesson worth not repeating: run OpenSSH out of its build directory and you get an `sshd` that rejects the `-o UsePAM=no` the fixture sends (`--without-pam`), looks for its configuration under `/usr/local/etc`, and since 9.8 re-executes a `$libexecdir/sshd-session` that was never installed. `--prefix` plus `make install-nokeys` answers all three
