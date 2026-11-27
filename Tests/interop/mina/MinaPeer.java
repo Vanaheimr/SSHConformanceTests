@@ -36,10 +36,14 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.OpenOption;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileAttribute;
 import java.security.KeyPair;
 import java.security.PublicKey;
 import java.time.Duration;
@@ -49,6 +53,7 @@ import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -82,7 +87,10 @@ import org.apache.sshd.server.command.AbstractCommandSupport;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.client.SftpClientFactory;
 import org.apache.sshd.sftp.common.SftpException;
+import org.apache.sshd.sftp.server.FileHandle;
+import org.apache.sshd.sftp.server.SftpFileSystemAccessor;
 import org.apache.sshd.sftp.server.SftpSubsystemFactory;
+import org.apache.sshd.sftp.server.SftpSubsystemProxy;
 
 public final class MinaPeer
 {
@@ -525,7 +533,7 @@ public final class MinaPeer
         server.setPublickeyAuthenticator((username, key, session) ->
             authorized.stream().anyMatch(known -> KeyUtils.compareKeys(known, key)));
         server.setCommandFactory((channel, command) -> new Echo(command));
-        server.setSubsystemFactories(List.of(new SftpSubsystemFactory.Builder().build()));
+        server.setSubsystemFactories(List.of(new SftpSubsystemFactory.Builder().withFileSystemAccessor(FILE_SYSTEM).build()));
         server.setFileSystemFactory(NativeFileSystemFactory.INSTANCE);
 
         server.start();
@@ -771,5 +779,25 @@ public final class MinaPeer
         System.exit(0);
 
     }
+
+
+    /**
+     * MINA's own file system accessor, but for one thing a file system without a POSIX attribute view -
+     * Windows' - cannot take: MINA hands the permissions a client sends with SSH_FXP_OPEN on to
+     * Files.newByteChannel as a PosixFilePermissions attribute, Java refuses that with an
+     * UnsupportedOperationException, and MINA answers SSH_FX_OP_UNSUPPORTED. Every client that sends a
+     * mode with an upload - ours, OpenSSH's sftp - is turned away, so there the attributes are dropped
+     * and the file gets what its directory gives it, as from any SFTP server on Windows. Where the view
+     * exists, nothing changes.
+     */
+    private static final SftpFileSystemAccessor FILE_SYSTEM = new SftpFileSystemAccessor() {
+        @Override
+        public SeekableByteChannel openFile(SftpSubsystemProxy subsystem, FileHandle fileHandle, Path file, String handle,
+                                            Set<? extends OpenOption> options, FileAttribute<?>... attrs) throws IOException {
+            if (!file.getFileSystem().supportedFileAttributeViews().contains("posix"))
+                attrs = new FileAttribute<?>[0];
+            return SftpFileSystemAccessor.super.openFile(subsystem, fileHandle, file, handle, options, attrs);
+        }
+    };
 
 }

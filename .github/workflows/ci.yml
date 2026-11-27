@@ -135,16 +135,23 @@ jobs:
         if: runner.os == 'Linux'
         run: bash Tests/interop/setup-wsl.sh
 
-      # Five fixtures drive peers that need no Linux at all: AsyncSsh, AsyncSshServer, Ncclient
-      # and Paramiko are Python, GoCryptoSsh is Go. On this leg they run as native Windows
-      # processes (interop/PeerPlatform.cs): setup-windows.ps1 puts the Python peers into
-      # interop/.venv-interop-win, and GoCryptoSshInteropTests builds its harness with the go.exe
-      # setup-go puts on the PATH. That is the same peer code under a second operating system,
-      # where it had skipped by name for want of WSL.
+      # Eight fixtures drive peers that need no Linux at all: AsyncSsh, AsyncSshServer, Ncclient
+      # and Paramiko are Python, GoCryptoSsh is Go, MinaSshd and Jsch are Java, Russh is Rust. On
+      # this leg they run as native Windows processes (interop/PeerPlatform.cs):
+      #   - setup-windows.ps1 puts the Python peers into interop/.venv-interop-win, fetches the
+      #     jars of MINA SSHD and JSch from Maven Central into interop/.java-interop-win - the
+      #     releases Debian 13 ships, each checked against a pinned SHA-256 - and installs the Rust
+      #     toolchain russh/rust-toolchain.toml pins through the runner's rustup;
+      #   - the fixtures build their peers with the go.exe setup-go and the javac.exe setup-java
+      #     put on the PATH, and with that rustup's cargo.
+      # That is the same peer code under a second operating system, where it had skipped by name
+      # for want of WSL.
       #
       # The script runs under Windows PowerShell 5.1 on purpose: that is the shell a developer
       # runs it from, so CI proves it there. -Python names setup-python's interpreter, because
-      # the py launcher would pick whichever Python the runner image happens to carry.
+      # the py launcher would pick whichever Python the runner image happens to carry. Java 21
+      # rather than the image's default for the same reason: the peers use language features
+      # Java 8 does not have.
       - uses: actions/setup-python@v7
         if: runner.os == 'Windows'
         id: python
@@ -156,6 +163,12 @@ jobs:
         with:
           go-version-file: Tests/interop/go/go.mod
           cache-dependency-path: Tests/interop/go/go.sum
+
+      - uses: actions/setup-java@v6
+        if: runner.os == 'Windows'
+        with:
+          distribution: temurin
+          java-version: '21'
 
       - name: Provision the native peers (Windows)
         if: runner.os == 'Windows'
@@ -236,9 +249,10 @@ jobs:
       # pure-managed NuGet peer that needs nothing installed at all.
       #
       # The other fixtures reach their peers through interop/WslInterop.cs, which runs the
-      # same commands through wsl.exe on Windows and natively on Linux — or, for the five
-      # whose peers need no Linux (AsyncSsh, AsyncSshServer, GoCryptoSsh, Ncclient,
-      # Paramiko), through interop/PeerPlatform.cs, which runs them natively on either.
+      # same commands through wsl.exe on Windows and natively on Linux — or, for the eight
+      # whose peers need no Linux (AsyncSsh, AsyncSshServer, GoCryptoSsh, Jsch, MinaSshd,
+      # Ncclient, Paramiko, Russh), through interop/PeerPlatform.cs, which runs them natively
+      # on either.
       # With the provisioning step above, the Debian leg is the first place the entire
       # suite runs on every commit: every check, nothing skipped — about 30 seconds of
       # test time on a hosted runner, 17 in a local Debian 13 provisioned the same way.
@@ -247,7 +261,7 @@ jobs:
       # own peer versions, which costs seconds.
       #
       # The Windows leg reaches the WSL peers no further — the hosted images install no WSL
-      # distro — and runs the checks that need none: the five native fixtures above, and the
+      # distro — and runs the checks that need none: the eight native fixtures above, and the
       # Windows OpenSSH, a genuinely different build against a different TLS stack, driving
       # the same server.
       #
@@ -313,8 +327,8 @@ jobs:
       # that fails before the test step leaves no .trx at all, which upload-artifact reports
       # as a warning rather than a second failure — the build error is the finding there.
       # The Windows leg's counterpart of the skip gate above, narrowed to what it provisions:
-      # the five native fixtures must have run, every one of their checks passing. A skip
-      # there would mean setup-windows.ps1 or setup-go failed quietly, and the leg would go
+      # the eight native fixtures must have run, every one of their checks passing. A skip
+      # there would mean setup-windows.ps1 or a setup action failed quietly, and the leg would go
       # back to reporting nothing about them while staying green.
       - name: Check that the native peers ran (Windows)
         if: runner.os == 'Windows'
@@ -323,7 +337,8 @@ jobs:
           import glob, sys, xml.etree.ElementTree as ET
           ns       = '{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}'
           fixtures = { 'AsyncSshInteropTests', 'AsyncSshServerInteropTests', 'GoCryptoSshInteropTests',
-                       'NcclientInteropTests', 'ParamikoInteropTests' }
+                       'JschInteropTests', 'MinaSshdInteropTests', 'NcclientInteropTests',
+                       'ParamikoInteropTests', 'RusshInteropTests' }
           ran, missed = {}, []
           for trx in glob.glob('artifacts/*.trx'):
               root    = ET.parse(trx).getroot()

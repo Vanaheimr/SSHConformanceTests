@@ -43,9 +43,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     /// </para>
     ///
     /// <para>
-    /// The peer is a small Java program in <c>interop/jsch/</c>, compiled on demand inside WSL against the
-    /// distribution's jars, like the MINA peer. JSch is a client only, so there is one direction here:
-    /// JSch against our server, speaking the JSON contract of <see cref="WslInterop.RunPeerAsync"/>. It
+    /// The peer is a small Java program in <c>interop/jsch/</c>, compiled on demand like the MINA peer:
+    /// natively on Windows with the jars <c>setup-windows.ps1</c> fetched, otherwise inside WSL against the
+    /// distribution's. JSch is a client only, so there is one direction here:
+    /// JSch against our server, speaking the JSON contract of <see cref="PeerPlatform.RunPeerAsync"/>. It
     /// reads the key files our generator wrote with no conversion step.
     /// </para>
     ///
@@ -66,21 +67,33 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         private const  String   Username   = "hermoduser";
 
         /// <summary>
-        /// The distribution's jars: JSch, and the BouncyCastle provider its sntrup761, ChaCha20 and Ed25519
-        /// classes are built on.
+        /// The jars, by their distribution names: JSch, and the BouncyCastle provider its sntrup761,
+        /// ChaCha20 and Ed25519 classes are built on.
         /// </summary>
-        private const  String   ClassPath  = "/usr/share/java/jsch.jar:/usr/share/java/bcprov.jar";
+        private static readonly String[] Jars = [ "jsch", "bcprov" ];
 
-        private static String?  peerRoot;
-        private static String?  skipReason;
+        private static JavaToolchain  toolchain = JavaPeers.Linux;
+        private static String?        peerRoot;
+        private static String?        skipReason;
+
+        private static PeerPlatform Platform
+            => toolchain.Platform;
 
         [OneTimeSetUp]
         public async Task BuildPeerAsync()
         {
 
+            if (JavaPeers.Windows is { } windows && windows.HasJars(Jars))
+            {
+                await BuildNativelyAsync(windows);
+                return;
+            }
+
             if (WslInterop.UnavailableReason is not null)
             {
-                skipReason = WslInterop.UnavailableReason;
+                skipReason = OperatingSystem.IsWindows()
+                                 ? $"{JavaPeers.WhyNotOnWindows(Jars)}, and no WSL to build in: {WslInterop.UnavailableReason}"
+                                 : WslInterop.UnavailableReason;
                 return;
             }
 
@@ -101,7 +114,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             // distribution does not ship, which is noise, not a problem.
             var (exitCode, stdout, stderr) = await WslInterop.RunAsync([
                                                  "-e", "bash", "-c",
-                                                 $"mkdir -p {peerRoot} && javac -Xlint:-path -d {peerRoot} -cp {ClassPath} {source}"
+                                                 $"mkdir -p {peerRoot} && javac -Xlint:-path -d {peerRoot} -cp {toolchain.ClassPath([], Jars)} {source}"
                                              ], CancellationToken.None);
 
             if (exitCode != 0)
@@ -113,11 +126,40 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         }
 
+        /// <summary>
+        /// Compile the peer with a Java on this Windows machine, against the jars setup-windows.ps1 fetched.
+        /// </summary>
+        private static async Task BuildNativelyAsync(JavaToolchain Windows)
+        {
+
+            toolchain = Windows;
+            peerRoot  = Path.Combine(Path.GetTempPath(), "hermod_jsch_peer_" + Guid.NewGuid().ToString("N"));
+
+            Directory.CreateDirectory(peerRoot);
+
+            var (exitCode, stdout, stderr) = await Platform.RunAsync(toolchain.Javac,
+                                                                     [ "-Xlint:-path", "-d", peerRoot, "-cp", toolchain.ClassPath([], Jars),
+                                                                       Path.Combine(WslInterop.InteropDirectory!, "jsch", "JschPeer.java") ],
+                                                                     CancellationToken.None);
+
+            if (exitCode != 0)
+                skipReason = $"Could not build the JSch peer with {toolchain.Javac} (exit {exitCode}).\n{stdout}\n{stderr}";
+
+        }
+
         [OneTimeTearDown]
         public async Task RemovePeerAsync()
         {
-            if (peerRoot is not null)
+
+            if (peerRoot is null)
+                return;
+
+            if (Platform == PeerPlatform.Windows)
+                try { Directory.Delete(peerRoot, recursive: true); } catch { }
+
+            else
                 try { await WslInterop.RunAsync(["-e", "rm", "-rf", peerRoot], CancellationToken.None); } catch { }
+
         }
 
 
@@ -128,7 +170,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         }
 
         private static Task<PeerRunResult> RunClientAsync(Dictionary<String, Object?> Configuration, CancellationToken CancellationToken)
-            => WslInterop.RunPeerAsync("JSch", ["-e", "java", "-cp", $"{peerRoot}:{ClassPath}", "JschPeer", "client"], Configuration, CancellationToken);
+            => Platform.RunPeerAsync("JSch", toolchain.Java, [ "-cp", toolchain.ClassPath([ peerRoot! ], Jars), "JschPeer", "client" ], Configuration, CancellationToken);
 
 
         private static ISshHostKey GenerateKey(String Type)
@@ -151,7 +193,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                         RecordingAuditSink  Audit) : IAsyncDisposable
         {
 
-            public String WslUserKey => WslInterop.ToWslPath(Path.Combine(WindowsRoot, "user"));
+            public String WslUserKey => Platform.ToPeerPath(Path.Combine(WindowsRoot, "user"));
 
             public Dictionary<String, Object?> Configuration(String Action)
                 => new () {
@@ -202,7 +244,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await server.StartAsync(new IPSocket(IPv4Address.Any, IPPort.Auto), CancellationToken);
             var port = server.LocalEndPoint.Port.ToInt32();
 
-            var host = await WslInterop.ResolveWindowsHostAsync(CancellationToken);
+            var host = await Platform.ResolveHostAsync(CancellationToken);
             if (host is null)
             {
                 await server.DisposeAsync();
@@ -407,8 +449,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await File.WriteAllBytesAsync(upload, content, CancellationToken);
 
             var configuration = server.Configuration("sftp");
-            configuration["upload_path"]   = WslInterop.ToWslPath(upload);
-            configuration["download_path"] = WslInterop.ToWslPath(back);
+            configuration["upload_path"]   = Platform.ToPeerPath(upload);
+            configuration["download_path"] = Platform.ToPeerPath(back);
             configuration["remote_dir"]    = "/jsch";
 
             var result = await RunClientAsync(configuration, CancellationToken);

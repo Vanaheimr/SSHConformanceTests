@@ -30,7 +30,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
     /// <summary>
     /// Where a peer runs that exists for Windows as well as for Linux: AsyncSSH, Paramiko and ncclient
-    /// are Python, the x/crypto/ssh harness is Go, and none of them needs Linux to run.
+    /// are Python, MINA SSHD and JSch Java, Russh Rust, the x/crypto/ssh harness Go, and none of them
+    /// needs Linux to run.
     ///
     /// <para>
     /// <see cref="Linux"/> is what every peer had until now: <see cref="WslInterop"/>, which crosses
@@ -165,6 +166,22 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         #endregion
 
 
+        #region (internal, static) RunOnWindowsAsync(Program, Arguments, WorkingDirectory, Environment, CancellationToken)
+
+        /// <summary>
+        /// Run a native Windows program in a directory and with environment variables of its own - for a
+        /// build such as <c>cargo</c>, whose toolchain file is found from the working directory.
+        /// </summary>
+        internal static Task<(Int32 ExitCode, String StdOut, String StdErr)> RunOnWindowsAsync(String                                Program,
+                                                                                               IEnumerable<String>                   Arguments,
+                                                                                               String?                               WorkingDirectory,
+                                                                                               IReadOnlyDictionary<String, String>?  Environment,
+                                                                                               CancellationToken                     CancellationToken)
+
+            => WindowsPlatform.RunAsync(Program, Arguments, WorkingDirectory, Environment, CancellationToken);
+
+        #endregion
+
         #region (internal, static) FindOnPath(FileName)
 
         /// <summary>
@@ -240,7 +257,10 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             public override Task<String?> ResolveHostAsync(CancellationToken CancellationToken)
                 => Task.FromResult<String?>("127.0.0.1");
 
-            private static ProcessStartInfo CreateStartInfo(String Program, IEnumerable<String> Arguments)
+            internal static ProcessStartInfo CreateStartInfo(String                                    Program,
+                                                             IEnumerable<String>                       Arguments,
+                                                             String?                                   WorkingDirectory  = null,
+                                                             IReadOnlyDictionary<String, String>?      Environment       = null)
             {
 
                 var startInfo = new ProcessStartInfo {
@@ -262,16 +282,30 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 startInfo.Environment["PYTHONUTF8"]       = "1";
                 startInfo.Environment["PYTHONIOENCODING"] = "utf-8";
 
+                if (WorkingDirectory is not null)
+                    startInfo.WorkingDirectory = WorkingDirectory;
+
+                foreach (var (name, value) in Environment ?? new Dictionary<String, String>())
+                    startInfo.Environment[name] = value;
+
                 return startInfo;
 
             }
 
-            public override async Task<(Int32 ExitCode, String StdOut, String StdErr)> RunAsync(String               Program,
-                                                                                                IEnumerable<String>  Arguments,
-                                                                                                CancellationToken    CancellationToken)
+            public override Task<(Int32 ExitCode, String StdOut, String StdErr)> RunAsync(String               Program,
+                                                                                          IEnumerable<String>  Arguments,
+                                                                                          CancellationToken    CancellationToken)
+
+                => RunAsync(Program, Arguments, null, null, CancellationToken);
+
+            internal static async Task<(Int32 ExitCode, String StdOut, String StdErr)> RunAsync(String                                Program,
+                                                                                                IEnumerable<String>                   Arguments,
+                                                                                                String?                               WorkingDirectory,
+                                                                                                IReadOnlyDictionary<String, String>?  Environment,
+                                                                                                CancellationToken                     CancellationToken)
             {
 
-                var startInfo = CreateStartInfo(Program, Arguments);
+                var startInfo = CreateStartInfo(Program, Arguments, WorkingDirectory, Environment);
 
                 using var process = Process.Start(startInfo)
                                         ?? throw new InvalidOperationException($"Could not start '{startInfo.FileName}'.");
