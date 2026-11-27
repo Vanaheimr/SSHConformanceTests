@@ -60,7 +60,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     /// <para>
     /// OpenSSH 9.8 and later punish an address for failed sign-ins (<c>PerSourcePenalties</c>), and the
     /// refusals here are deliberate: the <c>sshd</c> of this fixture has the penalties off, or the next
-    /// sign-in from 127.0.0.1 would be dropped before it began.
+    /// sign-in from 127.0.0.1 would be dropped before it began. An older <c>sshd</c>, as the nightly's 8.9
+    /// and 9.6 lanes run, has no such keyword and would not start with it, so it is set only where
+    /// <c>sshd -t</c> takes it.
     /// </para>
     /// </remarks>
     [TestFixture]
@@ -310,6 +312,31 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             public String PamLogText
                 => File.Exists(PamLog) ? File.ReadAllText(PamLog) : "(pam_exec logged nothing)";
 
+            public String Logs
+            {
+                get
+                {
+                    lock (Log)
+                        return $"sshd:\n{Log}\npam_exec:\n{PamLogText}";
+                }
+            }
+
+            /// <summary>
+            /// Run the given part of a test; whatever it throws besides NUnit's own outcomes comes back as
+            /// a failure that carries both logs - which a connection sshd closed says nothing about.
+            /// </summary>
+            public async Task ExplainingFailures(Func<Task> Body)
+            {
+                try
+                {
+                    await Body();
+                }
+                catch (Exception e) when (e is not ResultStateException)
+                {
+                    throw new AssertionException($"{e.GetType().Name}: {e.Message}\n{Logs}", e);
+                }
+            }
+
             public async ValueTask DisposeAsync()
             {
 
@@ -343,7 +370,9 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             var hostKeyPath = Path.Combine(Workspace, "host_ed25519");
             await SshKeyGenerator.WriteKeyPairAsync(hostKey, hostKeyPath, "hermod-totp-interop-host", CancellationToken);
 
-            // The tool's line, as the README puts it; %u is the tool's own token, filled from PAM_USER.
+            // The tool's line, as the README puts it; %u is the tool's own token, filled from PAM_USER. Written
+            // with LF whatever this source file came with: Linux-PAM 1.4 (Ubuntu 22.04) takes a CR at the end of
+            // "@include common-account" for part of the file name and fails pam_start, where 1.7 forgives it.
             var pamLog      = Path.Combine(Workspace, "pam_exec.log");
             var pamBackup   = Path.Combine(Workspace, "pam.d-sshd.orig");
             File.Copy("/etc/pam.d/sshd", pamBackup);
@@ -355,32 +384,41 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                               @include common-account
                               @include common-session
 
-                              """);
+                              """.ReplaceLineEndings("\n"));
 
             var port        = FreePort();
             var config      = Path.Combine(Workspace, "sshd_config");
-            File.WriteAllText(config,
-                              $"""
-                              Port {port}
-                              ListenAddress 127.0.0.1
-                              HostKey {hostKeyPath}
-                              PidFile {Workspace}/sshd.pid
-                              AuthorizedKeysFile {Workspace}/authorized_keys
-                              StrictModes no
-                              PermitRootLogin yes
-                              UsePAM yes
-                              KbdInteractiveAuthentication yes
-                              PasswordAuthentication no
-                              AuthenticationMethods publickey,keyboard-interactive:pam
-                              PerSourcePenalties no
-                              PrintMotd no
-                              LogLevel VERBOSE
+            var sshd        = FindOnPath("sshd")!;
+            var settings    = $"""
+                               Port {port}
+                               ListenAddress 127.0.0.1
+                               HostKey {hostKeyPath}
+                               PidFile {Workspace}/sshd.pid
+                               AuthorizedKeysFile {Workspace}/authorized_keys
+                               StrictModes no
+                               PermitRootLogin yes
+                               UsePAM yes
+                               KbdInteractiveAuthentication yes
+                               PasswordAuthentication no
+                               AuthenticationMethods publickey,keyboard-interactive:pam
+                               PrintMotd no
+                               LogLevel VERBOSE
 
-                              """);
+                               """.ReplaceLineEndings("\n");
 
+            // Run as root, sshd refuses even "sshd -t" without its privilege-separation directory.
             Directory.CreateDirectory("/run/sshd");
 
-            var start = new ProcessStartInfo(FindOnPath("sshd")!) {
+            // The penalties came with 9.8; an older sshd takes the keyword for a mistake and does not start
+            // ("Bad configuration option: PerSourcePenalties"), and has no penalties to switch off anyway.
+            // Asked of the sshd itself rather than inferred from a version, as the nightly's source builds
+            // and distribution packages need not agree on what a version number means.
+            File.WriteAllText(config, settings + "PerSourcePenalties no\n");
+
+            if (!await SshdAcceptsAsync(sshd, config, CancellationToken))
+                File.WriteAllText(config, settings);
+
+            var start = new ProcessStartInfo(sshd) {
                             RedirectStandardError  = true,
                             RedirectStandardOutput = true,
                             UseShellExecute        = false
@@ -432,6 +470,33 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             await daemon.DisposeAsync();
             Assert.Fail($"sshd did not listen on {port}:\n{log}");
             return null!;
+
+        }
+
+        /// <summary>
+        /// Whether the given sshd takes the given configuration file (<c>sshd -t</c>).
+        /// </summary>
+        private static async Task<Boolean> SshdAcceptsAsync(String Sshd, String Config, CancellationToken CancellationToken)
+        {
+
+            var start = new ProcessStartInfo(Sshd) {
+                            RedirectStandardError  = true,
+                            RedirectStandardOutput = true,
+                            UseShellExecute        = false
+                        };
+
+            foreach (var argument in new[] { "-t", "-f", Config })
+                start.ArgumentList.Add(argument);
+
+            using var process = Process.Start(start)!;
+            var output = process.StandardOutput.ReadToEndAsync(CancellationToken);
+            var error  = process.StandardError. ReadToEndAsync(CancellationToken);
+            await process.WaitForExitAsync(CancellationToken);
+
+            if (process.ExitCode != 0)
+                TestContext.Out.WriteLine($"sshd -t refused {Config}: {(await error).Trim()} {(await output).Trim()}");
+
+            return process.ExitCode == 0;
 
         }
 
@@ -563,24 +628,28 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                   }
                        };
 
-                await using (var client = await SSHClient.Connect("127.0.0.1", IPPort.Parse(daemon.Port.ToString()), OptionsWith(config), CancellationToken))
-                {
+                await daemon.ExplainingFailures(async () => {
 
-                    var result = await client.Execute($"echo {Marker}", CancellationToken);
+                    await using (var client = await SSHClient.Connect("127.0.0.1", IPPort.Parse(daemon.Port.ToString()), OptionsWith(config), CancellationToken))
+                    {
 
-                    Assert.Multiple(() => {
-                        Assert.That(result.StandardOutput, Does.Contain(Marker), $"signed in, and a command ran.\nsshd:\n{daemon.Log}\npam_exec:\n{daemon.PamLogText}");
-                        Assert.That(prompts,               Has.Some.Contains("Password"), "pam_exec's prompt reached our client");
-                        Assert.That(daemon.PamLogText,     Does.Contain($"accepted for {daemon.User}"), "the tool checked the token");
-                    });
+                        var result = await client.Execute($"echo {Marker}", CancellationToken);
 
-                }
+                        Assert.Multiple(() => {
+                            Assert.That(result.StandardOutput, Does.Contain(Marker), $"signed in, and a command ran.\n{daemon.Logs}");
+                            Assert.That(prompts,               Has.Some.Contains("Password"), "pam_exec's prompt reached our client");
+                            Assert.That(daemon.PamLogText,     Does.Contain($"accepted for {daemon.User}"), "the tool checked the token");
+                        });
 
-                Assert.That(async () => await SSHClient.Connect("127.0.0.1", IPPort.Parse(daemon.Port.ToString()), OptionsWith(NewConfig()), CancellationToken),
-                            Throws.InstanceOf<SshAuthenticationException>(),
-                            $"the token of another secret.\nsshd:\n{daemon.Log}");
+                    }
 
-                Assert.That(daemon.PamLogText, Does.Contain($"refused for {daemon.User}"), "and the tool said so");
+                    Assert.That(async () => await SSHClient.Connect("127.0.0.1", IPPort.Parse(daemon.Port.ToString()), OptionsWith(NewConfig()), CancellationToken),
+                                Throws.InstanceOf<SshAuthenticationException>(),
+                                $"the token of another secret.\n{daemon.Logs}");
+
+                    Assert.That(daemon.PamLogText, Does.Contain($"refused for {daemon.User}"), "and the tool said so");
+
+                });
 
             }
             finally
@@ -636,7 +705,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                    "-o", "KbdInteractiveAuthentication=no");
 
                 Assert.Multiple(() => {
-                    Assert.That(signedIn.StandardOutput, Does.Contain(Marker),     $"ssh and sshd, both with the tool.\nssh:\n{signedIn.StandardError}\nsshd:\n{daemon.Log}\npam_exec:\n{daemon.PamLogText}");
+                    Assert.That(signedIn.StandardOutput, Does.Contain(Marker),     $"ssh and sshd, both with the tool.\nssh:\n{signedIn.StandardError}\n{daemon.Logs}");
                     Assert.That(otherKey.StandardOutput, Does.Not.Contain(Marker), "the token of another secret");
                     Assert.That(otherKey.ExitCode,       Is.Not.Zero);
                     Assert.That(keyAlone.StandardOutput, Does.Not.Contain(Marker), "the key alone");
