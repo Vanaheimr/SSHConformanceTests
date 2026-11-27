@@ -40,4 +40,12 @@
     <ProjectReference Include="..\Demo\Demo.csproj" />
   </ItemGroup>
 
+  <!-- The SSHTOTPTool (hermod-ssh-totp), which teaches an unmodified OpenSSH Hermod's one-time password:
+       interop/OpenSshTotpInteropTests.cs starts it as pam_exec's and ssh's program, from the output
+       directory this reference copies it into. Sitting in libs/ next to libs/Hermod, the tool builds
+       against that Hermod rather than its own submodule, so that one Hermod is in the build and not two. -->
+  <ItemGroup>
+    <ProjectReference Include="..\libs\SSHTOTPTool\SSHTOTPTool\SSHTOTPTool.csproj" />
+  </ItemGroup>
+
 </Project>

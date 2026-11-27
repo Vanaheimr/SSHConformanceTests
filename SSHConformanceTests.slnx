@@ -3,6 +3,7 @@
     <Project Path="libs/Hermod/Hermod/Hermod.csproj" />
     <Project Path="libs/Hermod/HermodTests/HermodTests.csproj" />
     <Project Path="libs/Styx/Styx/Styx.csproj" />
+    <Project Path="libs/SSHTOTPTool/SSHTOTPTool/SSHTOTPTool.csproj" />
   </Folder>
   <Project Path="Tests/Tests.csproj" />
   <Project Path="Demo/Demo.csproj" />
