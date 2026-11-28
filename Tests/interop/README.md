@@ -20,7 +20,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | `.venv-interop/` | The Python peers (AsyncSSH, Paramiko, ncclient), created by `setup-wsl.sh`. Git-ignored. |
 | `.venv-interop-win/` | The same peers for Windows, created by `setup-windows.ps1`. Git-ignored. |
 | `.java-interop-win/` | The jars of MINA SSHD 2.13.2 and JSch 0.2.19 with their dependencies, fetched from Maven Central by `setup-windows.ps1`, checked against pinned SHA-256s and stored under Debian's names. Git-ignored. |
-| `python/`        | Peer drivers speaking a JSON contract with `PythonPeers.RunDriverAsync`, and `asyncssh_server.py`, a server for our client (`PythonPeers.StartServerAsync`). |
+| `python/`        | Peer drivers speaking a JSON contract with `PythonPeers.RunDriverAsync`, and `asyncssh_server.py`, a server for our client (`PythonPeers.StartServerAsync`). `asyncssh_messaging.py` is both: a driver, and with `server` first a server. |
 | `WslInterop.cs`  | Runs the peers — through WSL on Windows, directly on Linux: process plumbing, addressing, peer logs, skip reasons. |
 | `PeerPlatform.cs` | Runs the peers that need no Linux — the Python, Java, Rust and Go ones — natively on Windows where they are provisioned, and through `WslInterop.cs` otherwise. |
 | `JavaPeers.cs`   | The Java toolchain and jars a Java peer is built against: the distribution's in Linux, `.java-interop-win` on Windows. |
@@ -37,7 +37,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 |---|---|---|
 | OpenSSH (`ssh`, `sftp`, `ssh-keygen`) | client | Windows process |
 | SSH.NET | client | in-process (NuGet) |
-| AsyncSSH | **both** | Windows process or WSL + `python/asyncssh_driver.py`, and `python/asyncssh_server.py` as a server for our client (password, keyboard-interactive) |
+| AsyncSSH | **both** | Windows process or WSL + `python/asyncssh_driver.py`, `python/asyncssh_server.py` as a server for our client (password, keyboard-interactive), and `python/asyncssh_messaging.py`, Hermod's message protocol written from its README alone, as a client against our `SshMessageServer` and a server for our `SshMessageClient` |
 | Paramiko | client | Windows process or WSL + `python/paramiko_driver.py` |
 | ncclient | client (NETCONF, RFC 6242) | Windows process or WSL + `python/ncclient_driver.py`, against a `netconf` subsystem the test serves |
 | Go `x/crypto/ssh`, `pkg/sftp` | client | Windows process or WSL + `go/main.go` |
