@@ -56,7 +56,7 @@ of the `Hermod` project, exactly like `DNS/`, `HTTP/`, `SMTP/` and `TCP/`, and s
 | `libs/Hermod/HermodTests/SSH/`    | **Hermetic** tests: unit + loopback, no external software | `org.GraphDefined.Vanaheimr.Hermod.SSH.Tests` |
 | `Tests/interop/`                  | **Conformance** tests: real peers (OpenSSH, Dropbear, TinySSH, PuTTY, AsyncSSH, Paramiko, Go, SSH.NET) | `org.GraphDefined.Vanaheimr.Hermod.SSH.Tests` |
 | `Tests/CLI/`                      | Demo-CLI tests | `org.GraphDefined.Vanaheimr.Hermod.SSH.Tests` |
-| `libs/SSHTOTPTool/`               | Submodule: `hermod-ssh-totp`, Hermod's one-time password for unmodified OpenSSH (`pam_exec` / `SSH_ASKPASS`); builds against the sibling `libs/Hermod` | `org.GraphDefined.Vanaheimr.Hermod.SSH.TOTPTool` |
+| `libs/SSHTOTPTool/`               | Submodule [Vanaheimr/SSHTOTPTool](https://github.com/Vanaheimr/SSHTOTPTool): `hermod-ssh-totp`, Hermod's one-time password for unmodified OpenSSH (`pam_exec` / `SSH_ASKPASS`); builds against the sibling `libs/Hermod` | `org.GraphDefined.Vanaheimr.Hermod.SSH.TOTPTool` |
 | `Demo/`                           | Demo CLI (`hermod-ssh`) | `org.GraphDefined.Vanaheimr.Hermod.SSH.CLI` |
 | `Benchmarks/`                     | BenchmarkDotNet suite | `org.GraphDefined.Vanaheimr.Hermod.SSH.Benchmarks` |
 | `InteropReport/`                  | TRX → interop-matrix generator | `org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport` |
