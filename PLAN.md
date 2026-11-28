@@ -769,7 +769,7 @@ the work since has added four more.
     Linux, so the Windows CI leg runs the rule breaks only; the Debian leg runs all eight.
   - *Through forward proxies* 🔶 (2026-11-28) - what a station behind a corporate proxy needs before
     any of this.
-    - *In Hermod*: Hermod #361 (`40883618`, open), built by the EVChargingTestEnvironment (OCTAL)
+    - *In Hermod*: Hermod #361 (merged as `14da4f03`, which `libs/Hermod` points at), built by the EVChargingTestEnvironment (OCTAL)
       session. `WebSocketClient.Proxy` and `SshWebSocketClient(Proxy:)` take an `HTTPProxy`. The
       client asks it with `CONNECT` (RFC 9110, Section 9.3.6) for a tunnel, and the TLS to the server
       and the upgrade run inside it. `Proxy-Authorization` is sent preemptively: any HTTP
@@ -797,8 +797,6 @@ the work since has added four more.
       not take the upgrade" - with a 401 or 403, indistinguishable from the server's own.
     - *Not covered by these tests:* NTLM/Negotiate (no challenge-response round), `HTTPS_PROXY`/
       `NO_PROXY`, and client certificates towards the proxy - follow-ups, as #361 says.
-    - *Waiting for:* the submodule pointer moves once #361 is merged; until then this repository
-      builds against `40883618` only.
 
 - ✅ **The message protocol against an implementation that is not ours.** `SshMessageServer` and
   `SshMessageClient` (§0.2) were tested hermetically only, our code on both ends - the blind spot this
