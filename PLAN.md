@@ -258,8 +258,15 @@ fail without the fix and a control proving the permitted case still works.
   channel share. Frames are a `uint32` length, a kind byte and the payload: HELLO (the subprotocols the
   client speaks, in order), WELCOME, REFUSED, TEXT, BINARY, PING, PONG, CLOSE with RFC 6455's codes. A
   frame's length is checked before anything is allocated: TEXT/BINARY against the receiver's limit
-  (16 MiB by default), every other kind against 64 KiB. Hermetic in `SshMessageFramingTests` and
-  `SshMessageProtocolTests`.
+  (64 MiB by default since Hermod `20800d8c`, as for its WebSockets; 16 MiB at first), every other kind
+  against 64 KiB. Hermetic in `SshMessageFramingTests` and `SshMessageProtocolTests`; against AsyncSSH
+  in `AsyncSshMessagingInteropTests` (§0.6).
+- ✅ **Anything but HELLO first is `hello-expected`, a TEXT as well** (Hermod `3beb71e6`, 2026-11-28): the
+  README says so, and the server did it for a PING only. Its first read takes no payload of a message,
+  so a TEXT or BINARY first failed that read on its length and was refused as `invalid-hello`. Found by
+  AsyncSSH's client in `AsyncSshMessagingInteropTests`, written from the README alone; both ends of the
+  hermetic test were ours and sent a PING. `SshMessageProtocolException.FrameType` now tells the server
+  which kind the too-long first frame was (`Hello_NotFirst_IsRefused` for PING, TEXT, BINARY, CLOSE).
 - ✅ **A forced command holds for subsystems too - security fix** (Hermod `d2ab407a`, `c85c8e9b`): shell
   and exec honoured `force-command`/`command=`, but a subsystem request was served regardless, so a
   certificate or key confined to one backup command opened SFTP on the whole file system. Now as sshd: a
@@ -653,7 +660,7 @@ the work since has added four more.
       and 64-bit lengths widen the parser for nothing SSH does not already give, and there is no HTTP
       handshake to negotiate extensions in — so it would have been a WebSocket dialect anyway. The two
       points left open here are answered by `c15cadfe`: the cap is the receiver's message limit for
-      TEXT/BINARY (16 MiB by default) and 64 KiB for every other kind, checked before allocating; and
+      TEXT/BINARY (16 MiB by default then, 64 MiB since `20800d8c`) and 64 KiB for every other kind, checked before allocating; and
       there is an application-level PING/PONG, since SSH keepalive proves only the peer's SSH layer.
     - *Names and versions:* versioned names such as `ocpp2.0.1@…`, and a generic `ocpp@…` — names without
       `@` belong to the IANA (RFC 4251 §6). A client asks for versioned names in order and the server
@@ -737,13 +744,31 @@ the work since has added four more.
   - *Open:* the subprotocol name, and forward proxies - Hermod's `WebSocketClient` speaks no HTTP
     `CONNECT`, which a station behind a corporate proxy needs before any of this.
 
-- ⬜ **The message protocol against an implementation that is not ours.** `SshMessageServer` and
-  `SshMessageClient` (§0.2) are tested hermetically only, our code on both ends - the blind spot this
-  repository exists for. `Hermod/SSH/Messaging/README.md` specifies the frames; a second implementation
-  of a few dozen lines in a peer that already speaks subsystems - AsyncSSH, say - would drive HELLO and
-  WELCOME, TEXT and BINARY, PING and PONG and CLOSE against our server, and serve them to our client,
-  as `NcclientInteropTests` does for NETCONF. It would also show whether the README is enough to
-  implement from, which is what a station vendor will have to do.
+- ✅ **The message protocol against an implementation that is not ours.** `SshMessageServer` and
+  `SshMessageClient` (§0.2) were tested hermetically only, our code on both ends - the blind spot this
+  repository exists for.
+  - *As built* (2026-11-28): `Tests/interop/python/asyncssh_messaging.py`, the protocol written from
+    `Hermod/SSH/Messaging/README.md` alone on top of AsyncSSH - a client that runs a script of frames
+    against our server, and a server for our client. `AsyncSshMessagingInteropTests`, 17 cases: the
+    handshake with the client's first choice that the server speaks, an application property in HELLO
+    and in WELCOME, TEXT (UTF-8 beyond ASCII) and BINARY echoed, PING and PONG both ways, CLOSE answered
+    with the same code; the three refusals (`unsupported-subprotocol`, `hello-expected`, a validator's
+    `connection-exists` with `retryAfter`); every rule break after WELCOME with the close code the README
+    names (1009, 1002, 1007), the limits judged from the header alone; a frame of an extension skipped;
+    and our client refusing a subprotocol it never offered, closing with 1009 above its own limit, and
+    keeping to the server's `maxMessageSize` for what it sends.
+  - *Where it runs:* our client against their server everywhere the Python peers are; their client
+    against our server where a peer can reach our listener - natively, on the Debian CI leg, or in
+    WSL on Linux (17 of 17 natively in WSL; on this Windows desk the firewall skips those 12).
+  - *What it found:* the README was enough to implement from, and our side kept to it - but for one
+    rule: a TEXT first was refused as `invalid-hello`, not `hello-expected` (fixed, §0.2).
+  - ⬜ *Left open, a design question rather than a breach:* the message events run on the connection's
+    reading, so a handler that takes longer than `PingEvery × MaxOutstandingPings` leaves the peer's
+    PONGs unread, and the peer is taken for dead although it answered. Found when the test's first
+    echo handler waited in place; the README's "nothing at all has come from it" is true of the channel,
+    not of what was read. Either the events leave the reading (and lose their order), or liveness counts
+    what the channel received rather than what was read - or the README says that a handler must not
+    hold the reading.
 
 - ⬜ **WinSCP, the first peer only Windows has.** Since the `windows-latest` leg runs peers natively
   (§0.3), a Windows-only client no longer needs a machine of its own. WinSCP is the SFTP client most
