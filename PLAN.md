@@ -794,12 +794,16 @@ the work since has added four more.
     - *Against proxies that are not ours* ✅: `Tests/interop/forward-proxy.sh` starts Squid 6.13 (the
       proxy of most corporate networks) or tinyproxy 1.11.2 (that of routers and embedded Linux).
       Behind either is Python's `websockets` endpoint, with OpenSSH behind it or in front of it
-      (`SquidForwardProxyInteropTests` 8 cases, `TinyproxyForwardProxyInteropTests` 6):
+      (`SquidForwardProxyInteropTests` 9 cases, `TinyproxyForwardProxyInteropTests` 7):
       - our client through the proxy with HTTP Basic to an `sshd`: a megabyte back, whole;
       - the station's `SshServer.ConnectOut` through the proxy, OpenSSH driving it;
-      - 407 without credentials, its Basic challenge passed on;
+      - 407 without credentials, its Basic challenge passed on - in `Connect`'s answer, and in the
+        `HTTPProxyException` within `SshWebSocketException`;
       - wrong credentials refused;
       - a port the proxy does not open refused with 403, without a WebSocket reaching the endpoint;
+      - every refusal of the proxy `FromProxy`, the proxy's status as it sent it, and the
+        `HTTPProxyException` within; and the endpoint's own 401 through an open tunnel - the endpoint
+        behind HTTP Basic - not `FromProxy`, with the endpoint's credentials the upgrade taken;
       - `wss` to the endpoint inside the tunnel, its key pinned;
       - Squid only: an `https` proxy with a pinned key, so TLS 1.3 in TLS; and one whose key is not the
         pinned one is answered 502 before any `CONNECT` - no credentials go to it.
@@ -811,15 +815,17 @@ the work since has added four more.
       (OCTAL, 2026-11-28): Hermod keeps the proxy's status and does not make it a 407.
     - *Asked of #361:* a refusal by the proxy reaches `SshWebSocketClient` callers as "The server did
       not take the upgrade" - with a 401 or 403, indistinguishable from the server's own.
-      - *Answer* ⬜ (OCTAL, 2026-11-28): fixed in its next Hermod PR, which comes with the OCPP
-        tunnel work and is not open yet. `OpenAsync` will then throw `SshWebSocketException` with
+      - *Answer* ✅ (OCTAL, 2026-11-28): fixed in Hermod #365 (merged as `14437ed7`, with the OCPP
+        tunnel work). `OpenAsync` throws `SshWebSocketException` with
         `FromProxy = true`, the `HTTPProxyException` as `InnerException`, the status the proxy sent
         as `HTTPStatusCode`, and the message "The proxy <url> did not open a tunnel to the server:
         <status> ...". tinyproxy's 401 counts as a refusal by the proxy too. A refusal by the
         endpoint keeps `FromProxy = false`.
-      - *Then here:* once that PR is merged, `libs/Hermod` moves to it, and the refusal cases assert on
-        `FromProxy` and on the status: 403 for a port the proxy does not open; 407 from Squid and 401
-        from tinyproxy for wrong credentials. The endpoint's own refusal must keep `FromProxy = false`.
+      - *Here* ✅: `libs/Hermod` is at `14437ed7`, and the refusal cases assert on `FromProxy` and on
+        the status: 407 without credentials; 403 for a port the proxy does not open; 407 from Squid and
+        401 from tinyproxy for wrong credentials; 502 for an `https` proxy with another key. The
+        endpoint's own 401 keeps `FromProxy = false` (`TheEndpointsOwnRefusal_ThroughTheTunnel_IsNotTheProxys`;
+        `websocket_bridge.py server ... basic <user> <password>`).
     - *Not covered by these tests:* NTLM/Negotiate (no challenge-response round), `HTTPS_PROXY`/
       `NO_PROXY`, and client certificates towards the proxy - follow-ups, as #361 says.
 

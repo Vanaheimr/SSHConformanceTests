@@ -164,12 +164,13 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// </summary>
         protected static Task<WslServer> StartTheirEndpointAsync(Int32                              SshdPort,
                                                                  (String Certificate, String Key)?  TLS,
-                                                                 CancellationToken                  CancellationToken)
+                                                                 CancellationToken                  CancellationToken,
+                                                                 (String User, String Password)?    Basic   = null)
 
             => PythonPeers.StartServerAsync(Script,
-                                            port => TLS is { } tls
-                                                        ? [ "server", port.ToString(), "forward", "127.0.0.1", SshdPort.ToString(), "tls", tls.Certificate, tls.Key ]
-                                                        : [ "server", port.ToString(), "forward", "127.0.0.1", SshdPort.ToString() ],
+                                            port => [ "server", port.ToString(), "forward", "127.0.0.1", SshdPort.ToString(),
+                                                      .. TLS   is { } tls   ? new[] { "tls",   tls.Certificate, tls.Key }        : [],
+                                                      .. Basic is { } basic ? new[] { "basic", basic.User,      basic.Password } : [] ],
                                             CancellationToken);
 
 
@@ -416,7 +417,20 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 Assert.That(connection,               Is.Null);
                 Assert.That(response.HTTPStatusCode,  Is.EqualTo(HTTPStatusCode.ProxyAuthenticationRequired),  response.HTTPBodyAsUTF8String);
                 Assert.That(challenges,               Has.Some.EqualTo($"Basic realm=\"{Realm}\""),            response.HTTPBodyAsUTF8String);
-                Assert.That(endpoint.Output,          Does.Not.Contain("BRIDGE ws-open"),                     "no WebSocket reached their endpoint");
+            });
+
+            // SSH over WebSocket says the same, and says it was the proxy.
+            using var webSocket = new SshWebSocketClient(URL.Parse($"ws://127.0.0.1:{endpoint.Port}/ssh"),
+                                                         Proxy: new HTTPProxy(proxy.URL));
+
+            var refusal = await Assert.ThrowsAsync<SshWebSocketException>(async () => await webSocket.OpenAsync(CancellationToken));
+
+            Assert.Multiple(() => {
+                Assert.That(refusal.HTTPStatusCode,  Is.EqualTo(HTTPStatusCode.ProxyAuthenticationRequired),  refusal.Message);
+                Assert.That(refusal.FromProxy,       Is.True,                                                 refusal.Message);
+                Assert.That((refusal.InnerException as HTTPProxyException)?.ProxyAuthenticate,
+                                                     Has.Some.EqualTo($"Basic realm=\"{Realm}\""),            refusal.Message);
+                Assert.That(endpoint.Output,         Does.Not.Contain("BRIDGE ws-open"),                     "no WebSocket reached their endpoint");
             });
 
         }
@@ -446,6 +460,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             Assert.Multiple(() => {
                 Assert.That(refusal.HTTPStatusCode,  Is.EqualTo(WrongCredentialsAnsweredWith),  refusal.Message);
+                Assert.That(refusal.FromProxy,       Is.True,                                   "it was the proxy that refused, whatever its status");
+                Assert.That(refusal.InnerException,  Is.InstanceOf<HTTPProxyException>(),       refusal.Message);
                 Assert.That(endpoint.Output,         Does.Not.Contain("BRIDGE ws-open"),        "no WebSocket reached their endpoint");
             });
 
@@ -476,8 +492,57 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             Assert.Multiple(() => {
                 Assert.That(refusal.HTTPStatusCode,  Is.EqualTo(HTTPStatusCode.Forbidden),  refusal.Message);
+                Assert.That(refusal.FromProxy,       Is.True,                               "a 403 of the proxy, not of the server");
+                Assert.That(refusal.InnerException,  Is.InstanceOf<HTTPProxyException>(),   refusal.Message);
                 Assert.That(endpoint.Output,         Does.Not.Contain("BRIDGE ws-open"),    "no WebSocket reached their endpoint");
             });
+
+        }
+
+        #endregion
+
+        #region TheEndpointsOwnRefusal_ThroughTheTunnel_IsNotTheProxys
+
+        /// <summary>
+        /// The other side of FromProxy: the proxy opens the tunnel, and it is their endpoint, behind
+        /// HTTP Basic, that answers 401 - the status tinyproxy gives wrong proxy credentials, but here the
+        /// server's, and said so. With the endpoint's credentials, the same tunnel takes the upgrade.
+        /// </summary>
+        [Test]
+        [CancelAfter(60000)]
+        public async Task TheEndpointsOwnRefusal_ThroughTheTunnel_IsNotTheProxys(CancellationToken CancellationToken)
+        {
+
+            await RequireTheProxyAsync(CancellationToken);
+
+            await using var endpoint   = await StartTheirEndpointAsync(1, null, CancellationToken, Basic: ("operator", "the-endpoints-password"));
+            await using var proxy      = await StartProxyAsync(endpoint.Port, Basic: true, TLS: null, CancellationToken);
+
+            using var       refused    = new SshWebSocketClient(URL.Parse($"ws://127.0.0.1:{endpoint.Port}/ssh"),
+                                                                HTTPAuthentication:  HTTPBasicAuthentication.Create("operator", "not-the-password"),
+                                                                Proxy:               new HTTPProxy(proxy.URL) { Authentication = TheStationsCredentials });
+
+            var refusal = await Assert.ThrowsAsync<SshWebSocketException>(async () => await refused.OpenAsync(CancellationToken));
+
+            Assert.Multiple(() => {
+                Assert.That(refusal.HTTPStatusCode,  Is.EqualTo(HTTPStatusCode.Unauthorized),           refusal.Message);
+                Assert.That(refusal.FromProxy,       Is.False,                                          "the proxy opened the tunnel; the server refused");
+                Assert.That(refusal.InnerException,  Is.Null,                                           refusal.Message);
+                Assert.That(endpoint.Output,         Does.Contain("BRIDGE refused authorization=wrong"), endpoint.Output);
+                Assert.That(endpoint.Output,         Does.Not.Contain("BRIDGE ws-open"),                endpoint.Output);
+            });
+
+            using var       admitted   = new SshWebSocketClient(URL.Parse($"ws://127.0.0.1:{endpoint.Port}/ssh"),
+                                                                HTTPAuthentication:  HTTPBasicAuthentication.Create("operator", "the-endpoints-password"),
+                                                                Proxy:               new HTTPProxy(proxy.URL) { Authentication = TheStationsCredentials });
+
+            // The upgrade is taken - OpenAsync returns -, and nothing more is asked of it: behind this
+            // endpoint is no sshd, so it closes the WebSocket again before it would log one.
+            Assert.That(async () => await admitted.OpenAsync(CancellationToken), Throws.Nothing,
+                        $"the same tunnel takes the upgrade with the endpoint's credentials.\n{endpoint.Output}");
+
+            Assert.That(Regex.Matches(endpoint.Output, "BRIDGE refused"), Has.Count.EqualTo(1),
+                        $"the endpoint refused the first client alone.\n{endpoint.Output}");
 
         }
 
@@ -720,7 +785,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             Assert.Multiple(() => {
                 Assert.That(refusal.HTTPStatusCode,  Is.EqualTo(HTTPStatusCode.BadGateway),  refusal.Message);
-                Assert.That(proxy.Output,            Does.Not.Contain("CONNECT"),            "no CONNECT reached the proxy, and no credentials");
+                Assert.That(refusal.FromProxy,       Is.True,                                "the proxy was never through, so neither was the server");
+                Assert.That(proxy.Output,           Does.Not.Contain("CONNECT"),            "no CONNECT reached the proxy, and no credentials");
                 Assert.That(endpoint.Output,         Does.Not.Contain("BRIDGE ws-open"),     "nor any WebSocket their endpoint");
             });
 
