@@ -63,7 +63,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         private const String Marker = "OPENSSH_SERVER_INTEROP_OK";
 
-        private sealed record Daemon(WslServer Server, Byte[] HostKeyBlob, ISshHostKey UserKey, String WslRoot, String WindowsRoot, Byte[]? HostCertificateBlob = null)
+        internal sealed record Daemon(WslServer Server, Byte[] HostKeyBlob, ISshHostKey UserKey, String WslRoot, String WindowsRoot, Byte[]? HostCertificateBlob = null)
         {
             /// <summary>
             /// The port the daemon ended up on — chosen by the harness, which may have had to retry.
@@ -80,7 +80,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// <param name="HostKeyType">The host key's type, as <c>ssh-keygen -t</c> takes it.</param>
         /// <param name="WithHostCertificate">Also present a host certificate for that key (sshd's <c>HostCertificate</c>), issued by a CA that <c>ssh-keygen</c> makes for it.</param>
         /// <param name="Subsystems">Further subsystems, by name: each one's value is a shell script, which sshd runs for it as its own <c>Subsystem</c> line does.</param>
-        private static async Task<Daemon> StartSshdAsync(CancellationToken CancellationToken, Boolean WithSftp = false, String ExtraOptions = "", String HostKeyType = "ed25519", Boolean WithHostCertificate = false, IReadOnlyDictionary<String, String>? Subsystems = null)
+        internal static async Task<Daemon> StartSshdAsync(CancellationToken CancellationToken, Boolean WithSftp = false, String ExtraOptions = "", String HostKeyType = "ed25519", Boolean WithHostCertificate = false, IReadOnlyDictionary<String, String>? Subsystems = null)
         {
 
             WslInterop.SkipIfUnavailable();
@@ -213,7 +213,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         }
 
-        private static async Task StopAsync(Daemon Daemon)
+        internal static async Task StopAsync(Daemon Daemon)
         {
             await Daemon.Server.DisposeAsync();
             try { Directory.Delete(Daemon.WindowsRoot, recursive: true); } catch { }
@@ -223,7 +223,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         /// <summary>
         /// The user sshd will authenticate — it runs unprivileged, so only its own account.
         /// </summary>
-        private static Task<String> WhoAsync(CancellationToken CancellationToken)
+        internal static Task<String> WhoAsync(CancellationToken CancellationToken)
             => WslInterop.WhoAmIAsync(CancellationToken);
 
         #endregion

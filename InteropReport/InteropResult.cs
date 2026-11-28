@@ -84,6 +84,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
 
         // Fixture name fragment → peer. First match wins, so order from most to least specific.
         private static readonly (String Fragment, String Peer)[] peersByFixture = [
+            ("OverWebSocket", "websockets (Python)"),   // before "OpenSsh" and the rest: the WebSocket is the peer here, OpenSSH only carries
             ("OpenSsh",   "OpenSSH"),
             ("SshNet",    "SSH.NET"),
             ("Dropbear",  "Dropbear"),
@@ -106,6 +107,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
         // the first hit wins, so the most specific keyword must come first. "SshKeygenReads_OurCertificate"
         // is about certificates, not key formats, which is why "certificate" precedes "keygen".
         private static readonly (String Keyword, String Feature)[] featuresByKeyword = [
+            ("overwebsocket",    "SSH over WebSocket"),
             ("hostkeyrotation",  "Host-key rotation (hostkeys-00)"),
             ("sshfp",            "SSHFP DNS records"),
             ("agent",            "ssh-agent"),
