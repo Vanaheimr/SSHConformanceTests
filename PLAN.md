@@ -829,6 +829,29 @@ the work since has added four more.
     - *Not covered by these tests:* NTLM/Negotiate (no challenge-response round), `HTTPS_PROXY`/
       `NO_PROXY`, and client certificates towards the proxy - follow-ups, as #361 says.
 
+- ✅ **`ssh -J` to destinations of the application's, with OpenSSH** (2026-11-28). Hermod #365
+  (merged as `14437ed7`) added `SshServerOptions.Destinations`: asked first for every `direct-tcpip`,
+  with the session, the host and the port; where it answers with a handler, the channel goes wherever
+  the handler takes it - a charging station's tunnel - and neither the forwarding policy nor
+  `no-port-forwarding` is asked. So a CSMS serves `ssh -J operator@csms operator@CP001`, SSH end to end.
+  - *As built*: `OpenSshJumpDestinationsInteropTests`, OpenSSH's own client (the native `ssh`, no WSL)
+    through our jump host to a station of ours that is reached through a pipe alone, 6 cases:
+    - `-J` to "CP001": the command runs on the station, its host key checked strictly under that name;
+    - another key known for "CP001": OpenSSH stops after the jump, which itself went through;
+    - `-W CP001:22`: the station's identification string on stdout, from the pipe;
+    - a name the application answers null for, with forwarding off: refused, and OpenSSH says so;
+    - the same where the policy allows it: forwarded as before, to the station's loopback port;
+    - a `restrict` key: "CP001" is reached, the port forwarding to 127.0.0.1 refused although the
+      policy would allow it.
+  - *Found:* OpenSSH writes the host name in lower case before it makes the jump's `-W` (9.5p2, 10.0p2,
+    10.6p1 alike: `-W '[cp001]:22'`), while `-W CP001:22` given by hand keeps the case. A destination
+    factory that compares names as typed - `host == "CP001"` - never reaches the station with `ssh -J`;
+    it has to compare them as DNS does, without regard to case. Told to the EVChargingTestEnvironment
+    (OCTAL) session (2026-11-28): its CSMS finds the station all the same - WWCP_OCPP's
+    `NetworkingNode_Id` compares without regard to case -, only the log and the permission scope
+    ("destination:cp001") carry the lower case. Open ⬜: a note in Hermod's `SshDestinationFactory` docs,
+    "compare names without regard to case; OpenSSH lowercases the -J host".
+
 - ✅ **The message protocol against an implementation that is not ours.** `SshMessageServer` and
   `SshMessageClient` (§0.2) were tested hermetically only, our code on both ends - the blind spot this
   repository exists for.
@@ -1706,7 +1729,7 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 12. **SFTP:** against OpenSSH `sftp`/`sftp-server`, `psftp`, WinSCP, curl, AsyncSSH (which will ask for v4–v6 → must settle on v3 correctly); extensions (`limits@`, `posix-rename@`, `statvfs@`, `fsync@`, `copy-data`); large files, thousands of small files, weird filenames (UTF-8, spaces, quotes, newlines), resume, abort mid-transfer; **access profiles against real clients**: upload-only accepts `put` from the `sftp` CLI while `get`/`ls`/`rm` are cleanly denied, download-only serves `get`/curl while uploads are denied, WinSCP/`psftp` handle denials gracefully
 13. **Disconnect semantics:** clean disconnect codes both ways; behavior on abrupt TCP resets
 14. **Keepalives/timeouts:** `ServerAliveInterval`-style traffic must not confuse us
-15. **Jump hosts / ProxyJump:** our client reaches a target `sshd` **through a real OpenSSH bastion** (`-J`), and a real `ssh -J our-server target` uses **our server as the bastion** (our `direct-tcpip` carries their inner session); two-hop chains; mixed vendors on the path (OpenSSH bastion → Dropbear target)
+15. **Jump hosts / ProxyJump:** our client reaches a target `sshd` **through a real OpenSSH bastion** (`-J`), and a real `ssh -J our-server target` uses **our server as the bastion** (our `direct-tcpip` carries their inner session), also to a destination of the application's (`OpenSshJumpDestinationsInteropTests`, §0.6); two-hop chains; mixed vendors on the path (OpenSSH bastion → Dropbear target)
 
 ### 11.4 Certificate & key tooling interop (core-feature deep dive)
 

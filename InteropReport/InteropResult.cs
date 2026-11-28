@@ -111,6 +111,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.InteropReport
         private static readonly (String Keyword, String Feature)[] featuresByKeyword = [
             ("forwardproxy",     "SSH over WebSocket through a forward proxy"),   // before "forward", which is port forwarding
             ("overwebsocket",    "SSH over WebSocket"),
+            ("destination",      "ssh -J to destinations of the application"),   // before "forward" and "jump": no port forwarding
             ("hostkeyrotation",  "Host-key rotation (hostkeys-00)"),
             ("sshfp",            "SSHFP DNS records"),
             ("agent",            "ssh-agent"),

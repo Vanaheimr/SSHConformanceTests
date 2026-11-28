@@ -36,7 +36,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 
 | Peer | Role | Driven via |
 |---|---|---|
-| OpenSSH (`ssh`, `sftp`, `ssh-keygen`) | client | Windows process |
+| OpenSSH (`ssh`, `sftp`, `ssh-keygen`) | client | Windows process; `ssh -J` and `-W` through our server to a destination of the application's (`SshServerOptions.Destinations`) as well |
 | SSH.NET | client | in-process (NuGet) |
 | AsyncSSH | **both** | Windows process or WSL + `python/asyncssh_driver.py`, `python/asyncssh_server.py` as a server for our client (password, keyboard-interactive), and `python/asyncssh_messaging.py`, Hermod's message protocol written from its README alone, as a client against our `SshMessageServer` and a server for our `SshMessageClient` |
 | Paramiko | client | Windows process or WSL + `python/paramiko_driver.py` |
