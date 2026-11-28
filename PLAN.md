@@ -794,12 +794,16 @@ the work since has added four more.
     - *Against proxies that are not ours* ✅: `Tests/interop/forward-proxy.sh` starts Squid 6.13 (the
       proxy of most corporate networks) or tinyproxy 1.11.2 (that of routers and embedded Linux).
       Behind either is Python's `websockets` endpoint, with OpenSSH behind it or in front of it
-      (`SquidForwardProxyInteropTests` 8 cases, `TinyproxyForwardProxyInteropTests` 6):
+      (`SquidForwardProxyInteropTests` 9 cases, `TinyproxyForwardProxyInteropTests` 7):
       - our client through the proxy with HTTP Basic to an `sshd`: a megabyte back, whole;
       - the station's `SshServer.ConnectOut` through the proxy, OpenSSH driving it;
-      - 407 without credentials, its Basic challenge passed on;
+      - 407 without credentials, its Basic challenge passed on - in `Connect`'s answer, and in the
+        `HTTPProxyException` within `SshWebSocketException`;
       - wrong credentials refused;
       - a port the proxy does not open refused with 403, without a WebSocket reaching the endpoint;
+      - every refusal of the proxy `FromProxy`, the proxy's status as it sent it, and the
+        `HTTPProxyException` within; and the endpoint's own 401 through an open tunnel - the endpoint
+        behind HTTP Basic - not `FromProxy`, with the endpoint's credentials the upgrade taken;
       - `wss` to the endpoint inside the tunnel, its key pinned;
       - Squid only: an `https` proxy with a pinned key, so TLS 1.3 in TLS; and one whose key is not the
         pinned one is answered 502 before any `CONNECT` - no credentials go to it.
@@ -811,17 +815,42 @@ the work since has added four more.
       (OCTAL, 2026-11-28): Hermod keeps the proxy's status and does not make it a 407.
     - *Asked of #361:* a refusal by the proxy reaches `SshWebSocketClient` callers as "The server did
       not take the upgrade" - with a 401 or 403, indistinguishable from the server's own.
-      - *Answer* ⬜ (OCTAL, 2026-11-28): fixed in its next Hermod PR, which comes with the OCPP
-        tunnel work and is not open yet. `OpenAsync` will then throw `SshWebSocketException` with
+      - *Answer* ✅ (OCTAL, 2026-11-28): fixed in Hermod #365 (merged as `14437ed7`, with the OCPP
+        tunnel work). `OpenAsync` throws `SshWebSocketException` with
         `FromProxy = true`, the `HTTPProxyException` as `InnerException`, the status the proxy sent
         as `HTTPStatusCode`, and the message "The proxy <url> did not open a tunnel to the server:
         <status> ...". tinyproxy's 401 counts as a refusal by the proxy too. A refusal by the
         endpoint keeps `FromProxy = false`.
-      - *Then here:* once that PR is merged, `libs/Hermod` moves to it, and the refusal cases assert on
-        `FromProxy` and on the status: 403 for a port the proxy does not open; 407 from Squid and 401
-        from tinyproxy for wrong credentials. The endpoint's own refusal must keep `FromProxy = false`.
+      - *Here* ✅: `libs/Hermod` is at `14437ed7`, and the refusal cases assert on `FromProxy` and on
+        the status: 407 without credentials; 403 for a port the proxy does not open; 407 from Squid and
+        401 from tinyproxy for wrong credentials; 502 for an `https` proxy with another key. The
+        endpoint's own 401 keeps `FromProxy = false` (`TheEndpointsOwnRefusal_ThroughTheTunnel_IsNotTheProxys`;
+        `websocket_bridge.py server ... basic <user> <password>`).
     - *Not covered by these tests:* NTLM/Negotiate (no challenge-response round), `HTTPS_PROXY`/
       `NO_PROXY`, and client certificates towards the proxy - follow-ups, as #361 says.
+
+- ✅ **`ssh -J` to destinations of the application's, with OpenSSH** (2026-11-28). Hermod #365
+  (merged as `14437ed7`) added `SshServerOptions.Destinations`: asked first for every `direct-tcpip`,
+  with the session, the host and the port; where it answers with a handler, the channel goes wherever
+  the handler takes it - a charging station's tunnel - and neither the forwarding policy nor
+  `no-port-forwarding` is asked. So a CSMS serves `ssh -J operator@csms operator@CP001`, SSH end to end.
+  - *As built*: `OpenSshJumpDestinationsInteropTests`, OpenSSH's own client (the native `ssh`, no WSL)
+    through our jump host to a station of ours that is reached through a pipe alone, 6 cases:
+    - `-J` to "CP001": the command runs on the station, its host key checked strictly under that name;
+    - another key known for "CP001": OpenSSH stops after the jump, which itself went through;
+    - `-W CP001:22`: the station's identification string on stdout, from the pipe;
+    - a name the application answers null for, with forwarding off: refused, and OpenSSH says so;
+    - the same where the policy allows it: forwarded as before, to the station's loopback port;
+    - a `restrict` key: "CP001" is reached, the port forwarding to 127.0.0.1 refused although the
+      policy would allow it.
+  - *Found:* OpenSSH writes the host name in lower case before it makes the jump's `-W` (9.5p2, 10.0p2,
+    10.6p1 alike: `-W '[cp001]:22'`), while `-W CP001:22` given by hand keeps the case. A destination
+    factory that compares names as typed - `host == "CP001"` - never reaches the station with `ssh -J`;
+    it has to compare them as DNS does, without regard to case. Told to the EVChargingTestEnvironment
+    (OCTAL) session (2026-11-28): its CSMS finds the station all the same - WWCP_OCPP's
+    `NetworkingNode_Id` compares without regard to case -, only the log and the permission scope
+    ("destination:cp001") carry the lower case. Open ⬜: a note in Hermod's `SshDestinationFactory` docs,
+    "compare names without regard to case; OpenSSH lowercases the -J host".
 
 - ✅ **The message protocol against an implementation that is not ours.** `SshMessageServer` and
   `SshMessageClient` (§0.2) were tested hermetically only, our code on both ends - the blind spot this
@@ -1700,7 +1729,7 @@ Feature columns re-verified 2026-08-11 (release-notes/registry survey) — **re-
 12. **SFTP:** against OpenSSH `sftp`/`sftp-server`, `psftp`, WinSCP, curl, AsyncSSH (which will ask for v4–v6 → must settle on v3 correctly); extensions (`limits@`, `posix-rename@`, `statvfs@`, `fsync@`, `copy-data`); large files, thousands of small files, weird filenames (UTF-8, spaces, quotes, newlines), resume, abort mid-transfer; **access profiles against real clients**: upload-only accepts `put` from the `sftp` CLI while `get`/`ls`/`rm` are cleanly denied, download-only serves `get`/curl while uploads are denied, WinSCP/`psftp` handle denials gracefully
 13. **Disconnect semantics:** clean disconnect codes both ways; behavior on abrupt TCP resets
 14. **Keepalives/timeouts:** `ServerAliveInterval`-style traffic must not confuse us
-15. **Jump hosts / ProxyJump:** our client reaches a target `sshd` **through a real OpenSSH bastion** (`-J`), and a real `ssh -J our-server target` uses **our server as the bastion** (our `direct-tcpip` carries their inner session); two-hop chains; mixed vendors on the path (OpenSSH bastion → Dropbear target)
+15. **Jump hosts / ProxyJump:** our client reaches a target `sshd` **through a real OpenSSH bastion** (`-J`), and a real `ssh -J our-server target` uses **our server as the bastion** (our `direct-tcpip` carries their inner session), also to a destination of the application's (`OpenSshJumpDestinationsInteropTests`, §0.6); two-hop chains; mixed vendors on the path (OpenSSH bastion → Dropbear target)
 
 ### 11.4 Certificate & key tooling interop (core-feature deep dive)
 

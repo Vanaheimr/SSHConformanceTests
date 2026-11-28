@@ -22,6 +22,10 @@
 #   server ... tls <certificate.pem> <key.pem>
 #       Either endpoint as "wss": TLS with that certificate, before the WebSocket handshake.
 #
+#   server ... basic <user> <password>
+#       Either endpoint behind HTTP Basic (RFC 7617): a handshake without these credentials is
+#       answered 401 with a challenge of realm "hermod-endpoint", before the subprotocol is asked.
+#
 #   probe <config.json>
 #       One handshake or one rule break against an endpoint, with a JSON verdict on stdout:
 #       {"case": "none" | "other" | "anonymous" | "text" | "deflate", "url": ...}. Credentials
@@ -34,6 +38,8 @@
 #   BRIDGE ws-close code=<code> sent=<messages> received=<messages> largest=<bytes>
 
 import asyncio
+import base64
+import hmac
 import json
 import os
 import signal
@@ -179,6 +185,22 @@ def require_subprotocol(connection, request):
     return None
 
 
+def require_basic(user, password):
+
+    expected = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
+
+    def check(connection, request):
+        given = request.headers.get("Authorization", "")
+        if not hmac.compare_digest(given.encode(), expected.encode()):
+            log(f"BRIDGE refused authorization={'wrong' if given else 'none'}")
+            response = connection.respond(HTTPStatus.UNAUTHORIZED, "Who is connecting?\n")
+            response.headers["WWW-Authenticate"] = 'Basic realm="hermod-endpoint"'
+            return response
+        return require_subprotocol(connection, request)
+
+    return check
+
+
 async def carry(ws, reader, writer):
 
     stats = Stats()
@@ -209,13 +231,20 @@ async def carry(ws, reader, writer):
 
 async def run_server(port, mode, arguments):
 
-    tls = None
+    tls             = None
+    process_request = require_subprotocol
 
-    if "tls" in arguments:
-        at        = arguments.index("tls")
-        tls       = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        tls.load_cert_chain(arguments[at + 1], arguments[at + 2])
-        arguments = arguments[:at]
+    # The options after the mode's own arguments, in any order.
+    for option in ("tls", "basic"):
+        if option in arguments:
+            at             = arguments.index(option)
+            first, second  = arguments[at + 1], arguments[at + 2]
+            arguments      = arguments[:at] + arguments[at + 3:]
+            if option == "tls":
+                tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                tls.load_cert_chain(first, second)
+            else:
+                process_request = require_basic(first, second)
 
     if mode == "forward":
 
@@ -249,7 +278,7 @@ async def run_server(port, mode, arguments):
 
     async with serve(handler, "127.0.0.1", port,
                      subprotocols     = [ SUBPROTOCOL ],
-                     process_request  = require_subprotocol,
+                     process_request  = process_request,
                      ssl              = tls):
         await asyncio.Event().wait()
 

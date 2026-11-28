@@ -21,7 +21,7 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 | `.venv-interop/` | The Python peers (AsyncSSH, Paramiko, ncclient, websockets), created by `setup-wsl.sh`. Git-ignored. |
 | `.venv-interop-win/` | The same peers for Windows, created by `setup-windows.ps1`. Git-ignored. |
 | `.java-interop-win/` | The jars of MINA SSHD 2.13.2 and JSch 0.2.19 with their dependencies, fetched from Maven Central by `setup-windows.ps1`, checked against pinned SHA-256s and stored under Debian's names. Git-ignored. |
-| `python/`        | Peer drivers speaking a JSON contract with `PythonPeers.RunDriverAsync`, and `asyncssh_server.py`, a server for our client (`PythonPeers.StartServerAsync`). `asyncssh_messaging.py` is both: a driver, and with `server` first a server. `websocket_bridge.py` carries a byte stream through a WebSocket of Python's `websockets`: `client` as OpenSSH's `ProxyCommand`, `server` as an endpoint in front of TCP (with `tls <certificate> <key>` as `wss`), and as a driver one handshake or rule break. |
+| `python/`        | Peer drivers speaking a JSON contract with `PythonPeers.RunDriverAsync`, and `asyncssh_server.py`, a server for our client (`PythonPeers.StartServerAsync`). `asyncssh_messaging.py` is both: a driver, and with `server` first a server. `websocket_bridge.py` carries a byte stream through a WebSocket of Python's `websockets`: `client` as OpenSSH's `ProxyCommand`, `server` as an endpoint in front of TCP (with `tls <certificate> <key>` as `wss`, with `basic <user> <password>` behind HTTP Basic), and as a driver one handshake or rule break. |
 | `WslInterop.cs`  | Runs the peers — through WSL on Windows, directly on Linux: process plumbing, addressing, peer logs, skip reasons. |
 | `PeerPlatform.cs` | Runs the peers that need no Linux — the Python, Java, Rust and Go ones — natively on Windows where they are provisioned, and through `WslInterop.cs` otherwise. |
 | `JavaPeers.cs`   | The Java toolchain and jars a Java peer is built against: the distribution's in Linux, `.java-interop-win` on Windows. |
@@ -36,12 +36,12 @@ test `Assert.Ignore(...)` with a precise message, never a red failure.
 
 | Peer | Role | Driven via |
 |---|---|---|
-| OpenSSH (`ssh`, `sftp`, `ssh-keygen`) | client | Windows process |
+| OpenSSH (`ssh`, `sftp`, `ssh-keygen`) | client | Windows process; `ssh -J` and `-W` through our server to a destination of the application's (`SshServerOptions.Destinations`) as well |
 | SSH.NET | client | in-process (NuGet) |
 | AsyncSSH | **both** | Windows process or WSL + `python/asyncssh_driver.py`, `python/asyncssh_server.py` as a server for our client (password, keyboard-interactive), and `python/asyncssh_messaging.py`, Hermod's message protocol written from its README alone, as a client against our `SshMessageServer` and a server for our `SshMessageClient` |
 | Paramiko | client | Windows process or WSL + `python/paramiko_driver.py` |
 | Python `websockets` (RFC 6455), with OpenSSH | **both** | Windows process or WSL + `python/websocket_bridge.py`: SSH over WebSocket written from Hermod's README alone. Their endpoint takes our `SshServer.ConnectOut` (OpenSSH's client behind it) and our `SshWebSocketClient` (an `sshd` behind it); their client is OpenSSH's `ProxyCommand` to our `SshWebSocketEndpoint`, and breaks its rules. The cases with OpenSSH need WSL or Linux |
-| Squid, tinyproxy (forward proxies, `CONNECT`) | proxy | WSL + `forward-proxy.sh`, between our `SshWebSocketClient` - as a client, and as the station's `SshServer.ConnectOut` - and their `websockets` endpoint: HTTP Basic, 407 and its challenge, a port the proxy does not open, `wss` inside the tunnel, and with Squid an `https` proxy with a pinned key, TLS in TLS. Each check reads the proxy's own log for the one tunnel it opened |
+| Squid, tinyproxy (forward proxies, `CONNECT`) | proxy | WSL + `forward-proxy.sh`, between our `SshWebSocketClient` - as a client, and as the station's `SshServer.ConnectOut` - and their `websockets` endpoint: HTTP Basic, 407 and its challenge, a port the proxy does not open - each refusal `FromProxy` -, the endpoint's own 401 through the tunnel, which is not, `wss` inside the tunnel, and with Squid an `https` proxy with a pinned key, TLS in TLS. Each check reads the proxy's own log for the one tunnel it opened |
 | ncclient | client (NETCONF, RFC 6242) | Windows process or WSL + `python/ncclient_driver.py`, against a `netconf` subsystem the test serves |
 | Go `x/crypto/ssh`, `pkg/sftp` | client | Windows process or WSL + `go/main.go` |
 | Dropbear | **both** | WSL (`dbclient`, and `dropbear` as a server for our client) |
