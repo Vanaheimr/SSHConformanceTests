@@ -727,22 +727,35 @@ the work since has added four more.
   - *Left to the application:* the console itself - its commands, its line editing (there is no
     terminal driver in between), and a machine-readable variant under a name of its own.
 
-- ⬜ **SSH over WebSocket for devices behind firewalls** — promoted from the deferred backlog (§1,
+- 🔶 **SSH over WebSocket for devices behind firewalls** — promoted from the deferred backlog (§1,
   "SSH-over-WebSocket transport") now that it has a user: the EVChargingTestEnvironment (OCTAL) plan of
   2026-11-27. A charging station reaches its CSMS only outward, over the `wss://` connection its OCPP
   already uses - through NAT, firewall and proxy - so nobody can dial in to it.
   - *Roles reversed:* the station opens the WebSocket but is the SSH **server**; the CSMS side is the
     SSH client. SSH's authentication and host keys work unchanged inside the tunnel.
   - *A connection of its own, not a frame type:* the tunnel is a second WebSocket connection, opened on
-    demand, that names its subprotocol in `Sec-WebSocket-Protocol` (suggested:
-    `ssh@open.charging.cloud`); its binary frames carry SSH's byte stream as it is. The OCPP/CBOR
+    demand, that names its subprotocol in `Sec-WebSocket-Protocol` (`ssh.open.charging.cloud`); its
+    binary frames carry SSH's byte stream as it is. The OCPP/CBOR
     connection stays untouched - no type byte in front of every frame - since a station may hold
     several WebSocket connections at once.
   - *In Hermod:* `SshTransport` already runs over any `IDuplexPipe`; what is needed is such a pipe over
     a WebSocket connection's binary frames, and a way to hand it to `SshClient` and `SshServer` in place
     of a TCP socket - on both sides, so neither needs to know what carries it.
-  - *Open:* the subprotocol name, and forward proxies - Hermod's `WebSocketClient` speaks no HTTP
-    `CONNECT`, which a station behind a corporate proxy needs before any of this.
+  - *Subprotocol name, decided* (2026-11-28): `ssh.open.charging.cloud`, not the suggested
+    `ssh@open.charging.cloud` - a WebSocket subprotocol is an HTTP token (RFC 6455, Section 4.1), and
+    `@` is a separator, not a token character. The SSH names of the same family (`totp@...`,
+    `messages@...`) keep their `@`, as SSH's own naming rules want it.
+  - *As built* (Hermod `4126aee2`, merged in #358 → `30ed57a5`): `SshWebSocketEndpoint` on an HTTP
+    path, all four ways round - `SSHClient.Connect(SshWebSocketClient)` / `SSHClient.ConnectOver(pipe)`,
+    `SshServer.ConnectOut(SshWebSocketClient)` / `SshServer.ServeAsync(pipe)`, the last through the
+    same authorization, limits and audit as a connection accepted on the port. A client that does not
+    offer the subprotocol is answered 400, a text message closes with 1003, nothing is compressed;
+    messages carry at most 32 KiB out and may be 1 MiB in. Hermetic loopback tests in
+    `SshOverWebSocketTests`; described in Hermod's `SSH/README.md`, "Over a WebSocket".
+  - *Open:* forward proxies - Hermod's `WebSocketClient` speaks no HTTP `CONNECT`, which a station
+    behind a corporate proxy needs before any of this; and a test against a WebSocket peer that is not
+    ours (e.g. `websocat` or Python `websockets` carrying OpenSSH's byte stream), the blind spot this
+    repository exists for.
 
 - ✅ **The message protocol against an implementation that is not ours.** `SshMessageServer` and
   `SshMessageClient` (§0.2) were tested hermetically only, our code on both ends - the blind spot this
