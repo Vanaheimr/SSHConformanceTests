@@ -27,7 +27,7 @@ Dropbear and TinySSH** — including our SFTP client against OpenSSH's own `sftp
 
 | Peer | Version | Direction | Covered | Not covered yet |
 |---|---|---|---|---|
-| **OpenSSH** | 10.2p1 / 10.0p2 | **both** | *their client → our server:* transport matrix (11 combinations), auth (ed25519/ecdsa/rsa), certificates, key formats, SFTP incl. **server-side `cp` (`copy-data`)**, SSHFP records, host-key rotation, **`ssh -R` / `ssh -L` through our server** (no bind address, `localhost`, port 0). *our client → their `sshd`:* 5-method key-exchange matrix, exec + exit status, host-key refusal, **our SFTP client against their `sftp-server`** | ssh-agent needs a running agent, else skipped; finite-field DH is untestable in the client role since OpenSSH 10 dropped it from the server defaults |
+| **OpenSSH** | 10.2p1 / 10.0p2 | **both** | *their client → our server:* transport matrix (11 combinations), auth (ed25519/ecdsa/rsa), certificates, key formats, SFTP incl. **server-side `cp` (`copy-data`)**, SSHFP records, host-key rotation, **`ssh -R` / `ssh -L` through our server** (no bind address, `localhost`, port 0). *our client → their `sshd`:* 5-method key-exchange matrix, exec + exit status, host-key refusal, **our SFTP client against their `sftp-server`**. *with [SSHTOTPTool](https://github.com/Vanaheimr/SSHTOTPTool):* Hermod's one-time password answered by their `ssh` through `SSH_ASKPASS` and checked by their `sshd` through `pam_exec` — against ours and against each other | ssh-agent needs a running agent, else skipped; finite-field DH is untestable in the client role since OpenSSH 10 dropped it from the server defaults |
 | **Dropbear** | 2025.89 | **both** | 6 key exchanges, exec + exit status, host-key refusal, key format via `dropbearconvert`, **our client runs a command on their server** | no SFTP (Dropbear ships no SFTP client) |
 | **PuTTY** (`plink`) | 0.83 | their client → our server | 6 key exchanges incl. ML-KEM, exec, host-key pinning, key format via `puttygen`, 256 KB through their flow control | `psftp`; the `winadj` quirk is watched for but plink 0.83 does not send one — the contract itself is pinned in the library's own suite |
 | **AsyncSSH** | 2.24.0 | their client → our server | post-quantum `mlkem768x25519-sha256`, exec, SFTP, host-key refusal | certificates, which AsyncSSH could also issue |
@@ -54,7 +54,9 @@ counted as passing — the matrix distinguishes "disagreed" from "no evidence ei
 - ✅ **Post-quantum hybrid KEX** — `mlkem768x25519-sha256` (BCL ML-KEM) + `sntrup761x25519-sha512` (BC),
   plus curve25519, NIST ECDH and classic DH; OpenSSH-validated
 - ✅ **Authentication** — public-key (query-then-sign), password, keyboard-interactive, **TOTP 2FA**
-  (RFC 6238), method chaining, pre-auth banner, **ssh-agent** client
+  (RFC 6238) and Hermod's own one-time password — also with an unmodified OpenSSH through
+  [SSHTOTPTool](https://github.com/Vanaheimr/SSHTOTPTool) — method chaining, pre-auth banner,
+  **ssh-agent** client
 - ✅ **Keys & trust** — openssh-key-v1 (incl. bcrypt_pbkdf) / PKCS#8 / RFC 4716, `SshKeyGenerator`,
   authorized_keys & known_hosts with validity windows, host-key pinning; **SSHFP DNS** (RFC 4255)
 - ✅ **OpenSSH certificates** — full validator (§6 check order), a built-in mini-CA, user **and** host certs
@@ -92,6 +94,7 @@ assembly. This repository is the harness around it: demo CLI, benchmarks and the
 | `InteropReport/`               | Turns an interop test run into [docs/INTEROP-MATRIX.md](docs/INTEROP-MATRIX.md) |
 | `libs/Hermod`                  | Vanaheimr Hermod submodule (SSH, DNS, TCP, PKI, logging; BouncyCastle) |
 | `libs/Styx`                    | Vanaheimr Styx submodule (base utilities; BouncyCastle)         |
+| [`libs/SSHTOTPTool`](https://github.com/Vanaheimr/SSHTOTPTool) | `hermod-ssh-totp` submodule: Hermod's one-time password for an unmodified OpenSSH (`pam_exec` / `SSH_ASKPASS`), built against `libs/Hermod` |
 
 ## Build & test
 
