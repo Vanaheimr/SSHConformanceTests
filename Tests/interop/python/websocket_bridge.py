@@ -19,6 +19,9 @@
 #       TCP connection is paired with the next WebSocket. A back end that runs OpenSSH's client on what
 #       a charging station opened: the station is the SSH server, and connects out.
 #
+#   server ... tls <certificate.pem> <key.pem>
+#       Either endpoint as "wss": TLS with that certificate, before the WebSocket handshake.
+#
 #   probe <config.json>
 #       One handshake or one rule break against an endpoint, with a JSON verdict on stdout:
 #       {"case": "none" | "other" | "anonymous" | "text" | "deflate", "url": ...}. Credentials
@@ -27,13 +30,14 @@
 # Every endpoint refuses a client that does not offer the subprotocol with 400, as the README asks.
 # A bridge says on stderr what it carried, one line on opening and one on closing:
 #
-#   BRIDGE ws-open subprotocol=<name> extensions=<header or none>
+#   BRIDGE ws-open subprotocol=<name> extensions=<header or none>[ tls=<version>]
 #   BRIDGE ws-close code=<code> sent=<messages> received=<messages> largest=<bytes>
 
 import asyncio
 import json
 import os
 import signal
+import ssl
 import sys
 
 from http import HTTPStatus
@@ -63,7 +67,9 @@ class Stats:
 
 def opened(ws):
     extensions = ws.response.headers.get("Sec-WebSocket-Extensions") if ws.response is not None else None
-    log(f"BRIDGE ws-open subprotocol={ws.subprotocol} extensions={extensions or 'none'}")
+    tls        = ws.transport.get_extra_info("ssl_object") if ws.transport is not None else None
+    log(f"BRIDGE ws-open subprotocol={ws.subprotocol} extensions={extensions or 'none'}" +
+        (f" tls={tls.version()}" if tls is not None else ""))
 
 
 def closed(ws, stats):
@@ -203,6 +209,14 @@ async def carry(ws, reader, writer):
 
 async def run_server(port, mode, arguments):
 
+    tls = None
+
+    if "tls" in arguments:
+        at        = arguments.index("tls")
+        tls       = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.load_cert_chain(arguments[at + 1], arguments[at + 2])
+        arguments = arguments[:at]
+
     if mode == "forward":
 
         host, tcp_port = arguments[0], int(arguments[1])
@@ -235,7 +249,8 @@ async def run_server(port, mode, arguments):
 
     async with serve(handler, "127.0.0.1", port,
                      subprotocols     = [ SUBPROTOCOL ],
-                     process_request  = require_subprotocol):
+                     process_request  = require_subprotocol,
+                     ssl              = tls):
         await asyncio.Event().wait()
 
 
