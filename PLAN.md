@@ -807,9 +807,19 @@ the work since has added four more.
       Every positive case reads the proxy's own log for exactly one tunnel to the endpoint's
       host and port, and for neither the upgrade's path nor its subprotocol: both went inside.
     - *Found:* tinyproxy answers wrong credentials with 401 and no challenge, where RFC 9110,
-      Section 15.5.8 has 407. #361 passes it on as it came, and the test says so.
+      Section 15.5.8 has 407. #361 passes it on as it came, and the test says so. That is intended
+      (OCTAL, 2026-11-28): Hermod keeps the proxy's status and does not make it a 407.
     - *Asked of #361:* a refusal by the proxy reaches `SshWebSocketClient` callers as "The server did
       not take the upgrade" - with a 401 or 403, indistinguishable from the server's own.
+      - *Answer* ⬜ (OCTAL, 2026-11-28): fixed in its next Hermod PR, which comes with the OCPP
+        tunnel work and is not open yet. `OpenAsync` will then throw `SshWebSocketException` with
+        `FromProxy = true`, the `HTTPProxyException` as `InnerException`, the status the proxy sent
+        as `HTTPStatusCode`, and the message "The proxy <url> did not open a tunnel to the server:
+        <status> ...". tinyproxy's 401 counts as a refusal by the proxy too. A refusal by the
+        endpoint keeps `FromProxy = false`.
+      - *Then here:* once that PR is merged, `libs/Hermod` moves to it, and the refusal cases assert on
+        `FromProxy` and on the status: 403 for a port the proxy does not open; 407 from Squid and 401
+        from tinyproxy for wrong credentials. The endpoint's own refusal must keep `FromProxy = false`.
     - *Not covered by these tests:* NTLM/Negotiate (no challenge-response round), `HTTPS_PROXY`/
       `NO_PROXY`, and client certificates towards the proxy - follow-ups, as #361 says.
 
