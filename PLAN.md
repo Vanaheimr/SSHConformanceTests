@@ -235,7 +235,7 @@ fail without the fix and a control proving the permitted case still works.
   (Hermod PR #234): 0 where the handler returned, 1 where it failed, unless it sent its own with
   `SshMuxChannel.SendExitStatusAsync`; without one `ssh -s` exited 255 after every subsystem.
   `SshSessionRestrictions.PermittedSubsystems` confines a credential to some subsystems - no shell, no
-  exec, no forced command. On the client `SshClient.OpenSubsystemAsync(name)`, plus `Closed`/`EndReason`
+  exec, no forced command. On the client `SshClient.OpenSubsystem(name)`, plus `Closed`/`EndReason`
   for learning that the connection ended. Hermetic in `SubsystemFactoryTests`; against the real `ssh -s`
   in `OpenSshSubsystemInteropTests` - plain bytes and echo, the three ways an exit-status comes about, a
   name not served and a key confined to another subsystem refused (red without the exit-status, as 255).
@@ -600,24 +600,31 @@ are refused and audited.
 
 ### 0.6 Hot topics
 
-Not scheduled yet, but next in line.
+Not scheduled yet, but next in line. Reviewed 2026-11-28: the first topic has landed and is described as
+built; the admin console it carried is a topic of its own now, with what is still missing for it, and
+the work since has added four more.
 
 - ✅ **Custom subsystems on both sides — the SSH route to what EVQI Transport is after.** Landed in
-  Hermod `c39bc053` and `c15cadfe` (§0.2): the registry, `OpenSubsystemAsync` and the message protocol.
-  What follows is the plan as it was decided; where the implementation answered an open point, it says
-  so. EVQI Transport
+  Hermod `c39bc053` and `c15cadfe` (§0.2): the factory, `OpenSubsystem` and the message protocol. Where
+  the implementation departs from the plan as it was decided, it says so below. EVQI Transport
   wants several independent streams, OCPP among them, multiplexed in parallel over one or more TCP
   connections. An SSH connection already is that: channels with their own flow control, opened and closed
-  independently, next to SFTP, forwards and `exec` on the same authenticated connection. What is missing is
-  a way to put an application protocol of one's own on a channel by name (RFC 4254 §6.5).
-  - **Server:** `SshServerOptions.Subsystems`, a table of name → handler that gets the channel as a
-    stream, with audit (`SubsystemRequestedEvent` exists) and access profiles as for `sftp`.
-    `SshSessionChannel.ServeAsync` already takes such a table, and since Hermod PR #220 also an
-    `SshSubsystemResolver` asked per session for names the table lacks - the hook `SftpSessions` hangs off
-    (the server-wide `sftp` stays in the table), and the place a registry of one's own would hang off too.
-  - **Client:** `SshClient.OpenSubsystemAsync(name)` → `Stream`. Today only by hand:
-    `Multiplexer.OpenChannelAsync("session")`, a `subsystem` request, `channel.AsStream()` — what
-    `OpenSftpClientAsync` does inside.
+  independently, next to SFTP, forwards and `exec` on the same authenticated connection. What was missing
+  was a way to put an application protocol of one's own on a channel by name (RFC 4254 §6.5).
+  - **Server, as built:** not the table of name → handler the plan had, but a factory.
+    `SshServerOptions.Subsystems` is an `SshSubsystemFactory`, asked for every request with the
+    signed-in `SshSessionInfo` and the name, and answering an `SshSubsystemHandler` or null to refuse.
+    That makes the grant a decision per session, not per name: the factory sees the user, the method,
+    the key or certificate, the peer and the credential's restrictions. The handler gets an
+    `SshSubsystemContext` - session, name, channel, `Closed`, `Stopping` - and the server sends the
+    exit-status when it returns. `SubsystemRequestedEvent` audits every request, and
+    `SshSessionRestrictions.PermittedSubsystems` confines a credential to some subsystems. Inside,
+    `SshServer` turns the factory into the `SshSubsystemResolver` that `SshSessionChannel.ServeAsync`
+    asks per session (Hermod PR #220), the hook `SftpSessions` hangs off as well.
+  - **Client, as built:** `SshClient.OpenSubsystem(name)` returns the `SshMuxChannel` rather than a
+    `Stream`: read from `Input`, send with `SendDataAsync`, one writer at a time. A refusal throws
+    `SshSubsystemRefusedException` and closes the channel again. `OpenSftpClientAsync` and
+    `SshMessageClient` both sit on it.
   - **OCPP over a subsystem — decided 2026-11-02:**
     - *Framing:* a length prefix plus a type byte — `uint32` length (big-endian, as SSH and SFTP frame
       theirs) of what follows, one type byte, then the payload. WebSocket gives OCPP-J its message
@@ -656,25 +663,6 @@ Not scheduled yet, but next in line.
       Transport's design and SSH's differ.
   - **Alongside on the same connection:** SFTP for firmware and logs, `-R` for diagnostic access, `exec`
     for maintenance — the actual gain over one WebSocket per station.
-  - **An admin console — the same mechanism with another protocol in it** (the parked
-    "admin-console subsystem", confirmed 2026-11-02). An application that carries its own SSH server —
-    a charging station, a CSMS backend — offers its management under a name of its own, say
-    `admin@graphdefined.com`, reached with `ssh -t -s … admin@graphdefined.com`:
-    - *No operating-system shell:* the application answers the commands itself, against its own objects
-      — `status`, `config get|set …`, `logs tail --level warn`, `connector 2 unlock`, `reboot --soft`.
-      On a device, on Windows or in a container there is often no shell worth exposing; the console can
-      do exactly what the application offers and nothing else.
-    - *A grant for exactly this:* the client names what it wants, so the server can tie this one
-      subsystem to a condition — only certificates with the principal `admin`, say — instead of the
-      all-or-nothing of "shell or no shell". `SubsystemRequestedEvent` already audits the request.
-    - *A session, not single commands:* `exec` is one free-form command per channel; a subsystem is a
-      lasting session with a protocol of its own that can be versioned (`admin-v2@…`).
-    - *For people and for tools:* with a PTY an interactive console; without one, a machine-readable
-      protocol in the framing above (JSON-RPC, say) — or a name of its own for the tool.
-    - *Alongside:* SFTP for logs and firmware and `-R` for diagnostic access on the same connection.
-    - *What exists already:* `ExecHandler` and `ShellHandler` take application-defined commands without
-      an operating-system shell, so the console could be a `ShellHandler` today. What is missing is the
-      name, and with it a grant for this console alone.
   - **Tests:** ✅ `ssh -s <name>` against our server (`OpenSshSubsystemInteropTests`); ✅ our client
     against `sshd` with `Subsystem` lines of its own (`OpenSshServerInteropTests`, 2026-11-24): a
     megabyte echoed both ways at once with exit status 0 after our EOF, a failing subsystem's stdout and
@@ -693,6 +681,70 @@ Not scheduled yet, but next in line.
     every such send swapped inside Hermod's `SendDataAsync`, the chunked case goes red.
   - Known subsystems for reference: `sftp`, `netconf` (RFC 6242), `snmp` (RFC 5592), `publickey`
     (RFC 4819), `powershell` (PowerShell remoting).
+
+- ⬜ **An admin console — the same mechanism with another protocol in it** (the parked
+  "admin-console subsystem", confirmed 2026-11-02). An application that carries its own SSH server —
+  a charging station, a CSMS backend — offers its management under a name of its own, say
+  `admin@graphdefined.com`, reached with `ssh -t -s … admin@graphdefined.com`:
+  - *No operating-system shell:* the application answers the commands itself, against its own objects
+    — `status`, `config get|set …`, `logs tail --level warn`, `connector 2 unlock`, `reboot --soft`.
+    On a device, on Windows or in a container there is often no shell worth exposing; the console can
+    do exactly what the application offers and nothing else.
+  - *A session, not single commands:* `exec` is one free-form command per channel; a subsystem is a
+    lasting session with a protocol of its own that can be versioned (`admin-v2@…`).
+  - *For people and for tools:* with a PTY an interactive console; without one, a machine-readable
+    protocol in the framing above (JSON-RPC, say) — or a name of its own for the tool.
+  - *Alongside:* SFTP for logs and firmware and `-R` for diagnostic access on the same connection.
+  - *The grant is there already:* the factory above decides per session, so "only certificates with
+    the principal `admin`" is a few lines in it - `SshCertificate.TryParse` on the session's
+    `PublicKeyBlob` yields the principals - and `PermittedSubsystems` confines a credential to the
+    console alone. `SubsystemRequestedEvent` audits every request.
+  - *What is still missing:*
+    - **The terminal.** `ssh -t -s` sends `pty-req` before `subsystem`. A shell handler gets it as
+      `SshShellContext.Pty`, and `window-change` as it comes; a subsystem handler gets neither, so an
+      interactive console cannot tell whether it has a terminal, nor how wide it is.
+    - **The certificate as part of the session.** Every factory that grants by principal, key ID or
+      expiry parses the blob again; `SshSessionInfo` could carry the parsed `SshCertificate`, as it
+      carries `PublicKeyFingerprint` and `PublicKeyType` already.
+    - **A test that shows it whole:** a console that admits only the principal `admin`, driven by
+      OpenSSH's `ssh -t -s` and by our client, with and without a PTY, and a certificate without the
+      principal refused and audited.
+
+- ⬜ **SSH over WebSocket for devices behind firewalls** — promoted from the deferred backlog (§1,
+  "SSH-over-WebSocket transport") now that it has a user: the EVChargingTestEnvironment (OCTAL) plan of
+  2026-11-27. A charging station reaches its CSMS only outward, over the `wss://` connection its OCPP
+  already uses - through NAT, firewall and proxy - so nobody can dial in to it.
+  - *Roles reversed:* the station opens the WebSocket but is the SSH **server**; the CSMS side is the
+    SSH client. SSH's authentication and host keys work unchanged inside the tunnel.
+  - *A connection of its own, not a frame type:* the tunnel is a second WebSocket connection, opened on
+    demand, that names its subprotocol in `Sec-WebSocket-Protocol` (suggested:
+    `ssh@open.charging.cloud`); its binary frames carry SSH's byte stream as it is. The OCPP/CBOR
+    connection stays untouched - no type byte in front of every frame - since a station may hold
+    several WebSocket connections at once.
+  - *In Hermod:* `SshTransport` already runs over any `IDuplexPipe`; what is needed is such a pipe over
+    a WebSocket connection's binary frames, and a way to hand it to `SshClient` and `SshServer` in place
+    of a TCP socket - on both sides, so neither needs to know what carries it.
+  - *Open:* the subprotocol name, and forward proxies - Hermod's `WebSocketClient` speaks no HTTP
+    `CONNECT`, which a station behind a corporate proxy needs before any of this.
+
+- ⬜ **The message protocol against an implementation that is not ours.** `SshMessageServer` and
+  `SshMessageClient` (§0.2) are tested hermetically only, our code on both ends - the blind spot this
+  repository exists for. `Hermod/SSH/Messaging/README.md` specifies the frames; a second implementation
+  of a few dozen lines in a peer that already speaks subsystems - AsyncSSH, say - would drive HELLO and
+  WELCOME, TEXT and BINARY, PING and PONG and CLOSE against our server, and serve them to our client,
+  as `NcclientInteropTests` does for NETCONF. It would also show whether the README is enough to
+  implement from, which is what a station vendor will have to do.
+
+- ⬜ **WinSCP, the first peer only Windows has.** Since the `windows-latest` leg runs peers natively
+  (§0.3), a Windows-only client no longer needs a machine of its own. WinSCP is the SFTP client most
+  Windows users have, and its .NET assembly ships on NuGet together with `WinSCP.exe` - provisioned the
+  way SSH.NET is, on a developer box and on the hosted runner alike, with no WSL. Which tier 3 peers
+  matter is still open decision 6 (§13); this one has become cheap.
+
+- ⬜ **Streams over more than one TCP connection** - the one point where EVQI Transport's design and
+  SSH's differ (above): a pool above `SshClient` that spreads channels over several connections, so a
+  lost segment stalls only the streams on its own connection. Worth doing only if EVQI Transport asks
+  for it; until then, several `SshClient`s do the same by hand.
 
 ---
 
@@ -731,7 +783,7 @@ Not scheduled yet, but next in line.
 - Full interactive shell **hosting** in the server (protocol support yes: `pty-req`, `shell`, `exec`; actual PTY hosting via ConPTY only as a demo/extension)
 
 ### Parked "fun/optional" features (kept as a backlog, not scheduled in v1)
-Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the WS stack — strong later candidate for firewalled devices), `~/.ssh/config` reader, agent forwarding, FIDO2/`sk-*` security keys, Unix-domain-socket forwarding, admin-console subsystem (now part of the custom-subsystems hot topic, §0.6), honeypot/tarpit listener. **Committed for v1 from this backlog:** TOTP 2FA, session recording, keystroke-timing obfuscation, ProxyJump, SFTP quotas/bandwidth, typed audit stream, pre-auth banner (see Goals).
+Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the WS stack; a hot topic since 2026-11-28, §0.6), `~/.ssh/config` reader, agent forwarding, FIDO2/`sk-*` security keys, Unix-domain-socket forwarding, admin-console subsystem (now a hot topic of its own, §0.6), honeypot/tarpit listener. **Committed for v1 from this backlog:** TOTP 2FA, session recording, keystroke-timing obfuscation, ProxyJump, SFTP quotas/bandwidth, typed audit stream, pre-auth banner (see Goals).
 
 ### Optional follow-ups (non-blocking technical debt)
 
