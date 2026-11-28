@@ -270,15 +270,17 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                 else
                 {
 
-                    var refused = await Assert.CatchAsync<Exception>(async () => {
-                                      await using var client = await SSHClient.Connect("127.0.0.1", IPPort.Parse(peer.Port), new SSHClientOptions {
-                                                                                                Username       = User_Id.Parse("hermoduser"),
-                                                                                                VerifyHostKey  = verify,
-                                                                                                Password       = "s3cr3t"
-                                                                                            }, CancellationToken);
-                                  });
-
-                    TestContext.Out.WriteLine($"we refused it: {refused!.GetType().Name}: {refused.Message}");
+                    // The host key, and nothing else: a connection that broke for another reason would send
+                    // no credential either, and pass for a refusal it never was.
+                    Assert.That(async () => {
+                                    await using var client = await SSHClient.Connect("127.0.0.1", IPPort.Parse(peer.Port), new SSHClientOptions {
+                                                                                              Username       = User_Id.Parse("hermoduser"),
+                                                                                              VerifyHostKey  = verify,
+                                                                                              Password       = "s3cr3t"
+                                                                                          }, CancellationToken);
+                                },
+                                Throws.TypeOf<SshHostKeyRejectedException>(),
+                                $"we refuse the certificate AsyncSSH issued for another name.\n{peer.Server.Output}");
 
                     Assert.That(Requests(peer), Is.Empty, $"no credential went to a server whose certificate names someone else.\n{peer.Server.Output}");
 
