@@ -752,10 +752,23 @@ the work since has added four more.
     offer the subprotocol is answered 400, a text message closes with 1003, nothing is compressed;
     messages carry at most 32 KiB out and may be 1 MiB in. Hermetic loopback tests in
     `SshOverWebSocketTests`; described in Hermod's `SSH/README.md`, "Over a WebSocket".
+  - *Against a WebSocket that is not ours* ✅ (2026-11-28): `Tests/interop/python/websocket_bridge.py`,
+    Python's `websockets` (17.x, RFC 6455) written from the README alone, with OpenSSH as the SSH on
+    its far side wherever ours is not under test (`SshOverWebSocketInteropTests`, 8 cases):
+    - the station's case: our `SshServer.ConnectOut` opens the WebSocket to their endpoint, OpenSSH's
+      client drives it through, and the station's server ends with the WebSocket;
+    - our `SshWebSocketClient` through their endpoint to an `sshd`: a megabyte back, whole;
+    - OpenSSH's client with theirs as its `ProxyCommand`, through our endpoint to our server, logged in
+      by HTTP Basic from the URL: a megabyte out in messages of at most 32 KiB, and of the
+      permessage-deflate their client offers, nothing taken;
+    - their client breaking the rules: no subprotocol or another one (400), no credentials (401), a
+      text message (1003, after our identification came as a binary one), compression offered (none).
+
+    Nothing disagreed. Websocat was the other candidate; Debian packages none and CI would have to
+    download a binary, while `websockets` comes with the venv's pip. The OpenSSH cases need WSL or
+    Linux, so the Windows CI leg runs the rule breaks only; the Debian leg runs all eight.
   - *Open:* forward proxies - Hermod's `WebSocketClient` speaks no HTTP `CONNECT`, which a station
-    behind a corporate proxy needs before any of this; and a test against a WebSocket peer that is not
-    ours (e.g. `websocat` or Python `websockets` carrying OpenSSH's byte stream), the blind spot this
-    repository exists for.
+    behind a corporate proxy needs before any of this.
 
 - ✅ **The message protocol against an implementation that is not ours.** `SshMessageServer` and
   `SshMessageClient` (§0.2) were tested hermetically only, our code on both ends - the blind spot this

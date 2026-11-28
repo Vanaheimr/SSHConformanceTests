@@ -4,7 +4,7 @@
 # None of these peers needs Linux, so on Windows they run as ordinary processes on the same loopback as
 # our server - no WSL, no firewall rule, no address to probe (PeerPlatform.cs):
 #
-#   - AsyncSSH, Paramiko and ncclient go into a virtual environment of their own at .venv-interop-win.
+#   - AsyncSSH, Paramiko, ncclient and websockets go into a virtual environment of their own at .venv-interop-win.
 #   - Apache MINA SSHD and JSch are built with any JDK on the PATH, against the jars this script fetches
 #     from Maven Central into .java-interop-win: the releases Debian 13 ships, each checked against a
 #     pinned SHA-256 and stored under the name Debian gives it.
@@ -41,7 +41,7 @@ function Invoke-Checked {
 }
 
 
-# ---- Python: AsyncSSH, Paramiko, ncclient -------------------------------------------------------------
+# ---- Python: AsyncSSH, Paramiko, ncclient, websockets --------------------------------------------------
 
 if (-not (Test-Path $venvPython)) {
 
@@ -69,9 +69,9 @@ if (-not (Test-Path $venvPython)) {
 
 # --prefer-binary for the same reason as in setup-wsl.sh: a release whose wheels are still being
 # uploaded must not make pip build lxml or cryptography from source.
-Write-Host '[setup] Installing AsyncSSH, Paramiko and ncclient ...'
+Write-Host '[setup] Installing AsyncSSH, Paramiko, ncclient and websockets ...'
 Invoke-Checked 'Upgrading pip'          $venvPython @('-m', 'pip', 'install', '--quiet', '--upgrade', 'pip')
-Invoke-Checked 'Installing the peers'   $venvPython @('-m', 'pip', 'install', '--quiet', '--prefer-binary', 'asyncssh', 'paramiko', 'ncclient')
+Invoke-Checked 'Installing the peers'   $venvPython @('-m', 'pip', 'install', '--quiet', '--prefer-binary', 'asyncssh', 'paramiko', 'ncclient', 'websockets')
 
 
 # ---- Java: the jars of Apache MINA SSHD and JSch -------------------------------------------------------
@@ -135,11 +135,12 @@ if ($rustup) {
 
 # No double quotes in the snippet: Windows PowerShell 5.1 does not escape them for a native program.
 Invoke-Checked 'Reporting the versions' $venvPython @('-c', @'
-import sys, asyncssh, paramiko, ncclient
+import sys, asyncssh, paramiko, ncclient, websockets
 print('  Python       ' + sys.version.split()[0])
 print('  AsyncSSH     ' + asyncssh.__version__)
 print('  Paramiko     ' + paramiko.__version__)
 print('  ncclient     ' + ncclient.__version__)
+print('  websockets   ' + websockets.__version__)
 '@)
 
 Write-Host '  MINA SSHD    2.13.2, JSch 0.2.19 (in .java-interop-win)'

@@ -96,7 +96,7 @@ if [[ "${CHECK_ONLY}" -eq 0 ]]; then
     done
     ${SUDO} env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${INSTALLABLE[@]}"
 
-    log "Creating the Python virtual environment for AsyncSSH / Paramiko / ncclient ..."
+    log "Creating the Python virtual environment for AsyncSSH / Paramiko / ncclient / websockets ..."
 
     # --copies, because symlinks do not survive a move across the /mnt boundary.
     if [[ ! -x "${VENV_DIR}/bin/python3" ]]; then
@@ -115,7 +115,7 @@ if [[ "${CHECK_ONLY}" -eq 0 ]]; then
     # seconds before lxml 6.2.0's wheel for Python 3.13 arrived. With this flag pip takes the newest
     # release that has a wheel instead, and the next run picks up the new one.
     "${VENV_DIR}/bin/python3" -m pip install --quiet --upgrade pip
-    "${VENV_DIR}/bin/python3" -m pip install --quiet --prefer-binary asyncssh paramiko ncclient
+    "${VENV_DIR}/bin/python3" -m pip install --quiet --prefer-binary asyncssh paramiko ncclient websockets
 
     # Russh needs a newer Rust than Debian ships, so the compiler comes from rustup, at the version
     # russh/rust-toolchain.toml pins. A rustup that is already there - on the PATH or in ~/.cargo/bin -
@@ -182,6 +182,7 @@ if [[ -d "${VENV_DIR}" ]]; then
     report "AsyncSSH" "${VENV_DIR}/bin/python3" -c 'import asyncssh; print(asyncssh.__version__)'
     report "Paramiko" "${VENV_DIR}/bin/python3" -c 'import paramiko; print(paramiko.__version__)'
     report "ncclient" "${VENV_DIR}/bin/python3" -c 'import ncclient; print(ncclient.__version__)'
+    report "websockets" "${VENV_DIR}/bin/python3" -c 'import websockets; print(websockets.__version__)'
 else
     printf '  %-12s (python venv not created — run without --check)\n' "AsyncSSH/…"
 fi
