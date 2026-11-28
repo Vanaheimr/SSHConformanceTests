@@ -239,6 +239,19 @@ fail without the fix and a control proving the permitted case still works.
   for learning that the connection ended. Hermetic in `SubsystemFactoryTests`; against the real `ssh -s`
   in `OpenSshSubsystemInteropTests` - plain bytes and echo, the three ways an exit-status comes about, a
   name not served and a key confined to another subsystem refused (red without the exit-status, as 255).
+- ✅ **A subsystem with a terminal, and the certificate in the session** (Hermod `84ccaa10`, 2026-11-28):
+  `ssh -t -s` sends `pty-req` before `subsystem`, and a subsystem handler got neither the terminal nor
+  a `window-change`; while a subsystem ran, the channel's requests were not read at all, so one with
+  want-reply waited until it ended. `SshTerminal` is what a shell had to itself - `Pty`, `Size`,
+  `WindowChanged`, `Signalled`, `BreakRequested` - and `SshSubsystemContext.Terminal` gives it to a
+  subsystem; one loop reads the requests beside a shell and a subsystem alike, and refuses everything
+  else at once (an `exec`, a second `pty-req`). `SshSessionInfo.Certificate` is the OpenSSH certificate
+  that signed in, so a factory grants by key id, principal or extension without parsing the blob.
+  `SSHClient.OpenSubsystem(name, pty)` asks for the terminal first. Hermetic in `SubsystemTerminalTests`;
+  end to end in `OpenSshAdminConsoleInteropTests`: `ssh-keygen` as the CA, `ssh -tt -s` reaching a
+  console granted by a certificate extension with its terminal, a `no-pty` certificate refused the
+  terminal (and `ssh -t`, told to have one, gives up - OpenSSH's choice), one without the extension
+  refused the console.
 - ✅ **Messages over a subsystem** (Hermod `c15cadfe`, protocol in `Hermod/SSH/Messaging/README.md`):
   `SshMessageServer`/`SshMessageClient` carry whole text or binary messages - OCPP, WWCP - over a
   subsystem channel, and `IMessageConnection` is the connection type a WebSocket and an SSH message
@@ -601,7 +614,7 @@ are refused and audited.
 ### 0.6 Hot topics
 
 Not scheduled yet, but next in line. Reviewed 2026-11-28: the first topic has landed and is described as
-built; the admin console it carried is a topic of its own now, with what is still missing for it, and
+built; the admin console it carried became a topic of its own and has landed since as well (§0.2), and
 the work since has added four more.
 
 - ✅ **Custom subsystems on both sides — the SSH route to what EVQI Transport is after.** Landed in
@@ -682,7 +695,7 @@ the work since has added four more.
   - Known subsystems for reference: `sftp`, `netconf` (RFC 6242), `snmp` (RFC 5592), `publickey`
     (RFC 4819), `powershell` (PowerShell remoting).
 
-- ⬜ **An admin console — the same mechanism with another protocol in it** (the parked
+- ✅ **An admin console — the same mechanism with another protocol in it** (the parked
   "admin-console subsystem", confirmed 2026-11-02). An application that carries its own SSH server —
   a charging station, a CSMS backend — offers its management under a name of its own, say
   `admin@graphdefined.com`, reached with `ssh -t -s … admin@graphdefined.com`:
@@ -695,20 +708,17 @@ the work since has added four more.
   - *For people and for tools:* with a PTY an interactive console; without one, a machine-readable
     protocol in the framing above (JSON-RPC, say) — or a name of its own for the tool.
   - *Alongside:* SFTP for logs and firmware and `-R` for diagnostic access on the same connection.
-  - *The grant is there already:* the factory above decides per session, so "only certificates with
-    the principal `admin`" is a few lines in it - `SshCertificate.TryParse` on the session's
-    `PublicKeyBlob` yields the principals - and `PermittedSubsystems` confines a credential to the
-    console alone. `SubsystemRequestedEvent` audits every request.
-  - *What is still missing:*
-    - **The terminal.** `ssh -t -s` sends `pty-req` before `subsystem`. A shell handler gets it as
-      `SshShellContext.Pty`, and `window-change` as it comes; a subsystem handler gets neither, so an
-      interactive console cannot tell whether it has a terminal, nor how wide it is.
-    - **The certificate as part of the session.** Every factory that grants by principal, key ID or
-      expiry parses the blob again; `SshSessionInfo` could carry the parsed `SshCertificate`, as it
-      carries `PublicKeyFingerprint` and `PublicKeyType` already.
-    - **A test that shows it whole:** a console that admits only the principal `admin`, driven by
-      OpenSSH's `ssh -t -s` and by our client, with and without a PTY, and a certificate without the
-      principal refused and audited.
+  - *As built* (Hermod `84ccaa10`, §0.2): the factory above decides per session, and reads the
+    certificate that signed in off it - `SshSessionInfo.Certificate`, its key id, principals and
+    extensions - so "only certificates with the CA's grant" is one condition; `PermittedSubsystems`
+    confines a credential to the console alone, and `SubsystemRequestedEvent` audits every request.
+    The console gets the terminal `ssh -t -s` asked for (`SshSubsystemContext.Terminal`: `Pty`, `Size`,
+    `WindowChanged`, signals, breaks), or none - and knows which.
+  - *Tested whole:* our client in `SubsystemTerminalTests`, OpenSSH's `ssh -tt -s` with certificates
+    from `ssh-keygen` in `OpenSshAdminConsoleInteropTests` - granted by an extension of the CA's,
+    refused without it, refused the terminal where the certificate says `no-pty`.
+  - *Left to the application:* the console itself - its commands, its line editing (there is no
+    terminal driver in between), and a machine-readable variant under a name of its own.
 
 - ⬜ **SSH over WebSocket for devices behind firewalls** — promoted from the deferred backlog (§1,
   "SSH-over-WebSocket transport") now that it has a user: the EVChargingTestEnvironment (OCTAL) plan of
@@ -783,7 +793,7 @@ the work since has added four more.
 - Full interactive shell **hosting** in the server (protocol support yes: `pty-req`, `shell`, `exec`; actual PTY hosting via ConPTY only as a demo/extension)
 
 ### Parked "fun/optional" features (kept as a backlog, not scheduled in v1)
-Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the WS stack; a hot topic since 2026-11-28, §0.6), `~/.ssh/config` reader, agent forwarding, FIDO2/`sk-*` security keys, Unix-domain-socket forwarding, admin-console subsystem (now a hot topic of its own, §0.6), honeypot/tarpit listener. **Committed for v1 from this backlog:** TOTP 2FA, session recording, keystroke-timing obfuscation, ProxyJump, SFTP quotas/bandwidth, typed audit stream, pre-auth banner (see Goals).
+Reviewed and deliberately deferred: SSH-over-WebSocket transport (Hermod has the WS stack; a hot topic since 2026-11-28, §0.6), `~/.ssh/config` reader, agent forwarding, FIDO2/`sk-*` security keys, Unix-domain-socket forwarding, admin-console subsystem (built since, §0.2 and §0.6), honeypot/tarpit listener. **Committed for v1 from this backlog:** TOTP 2FA, session recording, keystroke-timing obfuscation, ProxyJump, SFTP quotas/bandwidth, typed audit stream, pre-auth banner (see Goals).
 
 ### Optional follow-ups (non-blocking technical debt)
 
