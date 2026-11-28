@@ -55,6 +55,8 @@ APT_PACKAGES=(
     default-jdk-headless # builds and runs the Java peers in mina/ and jsch/ ...
     libmina-sshd-java   #     Apache MINA SSHD - client, server and SFTP server in Java
     libjsch-java        #     JSch, the maintained 0.2.x fork - client and SFTP client (pulls in BouncyCastle)
+    squid               # forward proxies the SSH-over-WebSocket client goes through with CONNECT
+    tinyproxy           #     (forward-proxy.sh starts one of its own per test; the system service is stopped below)
     openssl             # key/cert plumbing helpers
     ca-certificates
     python3
@@ -95,6 +97,19 @@ if [[ "${CHECK_ONLY}" -eq 0 ]]; then
         fi
     done
     ${SUDO} env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${INSTALLABLE[@]}"
+
+    # Debian starts both proxies as system services once installed, and Squid's stock configuration
+    # serves every client of the local networks on port 3128. The tests start proxies of their own,
+    # on ports and with configurations of their own, so the system's are stopped and kept from
+    # starting at boot. Where systemd is not running (WSL without it, a CI container), there is no
+    # boot to keep them from, and the stop is all there is to do.
+    for service in squid tinyproxy; do
+        if [[ -d /run/systemd/system ]]; then
+            ${SUDO} systemctl disable --now "${service}" >/dev/null 2>&1 || true
+        else
+            ${SUDO} service "${service}" stop >/dev/null 2>&1 || true
+        fi
+    done
 
     log "Creating the Python virtual environment for AsyncSSH / Paramiko / ncclient / websockets ..."
 
@@ -173,6 +188,8 @@ report "dbclient" dbclient -V
 report_tinyssh
 report "plink"    plink -V
 report "curl"     curl --version
+report "Squid"    squid -v
+report "tinyproxy" tinyproxy -v
 report "socat"    socat -V
 
 if [[ -d "${VENV_DIR}" ]]; then

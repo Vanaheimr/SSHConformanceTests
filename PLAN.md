@@ -767,8 +767,38 @@ the work since has added four more.
     Nothing disagreed. Websocat was the other candidate; Debian packages none and CI would have to
     download a binary, while `websockets` comes with the venv's pip. The OpenSSH cases need WSL or
     Linux, so the Windows CI leg runs the rule breaks only; the Debian leg runs all eight.
-  - *Open:* forward proxies - Hermod's `WebSocketClient` speaks no HTTP `CONNECT`, which a station
-    behind a corporate proxy needs before any of this.
+  - *Through forward proxies* 🔶 (2026-11-28) - what a station behind a corporate proxy needs before
+    any of this.
+    - *In Hermod*: Hermod #361 (`40883618`, open), built by the EVChargingTestEnvironment (OCTAL)
+      session. `WebSocketClient.Proxy` and `SshWebSocketClient(Proxy:)` take an `HTTPProxy`. The
+      client asks it with `CONNECT` (RFC 9110, Section 9.3.6) for a tunnel, and the TLS to the server
+      and the upgrade run inside it. `Proxy-Authorization` is sent preemptively: any HTTP
+      authentication, or a one-time password, which over an `https` proxy with a pinned key can be
+      bound to the TLS to the proxy. HTTP/3 is not tunnelled. `SshWebSocketClient.ConnectAsync` is
+      `OpenAsync` from then on.
+    - *Against proxies that are not ours* ✅: `Tests/interop/forward-proxy.sh` starts Squid 6.13 (the
+      proxy of most corporate networks) or tinyproxy 1.11.2 (that of routers and embedded Linux).
+      Behind either is Python's `websockets` endpoint, with OpenSSH behind it or in front of it
+      (`SquidForwardProxyInteropTests` 8 cases, `TinyproxyForwardProxyInteropTests` 6):
+      - our client through the proxy with HTTP Basic to an `sshd`: a megabyte back, whole;
+      - the station's `SshServer.ConnectOut` through the proxy, OpenSSH driving it;
+      - 407 without credentials, its Basic challenge passed on;
+      - wrong credentials refused;
+      - a port the proxy does not open refused with 403, without a WebSocket reaching the endpoint;
+      - `wss` to the endpoint inside the tunnel, its key pinned;
+      - Squid only: an `https` proxy with a pinned key, so TLS 1.3 in TLS; and one whose key is not the
+        pinned one is answered 502 before any `CONNECT` - no credentials go to it.
+
+      Every positive case reads the proxy's own log for exactly one tunnel to the endpoint's
+      host and port, and for neither the upgrade's path nor its subprotocol: both went inside.
+    - *Found:* tinyproxy answers wrong credentials with 401 and no challenge, where RFC 9110,
+      Section 15.5.8 has 407. #361 passes it on as it came, and the test says so.
+    - *Asked of #361:* a refusal by the proxy reaches `SshWebSocketClient` callers as "The server did
+      not take the upgrade" - with a 401 or 403, indistinguishable from the server's own.
+    - *Not covered by these tests:* NTLM/Negotiate (no challenge-response round), `HTTPS_PROXY`/
+      `NO_PROXY`, and client certificates towards the proxy - follow-ups, as #361 says.
+    - *Waiting for:* the submodule pointer moves once #361 is merged; until then this repository
+      builds against `40883618` only.
 
 - ✅ **The message protocol against an implementation that is not ours.** `SshMessageServer` and
   `SshMessageClient` (§0.2) were tested hermetically only, our code on both ends - the blind spot this
