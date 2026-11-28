@@ -48,8 +48,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
     /// Until these tests, both ends of every message test were Hermod's - so a misreading of the
     /// specification shared by both ends could not show. Here the other end knows only the text: the
     /// handshake, every kind of frame, the limits that are judged before a payload is read, invalid
-    /// UTF-8, the range kept for extensions, a refusal with <c>retryAfter</c>, and a server that chooses
-    /// a subprotocol the client never offered.
+    /// UTF-8, the range kept for extensions, a refusal with <c>retryAfter</c>, a second client of the same
+    /// login and the probe of the first, and a server that chooses a subprotocol the client never offered.
     /// </para>
     /// </summary>
     [TestFixture]
@@ -96,6 +96,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             public ConcurrentQueue<SshMessageHello>                   Hellos       { get; } = new ();
             public ConcurrentQueue<String>                            Pongs        { get; } = new ();
             public ConcurrentQueue<SshMessageCloseInfo>               Closes       { get; } = new ();
+            public TaskCompletionSource<SshDuplicateConnection>       Duplicate    { get; } = new (TaskCreationOptions.RunContinuationsAsynchronously);
 
             public async ValueTask DisposeAsync()
             {
@@ -173,6 +174,12 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                                                 await Task.Delay(TimeSpan.FromSeconds(1), CancellationToken.None);
                                                                 await connection.SendTextMessage(text, CancellationToken.None);
                                                             }, CancellationToken.None);
+                                                    // "after-duplicate" is echoed once a second connection of its identity has been decided on.
+                                                    else if (text == "after-duplicate")
+                                                        _ = Task.Run(async () => {
+                                                                await ours.Duplicate.Task.WaitAsync(Within, CancellationToken.None);
+                                                                await connection.SendTextMessage(text, CancellationToken.None);
+                                                            }, CancellationToken.None);
                                                     else
                                                         await connection.SendTextMessage(text, ct);
                                                 };
@@ -180,6 +187,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
             messages.OnBinaryMessageReceived += async (timestamp, sender, connection, bytes, ct) => await connection.SendBinaryMessage(bytes, ct);
             messages.OnPongReceived          += (timestamp, sender, connection, payload, ct) => { ours.Pongs. Enqueue(Convert.ToHexStringLower(payload)); return Task.CompletedTask; };
             messages.OnConnectionClosed      += (timestamp, sender, connection, close,   ct) => { ours.Closes.Enqueue(close);                              return Task.CompletedTask; };
+            messages.OnDuplicateConnection   += (timestamp, sender, duplicate,           ct) => { ours.Duplicate.TrySetResult(duplicate);                  return Task.CompletedTask; };
 
             return ours;
 
@@ -230,6 +238,31 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         private static Dictionary<String, Object?> Close  (Int32 Code, String Reason) => new () { ["op"] = "close", ["code"] = Code, ["reason"] = Reason };
         private static Dictionary<String, Object?> Receive()                       => new () { ["op"] = "recv" };
         private static Dictionary<String, Object?> ReceiveToTheEnd()               => new () { ["op"] = "recv_until_eof" };
+        private static Dictionary<String, Object?> Sleep  (Double Seconds)         => new () { ["op"] = "sleep",  ["seconds"] = Seconds };
+
+        /// <summary>
+        /// Wait until our server serves a connection of the given identity - their first client, before a
+        /// second one comes.
+        /// </summary>
+        private static async Task WaitForConnectionOfAsync(OurServer Server, String Identity, Task FirstClient, CancellationToken CancellationToken)
+        {
+
+            var until = DateTimeOffset.UtcNow + Within;
+
+            while (Server.Messages.ConnectionsOf(Identity).Count == 0)
+            {
+
+                if (FirstClient.IsCompleted)
+                    await FirstClient;  // its failure, if it failed
+
+                Assert.That(FirstClient.IsCompleted, Is.False,            $"their first client ended before our server served it as '{Identity}'");
+                Assert.That(DateTimeOffset.UtcNow,   Is.LessThan(until),  $"our server did not serve their first client as '{Identity}' within {Within.TotalSeconds} s");
+
+                await Task.Delay(50, CancellationToken);
+
+            }
+
+        }
 
         private static Byte   KindOf(JsonElement Frame) => Frame.TryGetProperty("kind", out var kind) ? kind.GetByte() : (Byte) 0;
         private static Int32? CodeOf(JsonElement Frame) => Frame.TryGetProperty("code", out var code) ? code.GetInt32() : null;
@@ -367,6 +400,103 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
             if (Code == "connection-exists")
                 Assert.That(refusal.GetProperty("retryAfter").GetInt32(), Is.EqualTo(30), "retryAfter is a whole number of seconds");
+
+        }
+
+        #endregion
+
+        #region TheirSecondClient_IsRefused_WhileTheFirstAnswersTheProbe
+
+        /// <summary>
+        /// "A second connection of an identity", with Hermod's default policy: a second client of their's
+        /// with the same login comes while the first is connected. Our server probes the first with a PING
+        /// of 16 random bytes; the first answers it as it answers any PING, so it keeps its connection, and
+        /// the second gets REFUSED <c>connection-exists</c> with a <c>retryAfter</c> of 30 s plus up to 30 s.
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        public async Task TheirSecondClient_IsRefused_WhileTheFirstAnswersTheProbe(CancellationToken CancellationToken)
+        {
+
+            await using var server = await StartOurServerAsync(CancellationToken);
+
+            var first = RunTheirClientAsync(server, [
+                            Hello("ocpp2.1"),          Receive(),
+                            Text("after-duplicate"),   Receive(),
+                            Close(1000, "done"),       ReceiveToTheEnd()
+                        ], CancellationToken);
+
+            await WaitForConnectionOfAsync(server, "station", first, CancellationToken);
+
+            var (_, second, _)      = await RunTheirClientAsync(server, [ Hello("ocpp2.1"), ReceiveToTheEnd() ], CancellationToken);
+            var (_, frames, pings)  = await first;
+            var duplicate           = await server.Duplicate.Task.WaitAsync(Within, CancellationToken);
+
+            Assert.That(second, Has.Length.EqualTo(2), Describe(second));
+
+            var refusal = second[0].GetProperty("json");
+
+            Assert.Multiple(() => {
+                Assert.That(KindOf(second[0]),                            Is.EqualTo(REFUSED),                      Describe(second));
+                Assert.That(refusal.GetProperty("code").GetString(),     Is.EqualTo("connection-exists"),          Describe(second));
+                Assert.That(refusal.GetProperty("retryAfter").GetInt32(), Is.InRange(30, 60),                       "retryAfter is 30 s plus up to 30 s");
+                Assert.That(IsEof(second[1]),                             Is.True,                                  "the channel did not end after the REFUSED");
+
+                Assert.That(pings,                                        Has.Some.Length.EqualTo(32),              "no PING of 16 bytes - the probe - reached their first client");
+                Assert.That(frames[1].GetProperty("text").GetString(),    Is.EqualTo("after-duplicate"),            "their first client lost its connection: " + Describe(frames));
+                Assert.That(CodeOf(frames[2]),                            Is.EqualTo(1000),                         Describe(frames));
+
+                Assert.That(duplicate.Identity,                           Is.EqualTo("station"));
+                Assert.That(duplicate.Policy,                             Is.EqualTo(SshDuplicatePolicy.Probe));
+                Assert.That(duplicate.Decision,                           Is.EqualTo(SshDuplicateDecision.Refused));
+            });
+
+        }
+
+        #endregion
+
+        #region TheirSecondClient_IsServed_WhenTheFirstDoesNotAnswerTheProbe
+
+        /// <summary>
+        /// The same, but their first client reads nothing while the second comes, so the probe stays
+        /// unanswered: our server closes the first with CLOSE <c>4001</c> (unresponsive) after
+        /// <see cref="SshMessageServerOptions.ProbeTimeout"/>, and welcomes the second.
+        /// </summary>
+        [Test]
+        [CancelAfter(120000)]
+        public async Task TheirSecondClient_IsServed_WhenTheFirstDoesNotAnswerTheProbe(CancellationToken CancellationToken)
+        {
+
+            await using var server = await StartOurServerAsync(CancellationToken);
+
+            // Ten seconds: long enough for the second client's SSH handshake and our 3 s probe, on a busy machine as well.
+            var first = RunTheirClientAsync(server, [
+                            Hello("ocpp2.1"),   Receive(),
+                            Sleep(10),          ReceiveToTheEnd()
+                        ], CancellationToken);
+
+            await WaitForConnectionOfAsync(server, "station", first, CancellationToken);
+
+            var (_, second, _)  = await RunTheirClientAsync(server, [
+                                      Hello("ocpp2.1"),      Receive(),
+                                      Close(1000, "done"),   ReceiveToTheEnd()
+                                  ], CancellationToken);
+            var (_, frames, _)  = await first;
+            var duplicate       = await server.Duplicate.Task.WaitAsync(Within, CancellationToken);
+
+            Assert.That(frames, Has.Length.EqualTo(3), Describe(frames));
+
+            Assert.Multiple(() => {
+                Assert.That(KindOf(second[0]),     Is.EqualTo(WELCOME),                                  "the second client was not served: " + Describe(second));
+                Assert.That(CodeOf(second[1]),     Is.EqualTo(1000),                                     Describe(second));
+
+                Assert.That(KindOf(frames[0]),     Is.EqualTo(WELCOME),                                  Describe(frames));
+                Assert.That(KindOf(frames[1]),     Is.EqualTo(CLOSE),                                    Describe(frames));
+                Assert.That(CodeOf(frames[1]),     Is.EqualTo(4001),                                     "the first client was not closed as unresponsive");
+                Assert.That(IsEof (frames[2]),     Is.True,                                              "the channel did not end after the CLOSE");
+
+                Assert.That(duplicate.Decision,    Is.EqualTo(SshDuplicateDecision.ReplacedUnresponsive));
+            });
 
         }
 

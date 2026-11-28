@@ -23,7 +23,9 @@
 #         {"op": "close",  "code": 1000, "reason": "..."}
 #         {"op": "recv"}                                 read one frame (or the end of the channel)
 #         {"op": "recv_until_eof"}                       read frames until the channel ends
-#       A PING read on the way is answered with its PONG and listed in "pings", not in "frames".
+#         {"op": "sleep",  "seconds": 2.5}               wait, reading nothing: a PING stays unanswered
+#       A PING read on the way is answered with its PONG and listed in "pings", not in "frames" - where
+#       the channel is still open: a PING read after the server closed it goes unanswered.
 #
 #   asyncssh_messaging.py server <port> <config.json>
 #       A server for our client (PythonPeers.StartServerAsync), listening on 127.0.0.1:<port>. Writes its
@@ -143,7 +145,10 @@ async def run_client(config, result):
                 kind, payload = frame
                 if kind == PING:
                     pings.append(payload.hex())
-                    writer.write(encode(PONG, payload))
+                    try:
+                        writer.write(encode(PONG, payload))
+                    except (BrokenPipeError, ConnectionError):
+                        pass
                     continue
                 frames.append(describe(kind, payload))
                 return True
@@ -173,6 +178,9 @@ async def run_client(config, result):
             elif op == "recv_until_eof":
                 while await asyncio.wait_for(receive(), 20):
                     pass
+
+            elif op == "sleep":
+                await asyncio.sleep(step["seconds"])
 
         writer.close()
 
