@@ -331,9 +331,20 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
         private const Int32 PeerPortFirst  = 20000;
         private const Int32 PeerPortLast   = 29999;
 
-        // Reaching a healthy peer takes milliseconds. A peer still unreachable after this is not slow,
-        // it is unreachable — so the answer is a different port, not a longer wait.
+        // Reaching a peer that listens takes milliseconds, so one that listens and is still unreachable
+        // after readinessBudget is not slow, it is unreachable — the answer is a different port, not a
+        // longer wait.
+        //
+        // Starting one is another matter. A Python peer in WSL imports asyncssh and cryptography over
+        // /mnt before it binds: about 2 s on an idle machine, 6-10 s on a loaded one (measured
+        // 2026-11-28 on 16 cores with three busy loops a core), before key generation and the relay.
+        // Killing a peer that has not bound yet and starting it on another port only pays that again,
+        // three times over: the fixture that failed in 38 s, every attempt cut off just short of
+        // listening. So a peer that is still starting is waited for, up to startupBudget, and one that
+        // has just bound gets relayGrace for the relay before its port counts as lost.
         private static readonly TimeSpan readinessBudget = TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan startupBudget   = TimeSpan.FromSeconds(40);
+        private static readonly TimeSpan relayGrace      = TimeSpan.FromSeconds(5);
         internal const Int32 StartAttempts = 3;
 
         #endregion
@@ -771,7 +782,7 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                 var server = new WslServer(process, runIdentifier, port);
 
-                if (await WaitUntilReachableAsync(process, port, CancellationToken).ConfigureAwait(false))
+                if (await WaitUntilReachableAsync(process, port, () => IsPeerListeningAsync(port), CancellationToken).ConfigureAwait(false))
                     return server;
 
                 // Whether the peer is listening at all says which failure this is, and the two want opposite
@@ -790,17 +801,23 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                            (OperatingSystem.IsWindows()
                                                 ? " — WSL's localhost forwarding could not bind that port on the Windows side."
                                                 : " — it must be bound to an address this process cannot dial."),
-                                  false => "the peer never listened on that port" + (process.HasExited ? " and has exited." : "."),
+                                  false => "the peer never listened on that port" + (process.HasExited ? " and has exited." : $" within {startupBudget.TotalSeconds:F0} s."),
                                   null  => "could not determine whether the peer was listening on that port."
                               }) +
                              $"\n{server.Output}");
 
+                // One that is alive and has not bound in all that time will not bind on another port either.
+                var stuck = peerIsListening == false && !process.HasExited;
+
                 await server.DisposeAsync().ConfigureAwait(false);
+
+                if (stuck)
+                    break;
 
             }
 
             throw new InvalidOperationException(
-                      $"The peer server never became reachable, on {StartAttempts} different ports.\n" +
+                      $"The peer server never became reachable, on {attempts.Count} port(s).\n" +
                       $"{lastCommand}\n" +
                       String.Join("\n", attempts));
 
@@ -808,22 +825,35 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
         #endregion
 
-        #region (private, static) WaitUntilReachableAsync(Process, Port, CancellationToken)
+        #region (internal, static) WaitUntilReachableAsync(Process, Port, IsListening, CancellationToken)
 
         /// <summary>
         /// Wait until a connection to the peer's port succeeds — the only readiness signal that means what
         /// the tests need, since they dial the peer from this process too.
+        ///
+        /// <para>
+        /// Past <see cref="readinessBudget"/> it asks where the peer runs whether it listens yet: one
+        /// that does and still cannot be reached <see cref="relayGrace"/> later lost the race for its
+        /// port, and is given up so the caller can draw another; one that does not is still starting,
+        /// and is waited for up to <see cref="startupBudget"/>.
+        /// </para>
         /// </summary>
-        internal static async Task<Boolean> WaitUntilReachableAsync(Process            Process,
-                                                                   Int32              Port,
-                                                                   CancellationToken  CancellationToken)
+        /// <param name="Process">The peer's process; one that has exited is never going to listen.</param>
+        /// <param name="Port">The port to reach it on.</param>
+        /// <param name="IsListening">Whether the peer listens on its port where it runs, or <c>null</c> when that cannot be told.</param>
+        internal static async Task<Boolean> WaitUntilReachableAsync(Process                 Process,
+                                                                   Int32                   Port,
+                                                                   Func<Task<Boolean?>>    IsListening,
+                                                                   CancellationToken       CancellationToken)
         {
 
             // Polled rather than slept through: peers start at very different speeds, and a fixed delay is
             // either slow or flaky.
-            var elapsed = Stopwatch.StartNew();
+            var elapsed        = Stopwatch.StartNew();
+            var nextCheck      = readinessBudget;
+            var listeningSince = (TimeSpan?) null;
 
-            while (elapsed.Elapsed < readinessBudget)
+            while (elapsed.Elapsed < startupBudget)
             {
 
                 // A peer that has died is never going to listen, and its log already says why.
@@ -837,9 +867,29 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                     return true;
                 }
                 catch (System.Net.Sockets.SocketException)
+                { }
+
+                // Asked every two seconds rather than every probe: on Windows each question is a wsl.exe.
+                // A peer that has only just bound is given relayGrace for WSL's relay to bind its side too,
+                // which under load takes seconds as well; one that stays unreachable after that never will be.
+                if (elapsed.Elapsed >= nextCheck)
                 {
-                    await Task.Delay(100, CancellationToken).ConfigureAwait(false);
+
+                    if (await IsListening().ConfigureAwait(false) == true)
+                    {
+
+                        listeningSince ??= elapsed.Elapsed;
+
+                        if (elapsed.Elapsed - listeningSince.Value >= relayGrace)
+                            return false;
+
+                    }
+
+                    nextCheck = elapsed.Elapsed + TimeSpan.FromSeconds(2);
+
                 }
+
+                await Task.Delay(100, CancellationToken).ConfigureAwait(false);
 
             }
 

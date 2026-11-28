@@ -345,7 +345,8 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
 
                     var server    = new WslServer(process, port);
 
-                    if (await WslInterop.WaitUntilReachableAsync(process, port, CancellationToken).ConfigureAwait(false))
+                    // No relay in between: a native peer this process cannot reach has not bound yet.
+                    if (await WslInterop.WaitUntilReachableAsync(process, port, () => Task.FromResult<Boolean?>(false), CancellationToken).ConfigureAwait(false))
                         return server;
 
                     // A native peer shares this machine's ports, so there is no relay to lose a race to: a
@@ -357,12 +358,18 @@ namespace org.GraphDefined.Vanaheimr.Hermod.SSH.Tests
                                  (process.HasExited ? $"exited with {process.ExitCode}." : "never listened.") +
                                  $"\n{server.Output}");
 
+                    // One that is alive and has not bound in all that time will not bind on another port either.
+                    var stuck = !process.HasExited;
+
                     await server.DisposeAsync().ConfigureAwait(false);
+
+                    if (stuck)
+                        break;
 
                 }
 
                 throw new InvalidOperationException(
-                          $"The peer server never became reachable, on {WslInterop.StartAttempts} different ports.\n" +
+                          $"The peer server never became reachable, on {attempts.Count} port(s).\n" +
                           $"{Program} {String.Join(" ", ArgumentsForPort(0))}\n" +
                           String.Join("\n", attempts));
 
